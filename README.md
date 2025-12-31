@@ -1,1 +1,1 @@
-# forgetmenot-ai
+# shoopet-ai

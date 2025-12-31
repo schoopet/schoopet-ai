@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ForgetMeNot is a dual-component project:
-1. **Python Agent** (`agents/forgetmenot/`) - A Google ADK-based multi-agent system with:
+Shoopet is a dual-component project:
+1. **Python Agent** (`agents/shoopet/`) - A Google ADK-based multi-agent system with:
    - Main agent: Conversational memory for social interactions
    - Structured Notes subagent: Structured notes management via BigQuery tables
    - Search subagent: Real-time Google Search integration
@@ -18,7 +18,7 @@ ForgetMeNot is a dual-component project:
 
 The agent is built using Google's Agent Development Kit (ADK) with a multi-agent architecture:
 
-- **agent.py**: Defines the main agent (ForgetMeNot) with Gemini LLM and memory tools
+- **agent.py**: Defines the main agent (Shoopet) with Gemini LLM and memory tools
   - Handles conversational memory, social interactions, and relationships
   - Delegates structured data tracking to the Structured Notes subagent
   - Delegates real-time searches to the Search subagent
@@ -41,7 +41,7 @@ The agent is built using Google's Agent Development Kit (ADK) with a multi-agent
 
 ### Environment Configuration
 
-Environment variables can be set in `.env` file (agents/forgetmenot/.env):
+Environment variables can be set in `.env` file (agents/shoopet/.env):
 - `GOOGLE_GENAI_USE_VERTEXAI="true"` - Enable Vertex AI backend
 - `GOOGLE_CLOUD_PROJECT` - GCP project ID (e.g., "mmontan-ml")
 - `GOOGLE_CLOUD_LOCATION` - Region (default: us-central1)
@@ -55,8 +55,8 @@ gcloud beta services mcp enable bigquery.googleapis.com --project=PROJECT_ID
 ### Package Structure
 
 The agent uses proper Python package structure with relative imports:
-- `agents/forgetmenot/` is the package root
-- Must be run with `python -m forgetmenot.main` to maintain package context
+- `agents/shoopet/` is the package root
+- Must be run with `python -m shoopet.main` to maintain package context
 - Uses relative imports (e.g., `from .tools.memory_tool import ...`)
 - This ensures code works correctly with both CLI and ADK web interface
 
@@ -65,16 +65,16 @@ The agent uses proper Python package structure with relative imports:
 ### Agent Development
 
 ```bash
-# Navigate to agents directory (parent of forgetmenot)
+# Navigate to agents directory (parent of shoopet)
 cd agents
 
 # Install dependencies (requires Python 3.11+)
-python -m venv forgetmenot/.venv
-source forgetmenot/.venv/bin/activate  # On Windows: forgetmenot\.venv\Scripts\activate
-pip install -r forgetmenot/requirements.txt
+python -m venv shoopet/.venv
+source shoopet/.venv/bin/activate  # On Windows: shoopet\.venv\Scripts\activate
+pip install -r shoopet/requirements.txt
 
 # Run agent CLI (IMPORTANT: use python -m to maintain package context)
-python -m forgetmenot.main
+python -m shoopet.main
 # First run creates Agent Engine, subsequent runs update it
 # Type 'quit' or 'exit' to save session to memory and terminate
 
@@ -90,7 +90,7 @@ gcloud beta services mcp enable bigquery.googleapis.com --project=mmontan-ml
 #    - BigQuery Data Viewer
 ```
 
-**Important**: Always use `python -m forgetmenot.main` (not `python main.py`) to run the agent. This maintains the proper Python package context and ensures relative imports work correctly.
+**Important**: Always use `python -m shoopet.main` (not `python main.py`) to run the agent. This maintains the proper Python package context and ensures relative imports work correctly.
 
 ### Website Development
 
@@ -142,7 +142,7 @@ Direct memory management tools for explicit fact storage:
 
 The system uses a main agent with two specialized subagents:
 
-**Main Agent (ForgetMeNot)**:
+**Main Agent (Shoopet)**:
 - Conversational memory for social interactions and relationships
 - Automatic memory bank persistence
 - Direct memory tools (save/retrieve)

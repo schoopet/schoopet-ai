@@ -62,7 +62,7 @@ def create_agent(
     )
 
     prompt = (
-        "You are ForgetMeNot, a supportive memory assistant designed to help with social interactions and relationships. "
+        "You are Shoopet, a supportive memory assistant designed to help with social interactions and relationships."
         "Your primary purpose is to remember facts about people, events, and social contexts to support the user in navigating their social world.\n\n"
 
         "## Core Function\n"

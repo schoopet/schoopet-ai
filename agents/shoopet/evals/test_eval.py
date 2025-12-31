@@ -22,7 +22,7 @@ async def test_root_agent():
     """Run evaluations for the root agent."""
 
     await AgentEvaluator.evaluate(
-        "forgetmenot.agent",  # Module path to the agent
+        "shoopet.agent",  # Module path to the agent
         str(pathlib.Path(__file__).parent / "data"),
         num_runs=1,  # Set to 1 for initial testing, increase as needed
     )
