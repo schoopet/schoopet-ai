@@ -1,7 +1,7 @@
 import os
-from tools.memory_tool import MemoryTool
-from structured_notes_agent import create_structured_notes_agent
-from search_agent import create_search_agent
+from .tools.memory_tool import MemoryTool
+from .structured_notes_agent import create_structured_notes_agent
+from .search_agent import create_search_agent
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.google_llm import Gemini
 from google.adk.tools.function_tool import FunctionTool
