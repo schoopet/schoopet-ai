@@ -1,7 +1,4 @@
 google-adk[eval]>=0.1.0
-google-api-python-client
-google-auth-oauthlib
-google-auth-httplib2
 google-cloud-aiplatform>=1.111.0
 pytest
 pytest-asyncio

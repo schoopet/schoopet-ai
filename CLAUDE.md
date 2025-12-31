@@ -57,7 +57,7 @@ gcloud beta services mcp enable bigquery.googleapis.com --project=PROJECT_ID
 The agent uses proper Python package structure with relative imports:
 - `agents/forgetmenot/` is the package root
 - Must be run with `python -m forgetmenot.main` to maintain package context
-- Uses relative imports (e.g., `from .tools.google_sheets import ...`)
+- Uses relative imports (e.g., `from .tools.memory_tool import ...`)
 - This ensures code works correctly with both CLI and ADK web interface
 
 ## Common Commands
