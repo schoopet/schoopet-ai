@@ -1,0 +1,14 @@
+[
+    {
+        "query": "Create a table to track my favorite books with their titles, authors, and my rating.",
+        "expected_tool_use": [
+            {
+                "tool_name": "structured_notes_agent",
+                "tool_input": {
+                    "request": "Create a table to track my favorite books with their titles, authors, and my rating."
+                }
+            }
+        ],
+        "reference": "I've created a table for your favorite books with columns for title, author, and rating."
+    }
+]

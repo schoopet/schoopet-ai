@@ -1,0 +1,14 @@
+[
+    {
+        "query": "Remember that my favorite color is blue.",
+        "expected_tool_use": [
+            {
+                "tool_name": "save_memory",
+                "tool_input": {
+                    "fact": "My favorite color is blue."
+                }
+            }
+        ],
+        "reference": "I've made a note that your favorite color is blue."
+    }
+]

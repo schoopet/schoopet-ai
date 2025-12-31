@@ -1,0 +1,62 @@
+[
+    {
+        "query": "What's the weather like in San Francisco today?",
+        "expected_tool_use": [
+            {
+                "tool_name": "search_agent",
+                "tool_input": {
+                    "request": "What's the weather like in San Francisco today?"
+                }
+            }
+        ],
+        "reference": "The weather in San Francisco today includes current temperature, humidity levels, and forecast conditions. The temperature is around 50°F with varying cloud cover and potential for light precipitation."
+    },
+    {
+        "query": "What are the best Italian restaurants near downtown San Francisco?",
+        "expected_tool_use": [
+            {
+                "tool_name": "search_agent",
+                "tool_input": {
+                    "request": "What are the best Italian restaurants near downtown San Francisco?"
+                }
+            }
+        ],
+        "reference": "Based on current reviews and ratings, here are some highly-rated Italian restaurants near downtown San Francisco in areas like the Financial District and North Beach, offering authentic Italian cuisine with homemade pasta and traditional dishes."
+    },
+    {
+        "query": "What time does Olive Garden close today?",
+        "expected_tool_use": [
+            {
+                "tool_name": "search_agent",
+                "tool_input": {
+                    "request": "What time does Olive Garden close today?"
+                }
+            }
+        ],
+        "reference": "Olive Garden typically closes around 10:00 PM or 11:00 PM depending on the location and day of the week. Hours may vary by specific location."
+    },
+    {
+        "query": "What are the latest reviews for the iPhone 16?",
+        "expected_tool_use": [
+            {
+                "tool_name": "search_agent",
+                "tool_input": {
+                    "request": "What are the latest reviews for the iPhone 16?"
+                }
+            }
+        ],
+        "reference": "The iPhone 16 has received positive reviews highlighting new features, improved camera capabilities, performance upgrades, and battery life. Reviews discuss the overall design, pricing, and how it compares to previous models."
+    },
+    {
+        "query": "What's the current stock price of Apple?",
+        "expected_tool_use": [
+            {
+                "tool_name": "search_agent",
+                "tool_input": {
+                    "request": "What's the current stock price of Apple?"
+                }
+            }
+        ],
+        "reference": "Apple's stock price is currently trading with daily market fluctuations. The stock price includes current value, percentage change, and market performance indicators."
+    }
+]
