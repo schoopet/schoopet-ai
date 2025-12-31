@@ -16,18 +16,20 @@ Shoopet is a dual-component project:
 
 ### Core Components
 
-The agent is built using Google's Agent Development Kit (ADK) with a multi-agent architecture:
+The agent is built using Google's Agent Development Kit (ADK) with a native multi-agent architecture:
 
 - **agent.py**: Defines the main agent (Shoopet) with Gemini LLM and memory tools
   - Handles conversational memory, social interactions, and relationships
-  - Delegates structured data tracking to the Structured Notes subagent
-  - Delegates real-time searches to the Search subagent
+  - Delegates to the **Structured Notes** subagent natively via `sub_agents`.
+  - Uses the **Search** agent as a tool (via `AgentTool`) for real-time information.
 - **structured_notes_agent.py**: Defines the Structured Notes subagent
   - Manages queryable lists and collections via BigQuery tables
   - Full BigQuery MCP integration for SQL operations
+  - Has access to the **Search** agent as a tool for data enrichment.
 - **search_agent.py**: Defines the Search subagent
   - Performs real-time Google searches using GoogleSearchTool
-  - Provides current information, factual lookups, and research capabilities
+  - Wrapped as an `AgentTool` to be used by both the Main Agent and Structured Notes Agent.
+  - Uses `gemini-2.0-flash-exp` to support mixed tool usage (Search + Functions).
 - **main.py**: Entry point that initializes Vertex AI Agent Engine, manages session lifecycle, and provides CLI interface
 - **memory_config.py**: Configures Vertex AI Memory Bank with custom social_memories topic and managed topics
 - **tools/memory_tool.py**: Direct memory management tools for saving and retrieving facts with user-scoped security
@@ -140,39 +142,40 @@ Direct memory management tools for explicit fact storage:
 
 ### Multi-Agent Architecture
 
-The system uses a main agent with two specialized subagents:
+The system uses a main agent with one native subagent and one shared tool agent:
 
 **Main Agent (Shoopet)**:
+- Model: `gemini-3-pro-preview`
 - Conversational memory for social interactions and relationships
 - Automatic memory bank persistence
 - Direct memory tools (save/retrieve)
-- Delegates to Structured Notes subagent for queryable data
-- Delegates to Search subagent for real-time information
+- Uses `sub_agents=[structured_notes_agent]` for native delegation to BigQuery tasks.
+- Uses `tools=[..., search_tool]` to access search capabilities.
 
 **Subagent 1: Structured Notes**:
+- Model: `gemini-3-pro-preview`
 - Manages structured, queryable data via BigQuery tables
 - Full BigQuery MCP integration (5 tools: list datasets/tables, get info, execute SQL)
-- Handles lists, collections, tracking (restaurants, books, gifts, etc.)
-- Creates and queries BigQuery tables using SQL
+- Uses `tools=[..., search_tool]` to enrich structured data with real-time info.
 - Connection: Streamable HTTP to https://bigquery.googleapis.com/mcp (MCP protocol, not SSE)
 - Authentication: Google Cloud credentials (automatic via ADK)
 
-**Subagent 2: Search**:
+**Tool Agent: Search**:
+- Model: `gemini-2.0-flash-exp` (Required for mixed tool support)
+- Wrapped as an `AgentTool` for use by other agents.
 - Performs real-time Google searches via GoogleSearchTool
-- Provides current information (news, weather, stock prices, sports scores)
-- Handles factual lookups (business hours, contact info, addresses)
-- Supports research (product info, reviews, comparisons)
-- Built-in tool that operates internally within Gemini model
-- No additional authentication required
+- Provides current information, factual lookups, and research.
+- Built-in tool that operates internally within Gemini model.
 
 **Delegation Flow**:
-1. User makes a request to the main agent
-2. Main agent determines if delegation is needed:
-   - For structured data tracking → delegates to structured_notes_agent
-   - For real-time searches → delegates to search_agent
-   - For personal memories → handles directly with memory tools
-3. Subagent performs specialized task and returns results
-4. Main agent integrates results into response
+1. User makes a request to the main agent.
+2. Main agent determines the need:
+   - For structured data tracking → delegates natively to **Structured Notes**.
+   - For real-time searches → invokes the **Search Agent** tool.
+   - For personal memories → handles directly with memory tools.
+3. Structured Notes agent can also invoke the **Search Agent** tool if it needs external data (e.g., verifying a restaurant address).
+4. Results are returned to the calling agent to be integrated into the response.
+
 
 **BigQuery Tools Available** (Structured Notes):
 - list_datasets: Discover datasets in project

@@ -37,15 +37,12 @@ os.environ["HTTPX_LOG_LEVEL"] = "trace"
 if "AGENT_ENGINE_ID" not in os.environ:
     os.environ["AGENT_ENGINE_ID"] = "172357243746910208"
 
-# Add current directory to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from .memory_config import get_memory_service, get_memory_bank_config
+from memory_config import get_memory_service, get_memory_bank_config
 
 # Real ADK Imports
 from google.adk.runners import Runner
 from google.adk.sessions.vertex_ai_session_service import VertexAiSessionService
-from .agent import create_agent
+from root_agent import create_agent
 
 from vertexai import Client
 from vertexai.preview.reasoning_engines import AdkApp
@@ -178,7 +175,7 @@ async def run_agent(project_id: str, location: str, agent_engine_id: str):
             traceback.print_exc()
 
 # Helper for run_agent (save_session_to_memory is not imported but used in original)
-from .memory_config import save_session_to_memory
+from memory_config import save_session_to_memory
 
 def main():
     parser = argparse.ArgumentParser(description="ADK Sheets Agent CLI")

@@ -12,14 +12,22 @@ class MemoryTool:
         self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
         self.location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
         self.agent_engine_id = os.getenv("AGENT_ENGINE_ID")
+        self._client = None
 
         if not all([self.project_id, self.location, self.agent_engine_id]):
             print("Warning: Memory tool requires GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION, and AGENT_ENGINE_ID environment variables.")
-            self.client = None
-            return
 
-        self.client = Client(project=self.project_id, location=self.location)
-        self.agent_engine_name = f"projects/{self.project_id}/locations/{self.location}/reasoningEngines/{self.agent_engine_id}"
+        if all([self.project_id, self.location, self.agent_engine_id]):
+            self.agent_engine_name = f"projects/{self.project_id}/locations/{self.location}/reasoningEngines/{self.agent_engine_id}"
+        else:
+            self.agent_engine_name = None
+
+    @property
+    def client(self):
+        """Lazy initialization of Vertex AI client for pickling support."""
+        if self._client is None and all([self.project_id, self.location, self.agent_engine_id]):
+            self._client = Client(project=self.project_id, location=self.location)
+        return self._client
 
     def save_memory(self, fact: str, tool_context: ToolContext = None) -> str:
         """

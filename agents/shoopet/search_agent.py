@@ -5,14 +5,13 @@ from google.adk.tools.google_search_tool import GoogleSearchTool
 
 
 def create_search_agent(
-    model_name: str = "gemini-3-pro",
+    model_name: str = "gemini-2.5-flash",
     project: str = None,
     location: str = None
 ):
     """Creates the search subagent with Google Search integration."""
 
     # Initialize Google Search Tool
-    # Use bypass_multi_tools_limit=True for Gemini 2.x+ models
     google_search_tool = GoogleSearchTool(bypass_multi_tools_limit=True)
 
     tools = [google_search_tool]

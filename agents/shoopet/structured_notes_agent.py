@@ -3,11 +3,13 @@ from typing import List, Dict, Any
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.google_llm import Gemini
 from google.adk.tools.function_tool import FunctionTool
+from google.adk.tools.agent_tool import AgentTool
+from search_agent import create_search_agent
 
 
 
 def create_structured_notes_agent(
-    model_name: str = "gemini-3-pro",
+    model_name: str = "gemini-3-pro-preview",
     project: str = None,
     location: str = None
 ):
@@ -23,7 +25,7 @@ def create_structured_notes_agent(
     if gcp_project:
         try:
             # Initialize BigQuery tools
-            from tools.bigquery_tool import BigQueryTools
+            from bigquery_tool import BigQueryTools
             bq_tools = BigQueryTools(project=gcp_project)
 
             # Wrap functions in FunctionTool
@@ -56,8 +58,16 @@ def create_structured_notes_agent(
         location=vertex_location
     )
 
+    # Initialize Search Agent (Subagent)
+    search_agent = create_search_agent(
+        project=project,
+        location=location
+    )
+    search_tool = AgentTool(agent=search_agent)
+    tools.append(search_tool)
+
     # Adjust prompt based on whether BigQuery tools are available
-    has_bigquery_tools = len(tools) > 0
+    has_bigquery_tools = len(tools) > 1 # Search tool is always added now
 
     if has_bigquery_tools:
         prompt = (
@@ -108,6 +118,11 @@ def create_structured_notes_agent(
         "  - Use for creating tables, inserting data, querying, and analyzing\n"
         "  - Supports full BigQuery Standard SQL syntax\n"
         "  - Returns formatted results or error messages\n\n"
+        
+        "**Search (via Subagent):**\n"
+        "- search_agent: Delegate to this subagent for real-time Google searches\n"
+        "  - Use this to find information to populate your tables (e.g., restaurant addresses, book authors)\n"
+        "  - Use this to verify data before inserting\n\n"
 
         "## BigQuery Schema Design Best Practices\n"
         "**IMPORTANT**: All tables must be created in the `mmontan_notes` dataset, which already exists.\n\n"

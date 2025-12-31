@@ -1,7 +1,7 @@
 import os
-from .tools.memory_tool import MemoryTool
-from .structured_notes_agent import create_structured_notes_agent
-from .search_agent import create_search_agent
+from memory_tool import MemoryTool
+from structured_notes_agent import create_structured_notes_agent
+from search_agent import create_search_agent
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.google_llm import Gemini
 from google.adk.tools.function_tool import FunctionTool
@@ -9,7 +9,7 @@ from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from google.adk.tools.agent_tool import AgentTool
 
 def create_agent(
-    model_name: str = "gemini-3-pro",
+    model_name: str = "gemini-3-pro-preview",
     project: str = None,
     location: str = None
 ):
@@ -35,8 +35,7 @@ def create_agent(
         location=location
     )
 
-    # Wrap subagents in AgentTool for proper delegation
-    structured_notes_tool = AgentTool(agent=structured_notes_agent)
+    # Wrap search agent in AgentTool to isolate its tools
     search_tool = AgentTool(agent=search_agent)
 
     tools = [
@@ -44,7 +43,6 @@ def create_agent(
         save_multiple_memories_tool,
         retrieve_memories_tool,
         preload_memory_tool,
-        structured_notes_tool,
         search_tool
     ]
 
@@ -160,9 +158,10 @@ def create_agent(
 
     # Initialize Agent
     agent = LlmAgent(
-        name="sheets_agent", # Name is required
+        name="coordinator", # Name is required
         model=model,
         tools=tools,
+        sub_agents=[structured_notes_agent],
         instruction=prompt,
     )
     return agent

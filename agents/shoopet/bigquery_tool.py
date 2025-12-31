@@ -2,7 +2,15 @@ from google.cloud import bigquery
 
 class BigQueryTools:
     def __init__(self, project: str):
-        self.client = bigquery.Client(project=project)
+        self.project = project
+        self._client = None
+
+    @property
+    def client(self):
+        """Lazy initialization of BigQuery client for pickling support."""
+        if self._client is None:
+            self._client = bigquery.Client(project=self.project)
+        return self._client
 
     def execute_sql(self, query: str) -> str:
         """
