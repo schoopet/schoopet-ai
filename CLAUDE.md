@@ -30,7 +30,9 @@ The agent is built using Google's Agent Development Kit (ADK) with a native mult
   - Performs real-time Google searches using GoogleSearchTool
   - Wrapped as an `AgentTool` to be used by both the Main Agent and Structured Notes Agent.
   - Uses `gemini-2.0-flash-exp` to support mixed tool usage (Search + Functions).
-- **main.py**: Entry point that initializes Vertex AI Agent Engine, manages session lifecycle, and provides CLI interface
+- **deploy.py**: Deploys agent to Vertex AI Agent Engine (creates or updates remote reasoning engine)
+- **chat.py**: Interactive chat client for deployed remote agent (recommended for regular use)
+- **main.py**: Local development CLI that initializes/updates Agent Engine and runs agent locally
 - **memory_config.py**: Configures Vertex AI Memory Bank with custom social_memories topic and managed topics
 - **tools/memory_tool.py**: Direct memory management tools for saving and retrieving facts with user-scoped security
 
@@ -75,9 +77,21 @@ python -m venv shoopet/.venv
 source shoopet/.venv/bin/activate  # On Windows: shoopet\.venv\Scripts\activate
 pip install -r shoopet/requirements.txt
 
-# Run agent CLI (IMPORTANT: use python -m to maintain package context)
+# Deploy agent to Vertex AI Agent Engine (remote)
+python -m shoopet.deploy
+# First run creates new Agent Engine and outputs ID
+# Add ID to .env as AGENT_ENGINE_ID for subsequent updates
+# Subsequent runs update the existing Agent Engine
+
+# Chat with deployed remote agent (recommended)
+python -m shoopet.chat
+# Clean turn-based interface to interact with deployed agent
+# Connects to remote Agent Engine (no local execution)
+# Type 'quit' or 'exit' to save session and terminate
+
+# Run agent locally with CLI (for development/testing)
 python -m shoopet.main
-# First run creates Agent Engine, subsequent runs update it
+# Runs agent locally but still creates/updates Agent Engine
 # Type 'quit' or 'exit' to save session to memory and terminate
 
 # Run ADK web interface for testing
@@ -92,7 +106,12 @@ gcloud beta services mcp enable bigquery.googleapis.com --project=mmontan-ml
 #    - BigQuery Data Viewer
 ```
 
-**Important**: Always use `python -m shoopet.main` (not `python main.py`) to run the agent. This maintains the proper Python package context and ensures relative imports work correctly.
+**Important**: Always use `python -m shoopet.<module>` (not `python <module>.py`) to run agent commands. This maintains the proper Python package context and ensures relative imports work correctly.
+
+**Recommended workflow**:
+1. Deploy agent once: `python -m shoopet.deploy`
+2. Chat with deployed agent: `python -m shoopet.chat`
+3. Update deployment after code changes: `python -m shoopet.deploy` (uses existing AGENT_ENGINE_ID)
 
 ### Website Development
 
