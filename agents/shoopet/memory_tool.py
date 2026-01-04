@@ -3,30 +3,35 @@ from typing import Optional, Dict, Any
 from vertexai import Client
 from google.adk.tools import ToolContext
 
+import json
 
 class MemoryTool:
     """Tool for explicitly saving facts to Vertex AI Memory Bank."""
 
     def __init__(self):
         """Initialize the Memory Tool with Vertex AI client."""
-        self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
-        self.location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
-        self.agent_engine_id = os.getenv("AGENT_ENGINE_ID")
         self._client = None
-
-        if not all([self.project_id, self.location, self.agent_engine_id]):
-            print("Warning: Memory tool requires GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION, and AGENT_ENGINE_ID environment variables.")
-
-        if all([self.project_id, self.location, self.agent_engine_id]):
-            self.agent_engine_name = f"projects/{self.project_id}/locations/{self.location}/reasoningEngines/{self.agent_engine_id}"
-        else:
-            self.agent_engine_name = None
+        self.project_id = None
+        self.location = None
+        self.agent_engine_id = None
+        self.agent_engine_name = None
 
     @property
     def client(self):
         """Lazy initialization of Vertex AI client for pickling support."""
-        if self._client is None and all([self.project_id, self.location, self.agent_engine_id]):
-            self._client = Client(project=self.project_id, location=self.location)
+        if self._client is None:
+            # Read environment variables fresh on first access
+            self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+            self.location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+            self.agent_engine_id = os.getenv("GOOGLE_CLOUD_AGENT_ENGINE_ID")
+
+            if all([self.project_id, self.location, self.agent_engine_id]):
+                self.agent_engine_name = f"projects/{self.project_id}/locations/{self.location}/reasoningEngines/{self.agent_engine_id}"
+                self._client = Client(project=self.project_id, location=self.location)
+            else:
+                print("Warning: Memory tool requires GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION, and GOOGLE_CLOUD_AGENT_ENGINE_ID environment variables.")
+                self.agent_engine_name = None
+
         return self._client
 
     def save_memory(self, fact: str, tool_context: ToolContext = None) -> str:
@@ -42,7 +47,7 @@ class MemoryTool:
         Note: Requires user_id from tool_context for proper memory scoping.
         """
         if not self.client:
-            return "Error: Memory tool not initialized. Check environment variables."
+            return "Error: Memory tool not initialized. Check environment variables: GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION, and GOOGLE_CLOUD_AGENT_ENGINE_ID."
 
         # Extract user_id from tool_context - REQUIRED for security
         if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:

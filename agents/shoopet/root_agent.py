@@ -1,7 +1,8 @@
+from vertexai.agent_engines.templates.adk import AdkApp
 import os
-from memory_tool import MemoryTool
-from structured_notes_agent import create_structured_notes_agent
-from search_agent import create_search_agent
+from .memory_tool import MemoryTool
+from .structured_notes_agent import create_structured_notes_agent
+from .search_agent import create_search_agent
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.google_llm import Gemini
 from google.adk.tools.function_tool import FunctionTool
@@ -165,5 +166,8 @@ def create_agent(
         instruction=prompt,
     )
     return agent
+
+def create_adk_agent() -> AdkApp:
+    return AdkApp(agent=create_agent())
 
 root_agent = create_agent()

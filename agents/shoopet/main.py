@@ -33,16 +33,16 @@ os.environ["GOOGLE_CLOUD_LOCATION"] = "us-central1"
 
 # Enable verbose HTTP logging to see request/response bodies
 os.environ["HTTPX_LOG_LEVEL"] = "trace"
-# AGENT_ENGINE_ID may be updated by the update command
-if "AGENT_ENGINE_ID" not in os.environ:
-    os.environ["AGENT_ENGINE_ID"] = "172357243746910208"
+# GOOGLE_CLOUD_AGENT_ENGINE_ID may be updated by the update command
+if "GOOGLE_CLOUD_AGENT_ENGINE_ID" not in os.environ:
+    os.environ["GOOGLE_CLOUD_AGENT_ENGINE_ID"] = "172357243746910208"
 
 from memory_config import get_memory_service, get_memory_bank_config
 
 # Real ADK Imports
 from google.adk.runners import Runner
 from google.adk.sessions.vertex_ai_session_service import VertexAiSessionService
-from root_agent import create_agent
+from .root_agent import create_agent
 
 from vertexai import Client
 from vertexai.preview.reasoning_engines import AdkApp
@@ -90,8 +90,8 @@ def initialize_agent_engine(
                 }
             }
         )
-        if hasattr(remote_agent, 'resource_name'):
-            return remote_agent.resource_name.split("/")[-1]
+        if remote_agent.api_resource and remote_agent.api_resource.name:
+            return remote_agent.api_resource.name.split("/")[-1]
         else:
             return None
     
@@ -185,7 +185,7 @@ def main():
     # Read environment variables here
     project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
     location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
-    agent_engine_id = os.environ.get("AGENT_ENGINE_ID")
+    agent_engine_id = os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID")
     
     if not project_id:
         print("Error: GOOGLE_CLOUD_PROJECT environment variable must be set.")

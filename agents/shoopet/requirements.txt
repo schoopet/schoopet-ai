@@ -1,5 +1,7 @@
 google-adk[eval]>=0.1.0
 google-cloud-aiplatform>=1.111.0
+pydantic
+cloudpickle
 pytest
 pytest-asyncio
 python-dotenv

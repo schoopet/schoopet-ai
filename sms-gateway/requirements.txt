@@ -1,0 +1,21 @@
+# FastAPI and server
+fastapi>=0.109.0
+uvicorn>=0.27.0
+python-multipart>=0.0.6
+
+# Twilio SDK
+twilio>=8.13.0
+
+# Google Cloud
+google-cloud-firestore>=2.14.0
+google-cloud-aiplatform>=1.111.0
+vertexai>=1.0.0
+
+# Configuration
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+httpx>=0.26.0

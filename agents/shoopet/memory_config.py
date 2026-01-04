@@ -11,12 +11,12 @@ def get_memory_service():
     """
     project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
     location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
-    agent_engine_id = os.getenv("AGENT_ENGINE_ID")
-    
+    agent_engine_id = os.getenv("GOOGLE_CLOUD_AGENT_ENGINE_ID")
+
     if not project_id:
         raise ValueError("GOOGLE_CLOUD_PROJECT environment variable must be set for Vertex AI Memory.")
     if not agent_engine_id:
-        raise ValueError("AGENT_ENGINE_ID environment variable must be set for Vertex AI Memory Bank.")
+        raise ValueError("GOOGLE_CLOUD_AGENT_ENGINE_ID environment variable must be set for Vertex AI Memory Bank.")
 
     print(f"Using Vertex AI Memory for project: {project_id}, engine: {agent_engine_id}")
     return VertexAiMemoryBankService(

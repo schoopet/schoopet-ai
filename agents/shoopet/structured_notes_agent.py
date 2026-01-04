@@ -4,7 +4,7 @@ from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.google_llm import Gemini
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.agent_tool import AgentTool
-from search_agent import create_search_agent
+from .search_agent import create_search_agent
 
 
 
@@ -25,7 +25,7 @@ def create_structured_notes_agent(
     if gcp_project:
         try:
             # Initialize BigQuery tools
-            from bigquery_tool import BigQueryTools
+            from .bigquery_tool import BigQueryTools
             bq_tools = BigQueryTools(project=gcp_project)
 
             # Wrap functions in FunctionTool

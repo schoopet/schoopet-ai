@@ -5,28 +5,89 @@ import logging
 
 import vertexai
 from vertexai.preview import reasoning_engines
-from vertexai import Client
+from vertexai import Client, types
 
-from memory_config import get_memory_bank_config
+from .memory_config import get_memory_bank_config
+from .root_agent import create_adk_agent
 
-def deploy(project_id: str, location: str, staging_bucket: str = None, agent_engine_id: str = None):
+
+def _create_client(project_id: str, location: str, use_agent_identity: bool):
+    """Create Vertex AI client with optional agent identity support."""
+    if use_agent_identity:
+        print("🔐 Agent Identity enabled (requires v1beta1 API)")
+        return Client(
+            project=project_id,
+            location=location,
+            http_options=dict(api_version="v1beta1")
+        )
+    else:
+        return Client(project=project_id, location=location)
+
+
+def _build_config(project_id: str, location: str, staging_bucket: str, requirements_file: str, use_agent_identity: bool):
+    """Build deployment configuration."""
+    env_vars = {
+        "GOOGLE_GENAI_USE_VERTEXAI": "true",
+    }
+
+    memory_config = get_memory_bank_config(project_id, location)
+
+    config = {
+        "requirements": requirements_file,
+        "extra_packages": ["shoopet"],
+        "staging_bucket": staging_bucket,
+        "agent_framework": "google-adk",
+        "env_vars": env_vars,
+        "display_name": "shoopet-agent-engine",
+        "description": "Shoopet Agent with Memory and Structured Notes",
+        "context_spec": {
+            "memory_bank_config": memory_config
+        }
+    }
+
+    if use_agent_identity:
+        config["identity_type"] = types.IdentityType.AGENT_IDENTITY
+
+    return config
+
+
+def _display_result(remote_agent, agent_engine_id: str = None):
+    """Display deployment result including effective identity."""
+    if agent_engine_id:
+        print(f"Agent Engine ID: {agent_engine_id}")
+    elif remote_agent.api_resource and remote_agent.api_resource.name:
+        agent_engine_id = remote_agent.api_resource.name.split("/")[-1]
+        print(f"Agent Engine ID: {agent_engine_id}")
+        print("\n📝 Update your .env file with:")
+        print(f"GOOGLE_CLOUD_AGENT_ENGINE_ID={agent_engine_id}")
+
+    # Display effective identity if available
+    if remote_agent.api_resource and hasattr(remote_agent.api_resource, 'effective_identity') and remote_agent.api_resource.effective_identity:
+        print(f"\n🔐 Effective Identity:")
+        print(f"   {remote_agent.api_resource.effective_identity}")
+
+    return agent_engine_id
+
+
+def deploy(project_id: str, location: str, staging_bucket: str = None, agent_engine_id: str = None, use_agent_identity: bool = False):
     """
-    Deploys the Shoopet agent to Vertex AI Reasoning Engines.
+    Deploys the Shoopet agent to Vertex AI Reasoning Engines using agent object deployment.
 
     Args:
         project_id: GCP Project ID
         location: GCP Region
-        staging_bucket: GCS bucket for staging artifacts
+        staging_bucket: GCS bucket for staging artifacts (optional, will use default if not provided)
         agent_engine_id: Existing Agent Engine ID to update. If None, creates a new one.
+        use_agent_identity: Enable Agent Identity for least-privilege access (requires IAM setup)
     """
 
     print(f"🚀 Starting deployment for project {project_id} in {location}...")
 
-    # Ensure staging bucket is set (required for agent deployments)
+    # Staging bucket for agent object deployment (SDK handles GCS uploads)
     if not staging_bucket:
         staging_bucket = f"gs://{project_id}-agent-staging"
         print(f"ℹ️  No staging bucket specified, using default: {staging_bucket}")
-        print(f"   (Ensure this bucket exists or create it with: gsutil mb -l {location} {staging_bucket})")
+        print(f"   (Bucket will be created automatically if it doesn't exist)")
 
     # Initialize Vertex AI
     vertexai.init(
@@ -35,45 +96,21 @@ def deploy(project_id: str, location: str, staging_bucket: str = None, agent_eng
         staging_bucket=staging_bucket
     )
 
-    # Configuration for Memory Bank
-    print("📋 Generating Memory Bank configuration...")
-    memory_config = get_memory_bank_config(project_id, location)
-
-    # Define source package path (the shoopet directory itself)
-    # When packaging shoopet directly, the entrypoint is relative to shoopet's contents
-    agents_dir = "shoopet"
-    print(f"agents_dir: {agents_dir}")
-    source_packages = [agents_dir]
-
-    # Define entrypoint for the agent (absolute imports, no package prefix needed)
-    entrypoint_module = "shoopet.root_agent"
-    entrypoint_object = "create_agent"
-
-    # Define class methods that the agent engine will expose
-    class_methods = [
-        {
-            "name": "query",
-            "api_mode": "structured",
-            "parameters": {
-                "properties": {
-                    "prompt": {"type": "string", "description": "The user's message to the agent"}
-                },
-                "required": ["prompt"],
-                "type": "object"
-            }
-        }
-    ]
-
     # Path to requirements file
-    requirements_file = os.path.join(agents_dir, "requirements.txt")
-    print(f"requirements_file: {requirements_file}")
+    requirements_file = os.path.join("shoopet", "requirements.txt")
+    print(f"📦 Using requirements from: {requirements_file}")
 
-    print(f"📦 Packaging source code from: {source_packages[0]}")
-    print(f"   Entrypoint: {entrypoint_module}:{entrypoint_object}")
+    # Instantiate the agent locally
+    print("🤖 Creating agent object locally...")
+    local_agent = create_adk_agent()
+    print("✅ Agent object created successfully")
 
+    # Build configuration
+    print("📋 Building deployment configuration...")
+    config = _build_config(project_id, location, staging_bucket, requirements_file, use_agent_identity)
 
     if agent_engine_id:
-        print(f"🔄 Updating existing Agent Engine with new code: {agent_engine_id}")
+        print(f"🔄 Updating existing Agent Engine: {agent_engine_id}")
 
         # Construct resource name
         if "/" not in agent_engine_id:
@@ -82,42 +119,20 @@ def deploy(project_id: str, location: str, staging_bucket: str = None, agent_eng
              resource_name = agent_engine_id
 
         try:
-            # Initialize Client for Update
-            client = Client(project=project_id, location=location)
+            # Initialize Client
+            client = _create_client(project_id, location, use_agent_identity)
 
-            # Update the existing engine with new code and config using source files
-            print("🚀 Deploying updated code and config from source files...")
-
-            # Environment variables needed by the agent
-            # Note: GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION are automatically provided
-            env_vars = {
-                "GOOGLE_GENAI_USE_VERTEXAI": "true",
-                "AGENT_ENGINE_ID": agent_engine_id
-            }
+            # Update the existing engine with agent object
+            print("🚀 Deploying updated agent object...")
 
             remote_agent = client.agent_engines.update(
                 name=resource_name,
-                config={
-                    "source_packages": source_packages,
-                    "entrypoint_module": entrypoint_module,
-                    "entrypoint_object": entrypoint_object,
-                    "class_methods": class_methods,
-                    "requirements_file": requirements_file,
-                    "agent_framework": "google-adk",
-                    "env_vars": env_vars,
-                    "display_name": "shoopet-agent-engine",
-                    "description": "Shoopet Agent with Memory and Structured Notes",
-                    "context_spec": {
-                        "memory_bank_config": memory_config
-                    }
-                }
+                agent=local_agent,
+                config=config
             )
 
             print("\n✅ Update Successful!")
-            print(f"Agent Engine Name: {remote_agent.resource_name}")
-            print(f"Agent Engine ID: {agent_engine_id}")
-
-            return agent_engine_id
+            return _display_result(remote_agent, agent_engine_id)
 
         except Exception as e:
             print(f"\n❌ Update Failed: {e}")
@@ -129,46 +144,19 @@ def deploy(project_id: str, location: str, staging_bucket: str = None, agent_eng
         print("✨ Creating NEW Agent Engine...")
 
         try:
-            # Initialize Client for Create
-            client = Client(project=project_id, location=location)
+            # Initialize Client
+            client = _create_client(project_id, location, use_agent_identity)
 
-            # Create new agent engine from source files
-            print("🚀 Deploying to Vertex AI from source files...")
-
-            # Environment variables needed by the agent
-            # Note: GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION are automatically provided
-            # AGENT_ENGINE_ID will need to be set after creation via an update
-            env_vars = {
-                "GOOGLE_GENAI_USE_VERTEXAI": "true"
-            }
+            # Create new agent engine from agent object
+            print("🚀 Deploying agent object to Vertex AI...")
 
             remote_agent = client.agent_engines.create(
-                config={
-                    "source_packages": source_packages,
-                    "entrypoint_module": entrypoint_module,
-                    "entrypoint_object": entrypoint_object,
-                    "class_methods": class_methods,
-                    "requirements_file": requirements_file,
-                    "agent_framework": "google-adk",
-                    "env_vars": env_vars,
-                    "display_name": "shoopet-agent-engine",
-                    "description": "Shoopet Agent with Memory and Structured Notes",
-                    "context_spec": {
-                        "memory_bank_config": memory_config
-                    }
-                }
+                agent=local_agent,
+                config=config
             )
 
             print("\n✅ Deployment Successful!")
-            print(f"Agent Engine Name: {remote_agent.resource_name}")
-
-            # Extract ID
-            ae_id = remote_agent.resource_name.split("/")[-1]
-            print(f"Agent Engine ID: {ae_id}")
-            print("\n📝 Update your .env file with:")
-            print(f"AGENT_ENGINE_ID={ae_id}")
-
-            return ae_id
+            return _display_result(remote_agent)
 
         except Exception as e:
             print(f"\n❌ Deployment Failed: {e}")
@@ -181,10 +169,11 @@ def main():
     parser.add_argument("--project", help="Google Cloud Project ID", default=os.getenv("GOOGLE_CLOUD_PROJECT"))
     parser.add_argument("--location", help="Google Cloud Region", default=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
     parser.add_argument("--staging-bucket", help="GCS Staging Bucket (optional)", default=os.getenv("GCS_STAGING_BUCKET"))
-    parser.add_argument("--id", help="Existing Agent Engine ID to update", default=os.getenv("AGENT_ENGINE_ID"))
-    
+    parser.add_argument("--id", help="Existing Agent Engine ID to update", default=os.getenv("GOOGLE_CLOUD_AGENT_ENGINE_ID"))
+    parser.add_argument("--agent-identity", action="store_true", help="Enable Agent Identity for least-privilege access")
+
     args = parser.parse_args()
-    
+
     if not args.project:
         print("Error: Project ID must be provided via --project or GOOGLE_CLOUD_PROJECT env var.")
         return
@@ -193,7 +182,8 @@ def main():
         project_id=args.project,
         location=args.location,
         staging_bucket=args.staging_bucket,
-        agent_engine_id=args.id
+        agent_engine_id=args.id,
+        use_agent_identity=args.agent_identity
     )
 
 if __name__ == "__main__":
