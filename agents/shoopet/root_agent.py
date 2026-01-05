@@ -1,8 +1,10 @@
 from vertexai.agent_engines.templates.adk import AdkApp
 import os
 from .memory_tool import MemoryTool
+from .calendar_tool import CalendarTool
 from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
+from .code_executor_agent import create_code_executor_agent
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.google_llm import Gemini
 from google.adk.tools.function_tool import FunctionTool
@@ -17,12 +19,19 @@ def create_agent(
     """Creates the agent instance."""
     # Initialize Tools
     memory_tool = MemoryTool()
+    calendar_tool = CalendarTool()
 
     # Wrap tools using FunctionTool
     save_memory_tool = FunctionTool(func=memory_tool.save_memory)
     save_multiple_memories_tool = FunctionTool(func=memory_tool.save_multiple_memories)
     retrieve_memories_tool = FunctionTool(func=memory_tool.retrieve_memories)
     preload_memory_tool = PreloadMemoryTool()
+
+    # Calendar tools
+    list_events_tool = FunctionTool(func=calendar_tool.list_calendar_events)
+    create_event_tool = FunctionTool(func=calendar_tool.create_calendar_event)
+    update_event_tool = FunctionTool(func=calendar_tool.update_calendar_event)
+    calendar_status_tool = FunctionTool(func=calendar_tool.get_calendar_status)
 
     # Initialize Structured Notes Subagent (handles BigQuery integration)
     structured_notes_agent = create_structured_notes_agent(
@@ -39,12 +48,24 @@ def create_agent(
     # Wrap search agent in AgentTool to isolate its tools
     search_tool = AgentTool(agent=search_agent)
 
+    # Initialize Code Executor subagent (for date calculations, math, etc.)
+    code_executor_agent = create_code_executor_agent(
+        project=project,
+        location=location
+    )
+    code_executor_tool = AgentTool(agent=code_executor_agent)
+
     tools = [
         save_memory_tool,
         save_multiple_memories_tool,
         retrieve_memories_tool,
         preload_memory_tool,
-        search_tool
+        search_tool,
+        code_executor_tool,
+        list_events_tool,
+        create_event_tool,
+        update_event_tool,
+        calendar_status_tool,
     ]
 
     # Get Vertex AI settings from environment variables or parameters
@@ -108,6 +129,26 @@ def create_agent(
         "  • Fact-checking or verifying information\n"
         "The subagent has access to Google Search and returns current, up-to-date information.\n\n"
 
+        "**Code Execution (via Subagent):**\n"
+        "- code_executor: Delegate to this subagent for Python code execution\n"
+        "Use when you need to:\n"
+        "  • Calculate dates (e.g., 'next Monday', 'in 2 weeks', '30 days from now')\n"
+        "  • Perform mathematical calculations\n"
+        "  • Transform or process data\n"
+        "For calendar operations, use this first to calculate exact dates, then call calendar tools.\n\n"
+
+        "**Google Calendar:**\n"
+        "- list_calendar_events(start_date, end_date, max_results): View calendar events\n"
+        "- create_calendar_event(title, start, end, description, location): Create new events\n"
+        "- update_calendar_event(event_id, title, start, end, description, location): Modify events\n"
+        "- get_calendar_status(): Check if calendar is connected\n"
+        "Use for:\n"
+        "  • Checking what's on the calendar (today, this week, specific dates)\n"
+        "  • Scheduling appointments, meetings, reminders\n"
+        "  • Rescheduling or updating existing events\n"
+        "If the user's calendar is not connected, these tools will return an authorization link.\n"
+        "The user must click the link to grant access before calendar features work.\n\n"
+
         "Note: Regular conversation is automatically saved. Only use explicit tools when needed.\n\n"
 
         "## When to Use Memories vs. Structured Notes vs. Search\n"
@@ -127,8 +168,14 @@ def create_agent(
         "  - Example: 'Latest reviews for iPhone 16'\n"
         "  - Example: 'Current weather in San Francisco'\n\n"
 
+        "**Calendar**: Schedule management and event tracking\n"
+        "  - Example: 'What's on my calendar tomorrow?'\n"
+        "  - Example: 'Schedule a meeting with John next Tuesday at 2pm'\n"
+        "  - Example: 'Add Sarah's birthday party on March 15th'\n"
+        "  - If calendar is not connected, provide the authorization link to the user.\n\n"
+
         "**Multiple tools**: Some requests benefit from combining tools - search for current info, save important "
-        "findings to memory, and track structured data in BigQuery.\n\n"
+        "findings to memory, track structured data in BigQuery, and schedule events on the calendar.\n\n"
 
         "## Proactive Support\n"
         "Actively help by:\n"

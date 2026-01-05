@@ -135,6 +135,48 @@ pytest tests/ -v
 - 500ms delay between segments ensures delivery order
 - Maximum 10 segments per response (configurable)
 
+## Custom Domain Setup
+
+The SMS gateway is accessible at `api.schoopet.com`. To set up a custom domain for Cloud Run:
+
+### 1. Create Domain Mapping
+
+```bash
+gcloud beta run domain-mappings create \
+  --service shoopet-sms-gateway \
+  --domain api.schoopet.com \
+  --region us-central1 \
+  --project mmontan-ml
+```
+
+### 2. Configure DNS
+
+Add a CNAME record in your DNS provider:
+
+| Type  | Name | Value                 |
+|-------|------|-----------------------|
+| CNAME | api  | ghs.googlehosted.com. |
+
+### 3. Verify Domain Mapping
+
+Check the status of the domain mapping:
+
+```bash
+gcloud beta run domain-mappings describe \
+  --domain api.schoopet.com \
+  --region us-central1 \
+  --project mmontan-ml
+```
+
+SSL certificates are provisioned automatically by Google once DNS is configured correctly.
+
+### 4. Update Twilio Webhook
+
+After the domain is active, update the Twilio webhook URL to:
+```
+https://api.schoopet.com/webhook/sms
+```
+
 ## Security
 
 - Twilio webhook signatures are validated

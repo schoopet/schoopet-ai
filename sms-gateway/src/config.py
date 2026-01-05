@@ -26,6 +26,21 @@ class Settings(BaseSettings):
     # Feature Flags
     ENABLE_SIGNATURE_VALIDATION: bool = True
 
+    # Rate Limiting
+    DAILY_MESSAGE_LIMIT: int = 1000
+    RATE_LIMIT_EXCLUDED_PHONES: list[str] = ["+19494136310"]
+
+    # OAuth Configuration
+    GOOGLE_OAUTH_CLIENT_ID: str = ""
+    GOOGLE_OAUTH_CLIENT_SECRET: str = ""
+    GOOGLE_OAUTH_REDIRECT_URI: str = ""  # e.g., https://sms-gateway-xxx.run.app/oauth/google/callback
+    OAUTH_STATE_TTL_SECONDS: int = 600  # 10 minutes
+    OAUTH_SCOPES: list[str] = [
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "openid",
+    ]
+
     class Config:
         env_file = ".env"
         case_sensitive = True

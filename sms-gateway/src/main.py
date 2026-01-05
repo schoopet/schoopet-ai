@@ -4,9 +4,14 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from google.cloud import firestore
+from google.cloud import secretmanager
 
 from .config import get_settings
 from .agent.client import AgentEngineClient
+from .oauth.handler import router as oauth_router, init_oauth_services
+from .oauth.manager import OAuthManager
+from .oauth.secret_manager import SecretManagerClient
+from .ratelimit.limiter import RateLimiter
 from .session.manager import SessionManager
 from .sms.sender import SMSSender
 from .sms.splitter import SMSSplitter
@@ -62,13 +67,58 @@ async def lifespan(app: FastAPI):
     # Initialize Twilio Validator
     validator = TwilioValidator(settings.TWILIO_AUTH_TOKEN)
 
+    # Initialize Rate Limiter
+    rate_limiter = RateLimiter(
+        firestore_client=firestore_client,
+        daily_limit=settings.DAILY_MESSAGE_LIMIT,
+        excluded_phones=settings.RATE_LIMIT_EXCLUDED_PHONES,
+    )
+    logger.info(f"Rate limiting: {settings.DAILY_MESSAGE_LIMIT}/day, {len(settings.RATE_LIMIT_EXCLUDED_PHONES)} excluded phones")
+
     # Initialize services for webhook handler
     init_services(
         validator=validator,
         session_manager=session_manager,
         agent_client=agent_client,
         sms_sender=sms_sender,
+        rate_limiter=rate_limiter,
     )
+
+    # Initialize OAuth services (if configured)
+    oauth_manager = None
+    if settings.GOOGLE_OAUTH_CLIENT_ID and settings.GOOGLE_OAUTH_CLIENT_SECRET:
+        logger.info("Initializing OAuth services...")
+        secret_manager_client = SecretManagerClient(
+            project_id=settings.GOOGLE_CLOUD_PROJECT,
+        )
+        oauth_manager = OAuthManager(
+            firestore_client=firestore_client,
+            secret_manager=secret_manager_client,
+            client_id=settings.GOOGLE_OAUTH_CLIENT_ID,
+            client_secret=settings.GOOGLE_OAUTH_CLIENT_SECRET,
+            redirect_uri=settings.GOOGLE_OAUTH_REDIRECT_URI,
+            state_ttl_seconds=settings.OAUTH_STATE_TTL_SECONDS,
+        )
+        init_oauth_services(
+            oauth_manager=oauth_manager,
+            session_manager=session_manager,
+        )
+
+        # Load HMAC secret for OAuth token validation
+        try:
+            sm_client = secretmanager.SecretManagerServiceClient()
+            secret_name = f"projects/{settings.GOOGLE_CLOUD_PROJECT}/secrets/oauth-hmac-secret/versions/latest"
+            response = sm_client.access_secret_version(request={"name": secret_name})
+            app.state.oauth_hmac_secret = response.payload.data.decode("UTF-8")
+            logger.info("HMAC secret loaded from Secret Manager")
+        except Exception as e:
+            logger.error(f"Failed to load HMAC secret: {e}")
+            app.state.oauth_hmac_secret = None
+
+        logger.info("OAuth services initialized")
+    else:
+        logger.warning("OAuth not configured - calendar features disabled")
+        app.state.oauth_hmac_secret = None
 
     logger.info("SMS Gateway started successfully")
 
@@ -86,8 +136,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Include webhook router
+# Include routers
 app.include_router(webhook_router)
+app.include_router(oauth_router)
 
 
 @app.get("/health")

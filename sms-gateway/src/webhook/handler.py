@@ -38,25 +38,31 @@ NOT_OPTED_IN_MSG = (
     "Please reply YES to opt in and start using this service. "
     "Reply HELP for more info."
 )
+RATE_LIMIT_MSG = (
+    "You've reached your daily message limit. "
+    "Please try again tomorrow. Reply HELP for assistance."
+)
 
 # Global references to services (initialized by main.py)
 _validator = None
 _session_manager = None
 _agent_client = None
 _sms_sender = None
+_rate_limiter = None
 _sms_splitter = SMSSplitter()
 
 
-def init_services(validator, session_manager, agent_client, sms_sender):
+def init_services(validator, session_manager, agent_client, sms_sender, rate_limiter=None):
     """Initialize service references for the webhook handler.
 
     Called by main.py during application startup.
     """
-    global _validator, _session_manager, _agent_client, _sms_sender
+    global _validator, _session_manager, _agent_client, _sms_sender, _rate_limiter
     _validator = validator
     _session_manager = session_manager
     _agent_client = agent_client
     _sms_sender = sms_sender
+    _rate_limiter = rate_limiter
 
 
 @router.post("/webhook/sms")
@@ -187,6 +193,14 @@ async def process_message_async(
                 # Not opted in and didn't say YES
                 logger.info(f"User {phone_number} not opted in, sending reminder")
                 await _sms_sender.send(phone_number, NOT_OPTED_IN_MSG)
+                return
+
+        # Check rate limit before processing (opted-in users only)
+        if _rate_limiter:
+            is_allowed, count = await _rate_limiter.check_and_increment(phone_number)
+            if not is_allowed:
+                logger.warning(f"Rate limit exceeded for {phone_number}: {count} messages today")
+                await _sms_sender.send(phone_number, RATE_LIMIT_MSG)
                 return
 
         # User is opted in - get or create agent session and process message

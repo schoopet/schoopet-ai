@@ -37,7 +37,7 @@ os.environ["HTTPX_LOG_LEVEL"] = "trace"
 if "GOOGLE_CLOUD_AGENT_ENGINE_ID" not in os.environ:
     os.environ["GOOGLE_CLOUD_AGENT_ENGINE_ID"] = "172357243746910208"
 
-from memory_config import get_memory_service, get_memory_bank_config
+from .memory_config import get_memory_service, get_memory_bank_config
 
 # Real ADK Imports
 from google.adk.runners import Runner
@@ -175,7 +175,7 @@ async def run_agent(project_id: str, location: str, agent_engine_id: str):
             traceback.print_exc()
 
 # Helper for run_agent (save_session_to_memory is not imported but used in original)
-from memory_config import save_session_to_memory
+from .memory_config import save_session_to_memory
 
 def main():
     parser = argparse.ArgumentParser(description="ADK Sheets Agent CLI")

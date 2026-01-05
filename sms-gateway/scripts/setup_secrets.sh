@@ -23,10 +23,10 @@ echo "=========================================="
 
 # Get the project number (needed for service account)
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
-COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+APP_SA="shoopet-sms-gateway@${PROJECT_ID}.iam.gserviceaccount.com"
 
 echo ""
-echo "Compute service account: $COMPUTE_SA"
+echo "App service account: $APP_SA"
 
 # Function to create secret if it doesn't exist
 create_secret_if_not_exists() {
@@ -71,7 +71,7 @@ grant_access() {
     echo "Granting access to $secret_name for Cloud Run..."
     gcloud secrets add-iam-policy-binding "$secret_name" \
         --project="$PROJECT_ID" \
-        --member="serviceAccount:$COMPUTE_SA" \
+        --member="serviceAccount:$APP_SA" \
         --role="roles/secretmanager.secretAccessor" \
         --quiet
 }
@@ -82,6 +82,18 @@ echo "Creating secrets..."
 create_secret_if_not_exists "twilio-account-sid"
 create_secret_if_not_exists "twilio-auth-token"
 create_secret_if_not_exists "twilio-phone-number"
+create_secret_if_not_exists "google-oauth-client-id"
+create_secret_if_not_exists "google-oauth-client-secret"
+create_secret_if_not_exists "oauth-hmac-secret"
+
+# Auto-generate HMAC secret if it doesn't have a version
+if ! gcloud secrets versions describe latest --secret="oauth-hmac-secret" --project="$PROJECT_ID" &>/dev/null; then
+    echo "Generating random HMAC secret..."
+    openssl rand -hex 32 | gcloud secrets versions add "oauth-hmac-secret" \
+        --project="$PROJECT_ID" \
+        --data-file=-
+    echo "Generated new version for oauth-hmac-secret"
+fi
 
 # Ask if user wants to set values
 echo ""
@@ -97,6 +109,14 @@ if [[ "$response" =~ ^[Yy]$ ]]; then
     add_secret_version "twilio-account-sid" "Enter TWILIO_ACCOUNT_SID (starts with AC)"
     add_secret_version "twilio-auth-token" "Enter TWILIO_AUTH_TOKEN"
     add_secret_version "twilio-phone-number" "Enter TWILIO_PHONE_NUMBER (E.164 format, e.g., +14155551234)"
+
+    echo ""
+    echo "Enter your Google OAuth credentials:"
+    echo "(Get these from https://console.cloud.google.com/apis/credentials)"
+    echo ""
+
+    add_secret_version "google-oauth-client-id" "Enter GOOGLE_OAUTH_CLIENT_ID"
+    add_secret_version "google-oauth-client-secret" "Enter GOOGLE_OAUTH_CLIENT_SECRET"
 fi
 
 # Grant access
@@ -105,6 +125,9 @@ echo "Granting Cloud Run access to secrets..."
 grant_access "twilio-account-sid"
 grant_access "twilio-auth-token"
 grant_access "twilio-phone-number"
+grant_access "google-oauth-client-id"
+grant_access "google-oauth-client-secret"
+grant_access "oauth-hmac-secret"
 
 echo ""
 echo "=========================================="
@@ -115,6 +138,10 @@ echo "Secrets created:"
 echo "  - twilio-account-sid"
 echo "  - twilio-auth-token"
 echo "  - twilio-phone-number"
+echo "  - google-oauth-client-id"
+echo "  - google-oauth-client-secret"
+echo "  - oauth-hmac-secret"
+
 echo ""
 echo "Next steps:"
 echo "  1. Run ./scripts/setup_firestore.py to create Firestore collection"

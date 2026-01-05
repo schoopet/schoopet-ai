@@ -28,6 +28,7 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
     """Build deployment configuration."""
     env_vars = {
         "GOOGLE_GENAI_USE_VERTEXAI": "true",
+        "OAUTH_BASE_URL": "https://api.schoopet.com",
     }
 
     memory_config = get_memory_bank_config(project_id, location)
