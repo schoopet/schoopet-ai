@@ -2,6 +2,7 @@ from vertexai.agent_engines.templates.adk import AdkApp
 import os
 from .memory_tool import MemoryTool
 from .calendar_tool import CalendarTool
+from .house_tool import HouseTool
 from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
 from .code_executor_agent import create_code_executor_agent
@@ -20,6 +21,7 @@ def create_agent(
     # Initialize Tools
     memory_tool = MemoryTool()
     calendar_tool = CalendarTool()
+    house_tool = HouseTool()
 
     # Wrap tools using FunctionTool
     save_memory_tool = FunctionTool(func=memory_tool.save_memory)
@@ -32,6 +34,10 @@ def create_agent(
     create_event_tool = FunctionTool(func=calendar_tool.create_calendar_event)
     update_event_tool = FunctionTool(func=calendar_tool.update_calendar_event)
     calendar_status_tool = FunctionTool(func=calendar_tool.get_calendar_status)
+    
+    # House tools
+    list_devices_tool = FunctionTool(func=house_tool.list_devices)
+    device_status_tool = FunctionTool(func=house_tool.get_device_status)
 
     # Initialize Structured Notes Subagent (handles BigQuery integration)
     structured_notes_agent = create_structured_notes_agent(
@@ -66,6 +72,8 @@ def create_agent(
         create_event_tool,
         update_event_tool,
         calendar_status_tool,
+        list_devices_tool,
+        device_status_tool,
     ]
 
     # Get Vertex AI settings from environment variables or parameters
@@ -148,6 +156,15 @@ def create_agent(
         "  • Rescheduling or updating existing events\n"
         "If the user's calendar is not connected, these tools will return an authorization link.\n"
         "The user must click the link to grant access before calendar features work.\n\n"
+        
+        "**Smart Home (Google Home):**\n"
+        "- list_devices(): List all connected smart home devices\n"
+        "- get_device_status(device_name): Get status of a specific device\n"
+        "Use for:\n"
+        "  • Checking device status (e.g., 'is the thermostat on?', 'what's the temperature?')\n"
+        "  • Listing available devices in the home\n"
+        "Note: This requires a separate authorization. If not connected, the tool will provide an authorization link "
+        "specifically for Smart Home access. This is separate from Calendar access.\n\n"
 
         "Note: Regular conversation is automatically saved. Only use explicit tools when needed.\n\n"
 
@@ -173,6 +190,11 @@ def create_agent(
         "  - Example: 'Schedule a meeting with John next Tuesday at 2pm'\n"
         "  - Example: 'Add Sarah's birthday party on March 15th'\n"
         "  - If calendar is not connected, provide the authorization link to the user.\n\n"
+        
+        "**Smart Home**: managing home devices\n"
+        "  - Example: 'What is the temperature in the living room?'\n"
+        "  - Example: 'Is the front door locked?'\n"
+        "  - If not connected, provide the specific House authorization link.\n\n"
 
         "**Multiple tools**: Some requests benefit from combining tools - search for current info, save important "
         "findings to memory, track structured data in BigQuery, and schedule events on the calendar.\n\n"

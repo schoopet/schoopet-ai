@@ -3,13 +3,10 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from google.adk.tools import ToolContext
-
-# Firestore collection for OAuth tokens (shared with SMS gateway)
-TOKENS_COLLECTION = "oauth_tokens"
+from .oauth_client import OAuthClient
 
 # Google Calendar API endpoints
 CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
-TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 
 class CalendarTool:
@@ -18,229 +15,11 @@ class CalendarTool:
     This tool fetches OAuth tokens stored by the SMS Gateway and uses them
     to access the user's Google Calendar. If no token exists, it returns
     a link for the user to authorize access.
-
-    All clients are lazily initialized on first use for pickling support.
     """
 
     def __init__(self):
-        """Initialize the Calendar Tool - all initialization is deferred."""
-        # All client instances are None until first use
-        self._firestore_client = None
-        self._secret_client = None
-        self._initialized = False
-
-        # Configuration - will be loaded lazily
-        self._project_id = None
-        self._oauth_base_url = None
-        self._client_id = None
-        self._client_secret = None
-
-        # HMAC secret for OAuth initiation tokens (cached)
-        self._hmac_secret = None
-
-    def _ensure_initialized(self):
-        """Lazy initialization of configuration from environment variables."""
-        if self._initialized:
-            return
-
-        self._project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
-        self._oauth_base_url = os.getenv("OAUTH_BASE_URL", "")
-        self._client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
-        self._client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
-        self._initialized = True
-
-    def _get_firestore_client(self):
-        """Get Firestore client, initializing lazily."""
-        if self._firestore_client is None:
-            self._ensure_initialized()
-            if self._project_id:
-                # Import here to avoid issues during pickling
-                from google.cloud import firestore
-                self._firestore_client = firestore.Client(project=self._project_id)
-        return self._firestore_client
-
-    def _get_secret_client(self):
-        """Get Secret Manager client, initializing lazily."""
-        if self._secret_client is None:
-            self._ensure_initialized()
-            if self._project_id:
-                # Import here to avoid issues during pickling
-                from google.cloud import secretmanager
-                self._secret_client = secretmanager.SecretManagerServiceClient()
-        return self._secret_client
-
-    def _get_hmac_secret(self) -> Optional[str]:
-        """Get HMAC secret from Secret Manager (cached)."""
-        if self._hmac_secret is not None:
-            return self._hmac_secret
-
-        self._ensure_initialized()
-        secret_client = self._get_secret_client()
-        if not secret_client or not self._project_id:
-            return None
-
-        try:
-            secret_name = f"projects/{self._project_id}/secrets/oauth-hmac-secret/versions/latest"
-            response = secret_client.access_secret_version(request={"name": secret_name})
-            self._hmac_secret = response.payload.data.decode("UTF-8")
-            return self._hmac_secret
-        except Exception as e:
-            print(f"Error getting HMAC secret: {e}")
-            return None
-
-    def _normalize_phone(self, phone_number: str) -> str:
-        """Normalize phone number for consistent document IDs."""
-        return phone_number.lstrip("+").replace("-", "").replace(" ", "")
-
-    def _get_oauth_link(self, phone_number: str) -> str:
-        """Generate secure HMAC-signed OAuth authorization link."""
-        self._ensure_initialized()
-
-        if not self._oauth_base_url:
-            return "Calendar authorization not configured. Please contact support."
-
-        secret = self._get_hmac_secret()
-        if not secret:
-            return "Calendar authorization temporarily unavailable. Please try again later."
-
-        # Generate HMAC-signed token
-        # Import here to avoid issues during pickling
-        import hmac as hmac_lib
-        import hashlib
-        import base64
-        import time
-
-        # Clean phone number to E.164 format (strip spaces, dashes, parens)
-        # The SMS gateway expects strict E.164 format: ^\+[1-9]\d{1,14}$
-        import re
-        clean_phone = re.sub(r"[^0-9+]", "", phone_number)
-        if not clean_phone.startswith("+"):
-            clean_phone = "+" + clean_phone
-
-        expires = int(time.time()) + 600  # 10 minutes
-        message = f"{clean_phone}:{expires}"
-
-        signature = hmac_lib.new(
-            secret.encode(),
-            message.encode(),
-            hashlib.sha256
-        ).hexdigest()
-
-        token = base64.urlsafe_b64encode(f"{message}:{signature}".encode()).decode()
-
-        return f"{self._oauth_base_url}/oauth/google/initiate?token={token}"
-
-    def _get_token(self, phone_number: str) -> Optional[Dict[str, Any]]:
-        """Get OAuth token from Firestore."""
-        firestore_client = self._get_firestore_client()
-        if not firestore_client:
-            return None
-
-        doc_id = self._normalize_phone(phone_number)
-        doc_ref = firestore_client.collection(TOKENS_COLLECTION).document(doc_id)
-        doc = doc_ref.get()
-
-        if not doc.exists:
-            return None
-
-        return doc.to_dict()
-
-    def _is_token_expired(self, token_data: Dict[str, Any]) -> bool:
-        """Check if access token is expired."""
-        expires_at = token_data.get("expires_at")
-        if not expires_at:
-            return True
-
-        # Add 60 second buffer
-        now = datetime.now(timezone.utc)
-        if hasattr(expires_at, 'tzinfo') and expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-
-        return now >= (expires_at - timedelta(seconds=60))
-
-    def _get_refresh_token(self, phone_number: str) -> Optional[str]:
-        """Get refresh token from Secret Manager."""
-        self._ensure_initialized()
-        secret_client = self._get_secret_client()
-        if not secret_client:
-            return None
-
-        try:
-            # Import here to avoid issues during pickling
-            from google.api_core import exceptions
-
-            normalized = self._normalize_phone(phone_number)
-            secret_name = f"projects/{self._project_id}/secrets/oauth-refresh-{normalized}/versions/latest"
-            response = secret_client.access_secret_version(request={"name": secret_name})
-            return response.payload.data.decode("UTF-8")
-        except Exception as e:
-            # Handle NotFound and other exceptions
-            if "NotFound" in str(type(e).__name__):
-                return None
-            print(f"Error getting refresh token: {e}")
-            return None
-
-    def _refresh_access_token(self, phone_number: str, refresh_token: str) -> Optional[str]:
-        """Refresh an expired access token."""
-        self._ensure_initialized()
-        if not self._client_id or not self._client_secret:
-            return None
-
-        try:
-            # Import here to avoid issues during pickling
-            import httpx
-
-            with httpx.Client() as client:
-                response = client.post(
-                    TOKEN_URL,
-                    data={
-                        "refresh_token": refresh_token,
-                        "client_id": self._client_id,
-                        "client_secret": self._client_secret,
-                        "grant_type": "refresh_token",
-                    },
-                )
-                response.raise_for_status()
-                token_data = response.json()
-
-                access_token = token_data.get("access_token")
-                expires_in = token_data.get("expires_in", 3600)
-
-                if access_token:
-                    # Update token in Firestore
-                    firestore_client = self._get_firestore_client()
-                    if firestore_client:
-                        doc_id = self._normalize_phone(phone_number)
-                        doc_ref = firestore_client.collection(TOKENS_COLLECTION).document(doc_id)
-                        now = datetime.now(timezone.utc)
-                        doc_ref.update({
-                            "access_token": access_token,
-                            "expires_at": now + timedelta(seconds=expires_in),
-                            "updated_at": now,
-                        })
-                    return access_token
-
-                return None
-        except Exception as e:
-            print(f"Error refreshing token: {e}")
-            return None
-
-    def _get_valid_access_token(self, phone_number: str) -> Optional[str]:
-        """Get a valid access token, refreshing if necessary."""
-        token_data = self._get_token(phone_number)
-        if not token_data:
-            return None
-
-        access_token = token_data.get("access_token")
-
-        # Check if expired
-        if self._is_token_expired(token_data):
-            # Try to refresh
-            refresh_token = self._get_refresh_token(phone_number)
-            if refresh_token:
-                access_token = self._refresh_access_token(phone_number, refresh_token)
-
-        return access_token
+        """Initialize the Calendar Tool."""
+        self._oauth_client = OAuthClient()
 
     def _format_event(self, event: Dict[str, Any]) -> str:
         """Format a calendar event for display."""
@@ -299,9 +78,9 @@ class CalendarTool:
         phone_number = tool_context.user_id
 
         # Check for valid token
-        access_token = self._get_valid_access_token(phone_number)
+        access_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
         if not access_token:
-            oauth_link = self._get_oauth_link(phone_number)
+            oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
             return (
                 f"Your Google Calendar is not connected yet. "
                 f"Please authorize access by visiting:\n{oauth_link}\n\n"
@@ -343,7 +122,7 @@ class CalendarTool:
 
                 if response.status_code == 401:
                     # Token might be revoked
-                    oauth_link = self._get_oauth_link(phone_number)
+                    oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
                     return (
                         f"Your calendar authorization has expired. "
                         f"Please re-authorize by visiting:\n{oauth_link}"
@@ -395,9 +174,9 @@ class CalendarTool:
         phone_number = tool_context.user_id
 
         # Check for valid token
-        access_token = self._get_valid_access_token(phone_number)
+        access_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
         if not access_token:
-            oauth_link = self._get_oauth_link(phone_number)
+            oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
             return (
                 f"Your Google Calendar is not connected yet. "
                 f"Please authorize access by visiting:\n{oauth_link}\n\n"
@@ -452,7 +231,7 @@ class CalendarTool:
                 )
 
                 if response.status_code == 401:
-                    oauth_link = self._get_oauth_link(phone_number)
+                    oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
                     return (
                         f"Your calendar authorization has expired. "
                         f"Please re-authorize by visiting:\n{oauth_link}"
@@ -500,9 +279,9 @@ class CalendarTool:
         phone_number = tool_context.user_id
 
         # Check for valid token
-        access_token = self._get_valid_access_token(phone_number)
+        access_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
         if not access_token:
-            oauth_link = self._get_oauth_link(phone_number)
+            oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
             return (
                 f"Your Google Calendar is not connected yet. "
                 f"Please authorize access by visiting:\n{oauth_link}\n\n"
@@ -523,7 +302,7 @@ class CalendarTool:
                 if response.status_code == 404:
                     return f"Event not found: {event_id}"
                 if response.status_code == 401:
-                    oauth_link = self._get_oauth_link(phone_number)
+                    oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
                     return f"Authorization expired. Please re-authorize: {oauth_link}"
 
                 response.raise_for_status()
@@ -573,7 +352,7 @@ class CalendarTool:
                 )
 
                 if response.status_code == 401:
-                    oauth_link = self._get_oauth_link(phone_number)
+                    oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
                     return f"Authorization expired. Please re-authorize: {oauth_link}"
 
                 response.raise_for_status()
@@ -598,22 +377,22 @@ class CalendarTool:
 
         phone_number = tool_context.user_id
 
-        token_data = self._get_token(phone_number)
+        token_data = self._oauth_client.get_token_data(phone_number, "calendar")
         if not token_data:
-            oauth_link = self._get_oauth_link(phone_number)
+            oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
             return (
                 f"Google Calendar is not connected. "
                 f"To connect, visit:\n{oauth_link}"
             )
 
         email = token_data.get("email", "Unknown")
-        is_expired = self._is_token_expired(token_data)
+        is_expired = self._oauth_client.is_token_expired(token_data)
 
         if is_expired:
             # Try to refresh
-            access_token = self._get_valid_access_token(phone_number)
+            access_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
             if not access_token:
-                oauth_link = self._get_oauth_link(phone_number)
+                oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
                 return (
                     f"Google Calendar connection has expired. "
                     f"Please re-authorize:\n{oauth_link}"

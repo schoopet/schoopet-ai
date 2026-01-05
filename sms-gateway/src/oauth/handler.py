@@ -41,7 +41,7 @@ def _validate_phone(phone: str) -> bool:
     return bool(PHONE_PATTERN.match(phone))
 
 
-def _success_html(email: str) -> str:
+def _success_html(email: str, service_name: str = "Google Calendar") -> str:
     """Generate success page HTML."""
     return f"""
     <!DOCTYPE html>
@@ -94,9 +94,9 @@ def _success_html(email: str) -> str:
         <div class="container">
             <div class="success-icon">&#10004;</div>
             <h1>Authorization Successful!</h1>
-            <p>Your Google Calendar has been connected.</p>
+            <p>Your {service_name} has been connected.</p>
             <div class="email">{email}</div>
-            <p>You can now close this window and use calendar features via SMS.</p>
+            <p>You can now close this window and use features via SMS.</p>
         </div>
     </body>
     </html>
@@ -167,12 +167,14 @@ def _error_html(message: str) -> str:
 async def initiate_oauth(
     request: Request,
     token: str = Query(..., description="HMAC-signed initiation token"),
+    feature: str = Query("calendar", description="Feature to authorize (calendar, house)"),
 ):
     """Initiate Google OAuth flow using HMAC-signed token.
 
     Args:
         request: FastAPI request (for accessing app state).
         token: HMAC-signed initiation token containing phone number.
+        feature: Feature to authorize.
 
     Returns:
         Redirect to Google OAuth consent page.
@@ -211,23 +213,30 @@ async def initiate_oauth(
             )
 
     settings = get_settings()
+    
+    # Get scopes for feature
+    scopes = settings.OAUTH_SCOPES.get(feature)
+    if not scopes:
+        # Fallback to calendar/default if feature unknown, or raise error
+        # For security, better to reject unknown features
+        raise HTTPException(status_code=400, detail=f"Unknown feature: {feature}")
 
     # Generate state for CSRF protection
-    state = await _oauth_manager.generate_state(phone)
+    state = await _oauth_manager.generate_state(phone, feature)
 
     # Build OAuth authorization URL
     params = {
         "client_id": settings.GOOGLE_OAUTH_CLIENT_ID,
         "redirect_uri": settings.GOOGLE_OAUTH_REDIRECT_URI,
         "response_type": "code",
-        "scope": " ".join(settings.OAUTH_SCOPES),
+        "scope": " ".join(scopes),
         "state": state,
         "access_type": "offline",  # Request refresh token
         "prompt": "consent",  # Force consent to get refresh token
     }
 
     auth_url = f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
-    logger.info(f"Initiating OAuth for phone {phone[:4]}****")
+    logger.info(f"Initiating OAuth for phone {phone[:4]}****, feature: {feature}")
 
     return RedirectResponse(url=auth_url)
 
@@ -263,7 +272,7 @@ async def oauth_callback(
         return HTMLResponse(_error_html("Missing authorization code or state"), status_code=400)
 
     # Validate state (CSRF protection)
-    phone_number = await _oauth_manager.validate_state(state)
+    phone_number, feature = await _oauth_manager.validate_state(state)
     if not phone_number:
         return HTMLResponse(
             _error_html("Invalid or expired authorization. Please request a new link."),
@@ -271,10 +280,11 @@ async def oauth_callback(
         )
 
     settings = get_settings()
+    scopes = settings.OAUTH_SCOPES.get(feature, settings.OAUTH_SCOPES["calendar"])
 
     # Exchange code for tokens
     access_token, refresh_token, expires_in, email = await _oauth_manager.exchange_code_for_tokens(
-        code, settings.OAUTH_SCOPES
+        code, scopes
     )
 
     if not access_token or not email:
@@ -282,22 +292,26 @@ async def oauth_callback(
 
     # Store tokens securely
     success = await _oauth_manager.store_tokens(
-        phone_number, email, access_token, refresh_token, expires_in
+        phone_number, email, access_token, refresh_token, expires_in, feature
     )
 
     if not success:
         return HTMLResponse(_error_html("Failed to save authorization"), status_code=500)
 
-    logger.info(f"OAuth completed for phone {phone_number[:4]}****, email: {email}")
-    return HTMLResponse(_success_html(email))
+    logger.info(f"OAuth completed for phone {phone_number[:4]}****, feature: {feature}, email: {email}")
+    
+    # Custom message based on feature
+    service_name = "Smart Home" if feature == "house" else "Google Calendar"
+    return HTMLResponse(_success_html(email, service_name))
 
 
 @router.get("/status")
-async def oauth_status(phone: str):
-    """Check OAuth status for a phone number.
+async def oauth_status(phone: str, feature: str = "calendar"):
+    """Check OAuth status for a phone number and feature.
 
     Args:
         phone: Phone number in E.164 format.
+        feature: Feature to check (calendar, house).
 
     Returns:
         JSON with OAuth status.
@@ -308,28 +322,31 @@ async def oauth_status(phone: str):
     if not _validate_phone(phone):
         raise HTTPException(status_code=400, detail="Invalid phone number format")
 
-    token_info = await _oauth_manager.get_token_info(phone)
+    token_info = await _oauth_manager.get_token_info(phone, feature)
 
     if not token_info:
         return {
             "connected": False,
             "email": None,
+            "feature": feature,
         }
 
     return {
         "connected": True,
         "email": token_info.email,
+        "feature": feature,
         "expires_at": token_info.expires_at.isoformat(),
         "is_expired": token_info.is_expired(),
     }
 
 
 @router.delete("/revoke")
-async def revoke_oauth(phone: str):
-    """Revoke OAuth tokens for a phone number.
+async def revoke_oauth(phone: str, feature: str = "calendar"):
+    """Revoke OAuth tokens for a phone number and feature.
 
     Args:
         phone: Phone number in E.164 format.
+        feature: Feature to revoke.
 
     Returns:
         JSON with revocation status.
@@ -340,9 +357,9 @@ async def revoke_oauth(phone: str):
     if not _validate_phone(phone):
         raise HTTPException(status_code=400, detail="Invalid phone number format")
 
-    success = await _oauth_manager.revoke_tokens(phone)
+    success = await _oauth_manager.revoke_tokens(phone, feature)
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to revoke tokens")
 
-    return {"revoked": True, "phone": phone}
+    return {"revoked": True, "phone": phone, "feature": feature}

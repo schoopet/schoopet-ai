@@ -81,6 +81,7 @@ class SecretManagerClient:
                 logger.info(f"Created new secret for phone {phone_number[:4]}****")
             except exceptions.AlreadyExists:
                 # Secret already exists, we'll add a new version
+                logger.warning(f"Secret for phone {phone_number[:4]}**** already exists. Overriding with new version.")
                 pass
 
             # Add new secret version with the refresh token

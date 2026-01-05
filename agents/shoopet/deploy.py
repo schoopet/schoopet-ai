@@ -26,9 +26,11 @@ def _create_client(project_id: str, location: str, use_agent_identity: bool):
 
 def _build_config(project_id: str, location: str, staging_bucket: str, requirements_file: str, use_agent_identity: bool):
     """Build deployment configuration."""
+    # Capture current environment variables to pass to the deployed agent
     env_vars = {
         "GOOGLE_GENAI_USE_VERTEXAI": "true",
         "OAUTH_BASE_URL": "https://api.schoopet.com",
+        "GOOGLE_SDM_PROJECT_ID": os.getenv("GOOGLE_SDM_PROJECT_ID", "431c3f26-5b55-42da-bcb5-7ccfa19aa9b9"),
     }
 
     memory_config = get_memory_bank_config(project_id, location)
