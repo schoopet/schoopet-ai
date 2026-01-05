@@ -11,7 +11,10 @@ import hmac
 import hashlib
 import base64
 import time
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 TOKEN_TTL_SECONDS = 600  # 10 minutes
 
@@ -66,6 +69,7 @@ def validate_oauth_init_token(token: str, secret: str) -> Optional[str]:
 
         # Check expiration
         if expires < time.time():
+            logger.warning(f"OAuth token expired. Expires: {expires}, Now: {time.time()}")
             return None
 
         # Verify signature using constant-time comparison
@@ -77,9 +81,14 @@ def validate_oauth_init_token(token: str, secret: str) -> Optional[str]:
         ).hexdigest()
 
         if not hmac.compare_digest(signature, expected):
+            logger.warning(
+                f"OAuth token signature mismatch. Phone: {phone}. "
+                f"Expected: {expected[:8]}..., Got: {signature[:8]}..."
+            )
             return None
 
         return phone
 
-    except Exception:
+    except Exception as e:
+        logger.error(f"OAuth token validation error: {e}")
         return None
