@@ -122,12 +122,132 @@ class TestCalendarTool:
     def test_get_calendar_status_expired_refresh_fail(self, calendar_tool, tool_context):
         """Should return auth link if refresh fails."""
         mock_token_data = {"email": "user@example.com", "expires_at": datetime.now(timezone.utc)}
-        
+
         calendar_tool._oauth_client.get_token_data.return_value = mock_token_data
         calendar_tool._oauth_client.is_token_expired.return_value = True
         calendar_tool._oauth_client.get_valid_access_token.return_value = None # Refresh failed
         calendar_tool._oauth_client.get_oauth_link.return_value = OAUTH_LINK
-        
+
         result = calendar_tool.get_calendar_status(tool_context=tool_context)
         assert "connection has expired" in result
         assert OAUTH_LINK in result
+
+
+class TestCalendarToolTimezone:
+    """Tests for timezone handling in CalendarTool."""
+
+    @patch("httpx.Client")
+    def test_list_events_with_timezone(self, mock_httpx, calendar_tool, tool_context):
+        """Should use provided timezone for date calculations."""
+        calendar_tool._oauth_client.get_valid_access_token.return_value = ACCESS_TOKEN
+
+        mock_client = mock_httpx.return_value.__enter__.return_value
+        mock_client.get.return_value.status_code = 200
+        mock_client.get.return_value.json.return_value = {"items": []}
+
+        result = calendar_tool.list_calendar_events(
+            start_date="2024-01-01",
+            user_timezone="America/Los_Angeles",
+            tool_context=tool_context
+        )
+
+        assert "No events found" in result
+        # Verify API was called (timezone affects the UTC conversion)
+        mock_client.get.assert_called()
+
+    @patch("httpx.Client")
+    def test_list_events_invalid_timezone(self, mock_httpx, calendar_tool, tool_context):
+        """Should reject invalid timezone."""
+        calendar_tool._oauth_client.get_valid_access_token.return_value = ACCESS_TOKEN
+
+        result = calendar_tool.list_calendar_events(
+            start_date="2024-01-01",
+            user_timezone="Invalid/Timezone",
+            tool_context=tool_context
+        )
+
+        assert "Invalid timezone" in result
+
+    @patch("httpx.Client")
+    def test_create_event_with_timezone(self, mock_httpx, calendar_tool, tool_context):
+        """Should create event with provided timezone."""
+        calendar_tool._oauth_client.get_valid_access_token.return_value = ACCESS_TOKEN
+
+        mock_client = mock_httpx.return_value.__enter__.return_value
+        mock_client.post.return_value.status_code = 200
+        mock_client.post.return_value.json.return_value = {
+            "htmlLink": "https://calendar.google.com/event?id=123"
+        }
+
+        result = calendar_tool.create_calendar_event(
+            title="Meeting",
+            start="2024-01-15T14:00:00",
+            user_timezone="America/New_York",
+            tool_context=tool_context
+        )
+
+        assert "Created event" in result
+
+        # Verify the event was created with the correct timezone
+        call_args = mock_client.post.call_args
+        event_data = call_args.kwargs.get("json", call_args[1].get("json", {}))
+        assert event_data["start"]["timeZone"] == "America/New_York"
+        assert event_data["end"]["timeZone"] == "America/New_York"
+
+    @patch("httpx.Client")
+    def test_create_event_default_timezone(self, mock_httpx, calendar_tool, tool_context):
+        """Should use UTC as default timezone."""
+        calendar_tool._oauth_client.get_valid_access_token.return_value = ACCESS_TOKEN
+
+        mock_client = mock_httpx.return_value.__enter__.return_value
+        mock_client.post.return_value.status_code = 200
+        mock_client.post.return_value.json.return_value = {
+            "htmlLink": "https://calendar.google.com/event?id=123"
+        }
+
+        result = calendar_tool.create_calendar_event(
+            title="Meeting",
+            start="2024-01-15T14:00:00",
+            tool_context=tool_context
+        )
+
+        assert "Created event" in result
+
+        # Verify default UTC timezone
+        call_args = mock_client.post.call_args
+        event_data = call_args.kwargs.get("json", call_args[1].get("json", {}))
+        assert event_data["start"]["timeZone"] == "UTC"
+
+    @patch("httpx.Client")
+    def test_update_event_with_timezone(self, mock_httpx, calendar_tool, tool_context):
+        """Should update event with provided timezone."""
+        calendar_tool._oauth_client.get_valid_access_token.return_value = ACCESS_TOKEN
+
+        mock_client = mock_httpx.return_value.__enter__.return_value
+
+        # Mock GET for existing event
+        mock_client.get.return_value.status_code = 200
+        mock_client.get.return_value.json.return_value = {
+            "id": "event123",
+            "summary": "Old Title",
+            "start": {"dateTime": "2024-01-15T10:00:00Z"},
+            "end": {"dateTime": "2024-01-15T11:00:00Z"}
+        }
+
+        # Mock PUT for update
+        mock_client.put.return_value.status_code = 200
+        mock_client.put.return_value.json.return_value = {}
+
+        result = calendar_tool.update_calendar_event(
+            event_id="event123",
+            start="2024-01-15T15:00:00",
+            user_timezone="Europe/London",
+            tool_context=tool_context
+        )
+
+        assert "Updated event" in result
+
+        # Verify timezone in update
+        call_args = mock_client.put.call_args
+        event_data = call_args.kwargs.get("json", call_args[1].get("json", {}))
+        assert event_data["start"]["timeZone"] == "Europe/London"

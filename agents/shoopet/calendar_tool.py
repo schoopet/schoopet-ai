@@ -2,6 +2,7 @@
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
+from zoneinfo import ZoneInfo
 from google.adk.tools import ToolContext
 from .oauth_client import OAuthClient
 
@@ -56,6 +57,7 @@ class CalendarTool:
         start_date: str = None,
         end_date: str = None,
         max_results: int = 10,
+        user_timezone: str = "UTC",
         tool_context: ToolContext = None
     ) -> str:
         """
@@ -65,11 +67,19 @@ class CalendarTool:
             start_date: Start date in YYYY-MM-DD format (defaults to today).
             end_date: End date in YYYY-MM-DD format (defaults to 7 days from start).
             max_results: Maximum number of events to return (default: 10).
+            user_timezone: User's local timezone in IANA format (e.g., "America/Los_Angeles",
+                "Europe/London"). Dates are interpreted in this timezone and converted to
+                UTC for the Google Calendar API. Defaults to "UTC".
 
         Returns:
             Formatted list of events or authorization link if not connected.
 
-        Note: Requires user_id from tool_context (phone number).
+        Note:
+            - Requires user_id from tool_context (phone number).
+            - The Google Calendar API requires times in UTC. This tool handles the
+              conversion automatically based on the user_timezone parameter.
+            - When the user expresses a time range (e.g., "today", "tomorrow"), the agent
+              should determine their timezone and pass it here.
         """
         # Validate tool_context
         if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
@@ -87,16 +97,29 @@ class CalendarTool:
                 f"After authorizing, try again."
             )
 
-        # Parse dates
+        # Validate and get user timezone
+        try:
+            user_tz = ZoneInfo(user_timezone)
+        except KeyError:
+            return f"Invalid timezone: {user_timezone}. Use IANA format (e.g., 'America/Los_Angeles')."
+
+        # Parse dates in user's local timezone, then convert to UTC for the Calendar API
         try:
             if start_date:
-                start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                start_local = datetime.strptime(start_date, "%Y-%m-%d").replace(
+                    hour=0, minute=0, second=0, microsecond=0, tzinfo=user_tz
+                )
+                start_dt = start_local.astimezone(timezone.utc)
             else:
-                start_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                now_local = datetime.now(user_tz)
+                start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+                start_dt = start_local.astimezone(timezone.utc)
 
             if end_date:
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                end_dt = end_dt.replace(hour=23, minute=59, second=59)
+                end_local = datetime.strptime(end_date, "%Y-%m-%d").replace(
+                    hour=23, minute=59, second=59, microsecond=0, tzinfo=user_tz
+                )
+                end_dt = end_local.astimezone(timezone.utc)
             else:
                 end_dt = start_dt + timedelta(days=7)
         except ValueError as e:
@@ -149,6 +172,7 @@ class CalendarTool:
         description: str = None,
         location: str = None,
         all_day: bool = False,
+        user_timezone: str = "UTC",
         tool_context: ToolContext = None
     ) -> str:
         """
@@ -161,6 +185,8 @@ class CalendarTool:
             description: Event description (optional).
             location: Event location (optional).
             all_day: Whether this is an all-day event (default: False).
+            user_timezone: User's timezone in IANA format (e.g., "America/Los_Angeles").
+                Used to interpret event times and set the event's timezone.
 
         Returns:
             Confirmation message or authorization link if not connected.
@@ -209,8 +235,8 @@ class CalendarTool:
                 else:
                     end_dt = start_dt + timedelta(hours=1)
 
-                event["start"] = {"dateTime": start_dt.isoformat(), "timeZone": "UTC"}
-                event["end"] = {"dateTime": end_dt.isoformat(), "timeZone": "UTC"}
+                event["start"] = {"dateTime": start_dt.isoformat(), "timeZone": user_timezone}
+                event["end"] = {"dateTime": end_dt.isoformat(), "timeZone": user_timezone}
 
         except ValueError as e:
             return f"Invalid datetime format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM. Error: {e}"
@@ -254,6 +280,7 @@ class CalendarTool:
         end: str = None,
         description: str = None,
         location: str = None,
+        user_timezone: str = "UTC",
         tool_context: ToolContext = None
     ) -> str:
         """
@@ -266,6 +293,8 @@ class CalendarTool:
             end: New end datetime (optional).
             description: New description (optional).
             location: New location (optional).
+            user_timezone: User's timezone in IANA format (e.g., "America/Los_Angeles").
+                Used when updating event times.
 
         Returns:
             Confirmation message or error.
@@ -326,7 +355,7 @@ class CalendarTool:
                 else:
                     if "T" not in start:
                         start = f"{start}T00:00:00"
-                    existing_event["start"] = {"dateTime": start, "timeZone": "UTC"}
+                    existing_event["start"] = {"dateTime": start, "timeZone": user_timezone}
 
             if end:
                 if len(end) == 10:
@@ -334,7 +363,7 @@ class CalendarTool:
                 else:
                     if "T" not in end:
                         end = f"{end}T23:59:00"
-                    existing_event["end"] = {"dateTime": end, "timeZone": "UTC"}
+                    existing_event["end"] = {"dateTime": end, "timeZone": user_timezone}
 
         except ValueError as e:
             return f"Invalid datetime format: {e}"

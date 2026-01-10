@@ -3,6 +3,7 @@ import os
 from .memory_tool import MemoryTool
 from .calendar_tool import CalendarTool
 from .house_tool import HouseTool
+from .preferences_tool import PreferencesTool
 from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
 from .code_executor_agent import create_code_executor_agent
@@ -22,6 +23,7 @@ def create_agent(
     memory_tool = MemoryTool()
     calendar_tool = CalendarTool()
     house_tool = HouseTool()
+    preferences_tool = PreferencesTool()
 
     # Wrap tools using FunctionTool
     save_memory_tool = FunctionTool(func=memory_tool.save_memory)
@@ -34,10 +36,14 @@ def create_agent(
     create_event_tool = FunctionTool(func=calendar_tool.create_calendar_event)
     update_event_tool = FunctionTool(func=calendar_tool.update_calendar_event)
     calendar_status_tool = FunctionTool(func=calendar_tool.get_calendar_status)
-    
+
     # House tools
     list_devices_tool = FunctionTool(func=house_tool.list_devices)
     device_status_tool = FunctionTool(func=house_tool.get_device_status)
+
+    # Preferences tools
+    set_timezone_tool = FunctionTool(func=preferences_tool.set_timezone)
+    get_timezone_tool = FunctionTool(func=preferences_tool.get_timezone)
 
     # Initialize Structured Notes Subagent (handles BigQuery integration)
     structured_notes_agent = create_structured_notes_agent(
@@ -74,6 +80,8 @@ def create_agent(
         calendar_status_tool,
         list_devices_tool,
         device_status_tool,
+        set_timezone_tool,
+        get_timezone_tool,
     ]
 
     # Get Vertex AI settings from environment variables or parameters
@@ -145,15 +153,28 @@ def create_agent(
         "  • Transform or process data\n"
         "For calendar operations, use this first to calculate exact dates, then call calendar tools.\n\n"
 
+        "**User Preferences:**\n"
+        "- set_timezone(timezone_str): Set the user's timezone (e.g., 'America/Los_Angeles')\n"
+        "- get_timezone(): Get the user's saved timezone\n"
+        "Use for:\n"
+        "  • Setting up the user's timezone when first using calendar features\n"
+        "  • Checking the user's timezone if unsure\n"
+        "If no timezone is set, ask the user for their timezone and save it with set_timezone.\n\n"
+
         "**Google Calendar:**\n"
-        "- list_calendar_events(start_date, end_date, max_results): View calendar events\n"
-        "- create_calendar_event(title, start, end, description, location): Create new events\n"
-        "- update_calendar_event(event_id, title, start, end, description, location): Modify events\n"
+        "- list_calendar_events(start_date, end_date, max_results, user_timezone): View calendar events\n"
+        "- create_calendar_event(title, start, end, description, location, user_timezone): Create new events\n"
+        "- update_calendar_event(event_id, title, start, end, description, location, user_timezone): Modify events\n"
         "- get_calendar_status(): Check if calendar is connected\n"
         "Use for:\n"
         "  • Checking what's on the calendar (today, this week, specific dates)\n"
         "  • Scheduling appointments, meetings, reminders\n"
         "  • Rescheduling or updating existing events\n"
+        "IMPORTANT - Timezone handling for calendar operations:\n"
+        "  1. ALWAYS call get_timezone() first before any calendar operation\n"
+        "  2. If get_timezone returns a timezone, use it for the user_timezone parameter\n"
+        "  3. If no timezone is set, ask the user for their timezone and save it with set_timezone\n"
+        "  4. Pass the timezone to all calendar tools (list, create, update)\n"
         "If the user's calendar is not connected, these tools will return an authorization link.\n"
         "The user must click the link to grant access before calendar features work.\n\n"
         
