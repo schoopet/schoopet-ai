@@ -29,16 +29,17 @@ class SecretManagerClient:
         self._client = secretmanager.SecretManagerServiceClient()
         self._project_id = project_id
 
-    def _normalize_phone(self, phone_number: str) -> str:
-        """Normalize phone number for secret naming.
+    def _normalize_key(self, key: str) -> str:
+        """Normalize key for secret naming.
 
         Secret names must match: [a-zA-Z0-9_-]+
+        Hyphens are allowed and used as separators (e.g., phone-feature).
         """
-        return phone_number.lstrip("+").replace("-", "").replace(" ", "")
+        return key.lstrip("+").replace(" ", "")
 
     def _get_secret_id(self, phone_number: str) -> str:
         """Get secret ID for a phone number."""
-        return f"{SECRET_PREFIX}-{self._normalize_phone(phone_number)}"
+        return f"{SECRET_PREFIX}-{self._normalize_key(phone_number)}"
 
     def _get_secret_name(self, phone_number: str) -> str:
         """Get full secret resource name."""

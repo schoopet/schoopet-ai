@@ -4,13 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Shoopet is a dual-component project:
+Shoopet is a multi-component project:
 1. **Python Agent** (`agents/shoopet/`) - A Google ADK-based multi-agent system with:
    - Main agent: Conversational memory for social interactions
    - Structured Notes subagent: Structured notes management via BigQuery tables
    - Search subagent: Real-time Google Search integration
    - Persistent memory via Vertex AI Memory Bank
-2. **Marketing Website** (`website/`) - A static Vite-based landing page
+   - External API tools: Calendar and Smart Home integration via OAuth
+2. **SMS Gateway** (`sms-gateway/`) - FastAPI service that bridges SMS (Twilio) to the agent:
+   - Receives SMS messages and routes to Vertex AI Agent Engine
+   - Handles OAuth flow for Google APIs (Calendar, Smart Home)
+   - Stores tokens in Firestore (access) and Secret Manager (refresh)
+   - Feature-based token separation for independent scope authorization
+3. **Marketing Website** (`website/`) - A static Vite-based landing page
 
 ## Agent Architecture
 
@@ -35,6 +41,9 @@ The agent is built using Google's Agent Development Kit (ADK) with a native mult
 - **main.py**: Local development CLI that initializes/updates Agent Engine and runs agent locally
 - **memory_config.py**: Configures Vertex AI Memory Bank with custom social_memories topic and managed topics
 - **tools/memory_tool.py**: Direct memory management tools for saving and retrieving facts with user-scoped security
+- **calendar_tool.py**: Google Calendar integration using OAuth tokens (list/create/update events)
+- **house_tool.py**: Google Smart Device Management (SDM) integration for smart home devices
+- **oauth_client.py**: Shared OAuth client for agent tools (token retrieval, refresh, authorization link generation)
 
 ### Agent Flow
 
@@ -50,6 +59,8 @@ Environment variables can be set in `.env` file (agents/shoopet/.env):
 - `GOOGLE_CLOUD_PROJECT` - GCP project ID (e.g., "mmontan-ml")
 - `GOOGLE_CLOUD_LOCATION` - Region (default: us-central1)
 - `AGENT_ENGINE_ID` - Reasoning engine ID (from Vertex AI)
+- `OAUTH_BASE_URL` - SMS Gateway URL for OAuth links (e.g., "https://sms-gateway-xxx.run.app")
+- `GOOGLE_SDM_PROJECT_ID` - Google SDM project ID for smart home access (optional)
 
 BigQuery MCP is enabled automatically when GOOGLE_CLOUD_PROJECT is set and BigQuery MCP service is enabled:
 ```bash
@@ -204,6 +215,67 @@ The system uses a main agent with one native subagent and one shared tool agent:
 
 **Search Tools Available** (Search):
 - GoogleSearchTool: Built-in Gemini tool that automatically performs Google searches
+
+### OAuth Architecture
+
+The system uses feature-based OAuth token separation to manage different Google API scopes independently:
+
+**Token Storage (per feature)**:
+- **Firestore Document ID**: `{normalized_phone}_{feature}` (e.g., `19494136310_calendar`)
+- **Secret Manager Key**: `oauth-refresh-{phone}-{feature}` for refresh tokens
+- Allows users to authorize calendar access independently from smart home access
+
+**Supported Features**:
+- `calendar`: Google Calendar API (`calendar.events` scope)
+- `house`: Google Smart Device Management API (`sdm.service` scope)
+
+**OAuth Flow**:
+1. Agent tool detects missing token, generates HMAC-signed authorization link
+2. User clicks link → SMS Gateway `/oauth/google/initiate?token=...&feature=...`
+3. Gateway validates HMAC, redirects to Google OAuth with feature-specific scopes
+4. Callback stores tokens with feature tag in Firestore + Secret Manager
+5. Agent tools retrieve tokens via `OAuthClient.get_valid_access_token(phone, feature)`
+
+**Key Components**:
+- **SMS Gateway (`sms-gateway/src/oauth/`)**: Handles OAuth flow, token storage, refresh
+  - `handler.py`: OAuth initiate/callback endpoints
+  - `manager.py`: Token exchange, storage, refresh logic
+  - `secret_manager.py`: Secure refresh token storage
+  - `models.py`: `OAuthState` and `OAuthToken` Pydantic models with `feature` field
+- **Agent (`agents/shoopet/oauth_client.py`)**: Shared client for tools
+  - Lazy initialization (avoids pickling issues with Firestore/Secret Manager clients)
+  - HMAC-signed link generation for secure authorization initiation
+  - Automatic token refresh when expired
+
+**Configuration** (`sms-gateway/src/config.py`):
+```python
+OAUTH_SCOPES = {
+    "calendar": ["https://www.googleapis.com/auth/calendar.events", ...],
+    "house": ["https://www.googleapis.com/auth/sdm.service", ...],
+}
+```
+
+### Agent Tools (External APIs)
+
+Tools that access external Google APIs on behalf of users:
+
+**CalendarTool** (`calendar_tool.py`):
+- `list_calendar_events(start_date, end_date, max_results)`: List events in date range
+- `create_calendar_event(title, start, end, description, location, all_day)`: Create new event
+- `update_calendar_event(event_id, ...)`: Update existing event
+- `get_calendar_status()`: Check if calendar is connected
+- Uses `feature="calendar"` for OAuth tokens
+
+**HouseTool** (`house_tool.py`):
+- `list_devices()`: List all connected smart home devices
+- `get_device_status(device_name)`: Get status of specific device
+- Uses `feature="house"` for OAuth tokens
+- Requires `GOOGLE_SDM_PROJECT_ID` environment variable
+
+**Common Behavior**:
+- All tools require `user_id` from `ToolContext` (phone number)
+- If no valid token exists, returns authorization link for user to click
+- Automatic token refresh via `OAuthClient.get_valid_access_token()`
 
 ### Website Structure
 

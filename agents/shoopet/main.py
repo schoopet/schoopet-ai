@@ -3,6 +3,7 @@ import os
 import logging
 import sys
 import argparse
+import traceback
 import warnings
 from typing import Optional
 
@@ -37,13 +38,14 @@ os.environ["HTTPX_LOG_LEVEL"] = "trace"
 if "GOOGLE_CLOUD_AGENT_ENGINE_ID" not in os.environ:
     os.environ["GOOGLE_CLOUD_AGENT_ENGINE_ID"] = "172357243746910208"
 
-from .memory_config import get_memory_service, get_memory_bank_config
+from .memory_config import get_memory_service, get_memory_bank_config, save_session_to_memory
 
 # Real ADK Imports
 from google.adk.runners import Runner
 from google.adk.sessions.vertex_ai_session_service import VertexAiSessionService
 from .root_agent import create_agent
 
+from google.genai import types
 from vertexai import Client
 from vertexai.preview.reasoning_engines import AdkApp
 
@@ -150,7 +152,6 @@ async def run_agent(project_id: str, location: str, agent_engine_id: str):
         
         try:
             # Create content for the user message
-            from google.genai import types
             message = types.Content(
                 role="user",
                 parts=[types.Part(text=user_input)]
@@ -171,11 +172,8 @@ async def run_agent(project_id: str, location: str, agent_engine_id: str):
 
         except Exception as e:
             logger.error(f"Error during execution: {e}")
-            import traceback
             traceback.print_exc()
 
-# Helper for run_agent (save_session_to_memory is not imported but used in original)
-from .memory_config import save_session_to_memory
 
 def main():
     parser = argparse.ArgumentParser(description="ADK Sheets Agent CLI")

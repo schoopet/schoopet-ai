@@ -306,11 +306,16 @@ async def oauth_callback(
 
 
 @router.get("/status")
-async def oauth_status(phone: str, feature: str = "calendar"):
+async def oauth_status(
+    request: Request,
+    token: str = Query(..., description="HMAC-signed token containing phone number"),
+    feature: str = "calendar",
+):
     """Check OAuth status for a phone number and feature.
 
     Args:
-        phone: Phone number in E.164 format.
+        request: FastAPI request (for accessing app state).
+        token: HMAC-signed token containing phone number.
         feature: Feature to check (calendar, house).
 
     Returns:
@@ -319,8 +324,21 @@ async def oauth_status(phone: str, feature: str = "calendar"):
     if not _oauth_manager:
         raise HTTPException(status_code=503, detail="OAuth service not initialized")
 
+    # Get HMAC secret from app state
+    hmac_secret = getattr(request.app.state, "oauth_hmac_secret", None)
+    if not hmac_secret:
+        raise HTTPException(status_code=503, detail="OAuth service not properly configured")
+
+    # Validate HMAC token and extract phone number
+    phone = validate_oauth_init_token(token, hmac_secret)
+    if not phone:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token",
+        )
+
     if not _validate_phone(phone):
-        raise HTTPException(status_code=400, detail="Invalid phone number format")
+        raise HTTPException(status_code=400, detail="Invalid phone number in token")
 
     token_info = await _oauth_manager.get_token_info(phone, feature)
 
@@ -341,11 +359,16 @@ async def oauth_status(phone: str, feature: str = "calendar"):
 
 
 @router.delete("/revoke")
-async def revoke_oauth(phone: str, feature: str = "calendar"):
+async def revoke_oauth(
+    request: Request,
+    token: str = Query(..., description="HMAC-signed token containing phone number"),
+    feature: str = "calendar",
+):
     """Revoke OAuth tokens for a phone number and feature.
 
     Args:
-        phone: Phone number in E.164 format.
+        request: FastAPI request (for accessing app state).
+        token: HMAC-signed token containing phone number.
         feature: Feature to revoke.
 
     Returns:
@@ -354,12 +377,26 @@ async def revoke_oauth(phone: str, feature: str = "calendar"):
     if not _oauth_manager:
         raise HTTPException(status_code=503, detail="OAuth service not initialized")
 
+    # Get HMAC secret from app state
+    hmac_secret = getattr(request.app.state, "oauth_hmac_secret", None)
+    if not hmac_secret:
+        raise HTTPException(status_code=503, detail="OAuth service not properly configured")
+
+    # Validate HMAC token and extract phone number
+    phone = validate_oauth_init_token(token, hmac_secret)
+    if not phone:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token",
+        )
+
     if not _validate_phone(phone):
-        raise HTTPException(status_code=400, detail="Invalid phone number format")
+        raise HTTPException(status_code=400, detail="Invalid phone number in token")
 
     success = await _oauth_manager.revoke_tokens(phone, feature)
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to revoke tokens")
 
-    return {"revoked": True, "phone": phone, "feature": feature}
+    logger.info(f"OAuth revoked for phone {phone[:4]}****, feature: {feature}")
+    return {"revoked": True, "feature": feature}

@@ -34,6 +34,7 @@ class TestSessionDocument:
             "created_at": datetime(2024, 1, 1, 12, 0, 0),
             "last_activity": datetime(2024, 1, 1, 12, 30, 0),
             "message_count": 5,
+            "opted_in": True,
         }
 
         doc = SessionDocument.from_firestore(data)
@@ -41,6 +42,7 @@ class TestSessionDocument:
         assert doc.phone_number == "+14155551234"
         assert doc.agent_session_id == "session-123"
         assert doc.message_count == 5
+        assert doc.opted_in is True
 
 
 class TestSessionManager:
@@ -93,25 +95,27 @@ class TestSessionManager:
 
         result = await session_manager.get_or_create_session("+14155551234")
 
-        assert result.agent_session_id == "new-session-123"
-        assert result.is_new_session is True
-        mock_agent_client.create_session.assert_called_once_with(user_id="+14155551234")
-        doc_ref.set.assert_called_once()
+        # For a non-opted-in user, no agent session is created
+        assert result.opted_in is False
+        assert result.is_new_session is False
+        mock_agent_client.create_session.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_recent_activity_continues_session(
         self, mock_firestore, mock_agent_client, session_manager
     ):
         """Message within timeout continues existing session."""
+        from datetime import timezone
         _, doc_ref = mock_firestore
 
-        # Mock existing session with recent activity
+        # Mock existing session with recent activity (opted in)
         existing_data = {
             "phone_number": "+14155551234",
             "agent_session_id": "existing-session",
-            "created_at": datetime.utcnow() - timedelta(hours=1),
-            "last_activity": datetime.utcnow() - timedelta(minutes=5),
+            "created_at": datetime.now(timezone.utc) - timedelta(hours=1),
+            "last_activity": datetime.now(timezone.utc) - timedelta(minutes=5),
             "message_count": 10,
+            "opted_in": True,
         }
 
         mock_doc = AsyncMock()
@@ -130,15 +134,17 @@ class TestSessionManager:
         self, mock_firestore, mock_agent_client, session_manager
     ):
         """Message after timeout creates new session."""
+        from datetime import timezone
         _, doc_ref = mock_firestore
 
-        # Mock existing session with stale activity (15 minutes ago)
+        # Mock existing session with stale activity (15 minutes ago, opted in)
         stale_data = {
             "phone_number": "+14155551234",
             "agent_session_id": "old-session",
-            "created_at": datetime.utcnow() - timedelta(hours=2),
-            "last_activity": datetime.utcnow() - timedelta(minutes=15),
+            "created_at": datetime.now(timezone.utc) - timedelta(hours=2),
+            "last_activity": datetime.now(timezone.utc) - timedelta(minutes=15),
             "message_count": 5,
+            "opted_in": True,
         }
 
         mock_doc = AsyncMock()
@@ -167,14 +173,16 @@ class TestSessionManager:
     @pytest.mark.asyncio
     async def test_get_session_exists(self, mock_firestore, session_manager):
         """Should return session document if exists."""
+        from datetime import timezone
         _, doc_ref = mock_firestore
 
         existing_data = {
             "phone_number": "+14155551234",
             "agent_session_id": "session-123",
-            "created_at": datetime.utcnow(),
-            "last_activity": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
+            "last_activity": datetime.now(timezone.utc),
             "message_count": 3,
+            "opted_in": True,
         }
 
         mock_doc = AsyncMock()

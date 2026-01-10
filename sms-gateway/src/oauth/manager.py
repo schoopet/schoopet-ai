@@ -224,10 +224,9 @@ class OAuthManager:
             await doc_ref.set(token.to_firestore())
 
             # Store refresh token in Secret Manager (if provided)
-            # We append feature to the phone number for the secret key
+            # Key format must match what agent expects: {normalized_phone}-{feature}
             if refresh_token:
-                # Store as {phone}-{feature} to keep unique
-                secret_key = f"{phone_number}-{feature}"
+                secret_key = f"{normalized_phone}-{feature}"
                 await self._secret_manager.store_refresh_token(secret_key, refresh_token)
 
             logger.info(f"Stored tokens for phone {phone_number[:4]}****, feature: {feature}, email: {email}")
@@ -289,7 +288,9 @@ class OAuthManager:
             New access token if successful, None otherwise.
         """
         # Get refresh token from Secret Manager
-        secret_key = f"{phone_number}-{feature}"
+        # Key format: {normalized_phone}-{feature}
+        normalized_phone = self._normalize_phone(phone_number)
+        secret_key = f"{normalized_phone}-{feature}"
         refresh_token = await self._secret_manager.get_refresh_token(secret_key)
         
         if not refresh_token:
@@ -386,7 +387,8 @@ class OAuthManager:
             await doc_ref.delete()
 
             # Delete from Secret Manager
-            secret_key = f"{phone_number}-{feature}"
+            # Key format: {normalized_phone}-{feature}
+            secret_key = f"{normalized_phone}-{feature}"
             await self._secret_manager.delete_refresh_token(secret_key)
             
             logger.info(f"Revoked tokens for phone {phone_number[:4]}****, feature: {feature}")

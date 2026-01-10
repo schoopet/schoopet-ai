@@ -60,8 +60,17 @@ def validate_oauth_init_token(token: str, secret: str) -> Optional[str]:
     - Signature doesn't match (tampered)
     """
     try:
+        # Fix base64 padding if missing (common with URL-encoded tokens)
+        # Base64 strings should be a multiple of 4 characters
+        original_token = token
+        padding_needed = 4 - (len(token) % 4)
+        if padding_needed != 4:
+            token = token + ("=" * padding_needed)
+            logger.debug(f"Added {padding_needed} padding chars to token")
+
         # Decode base64
         decoded = base64.urlsafe_b64decode(token).decode()
+        logger.debug(f"Token decoded. Original len: {len(original_token)}, Decoded: {decoded[:50]}...")
 
         # Split into components (phone may contain colons in theory, so rsplit)
         phone, expires_str, signature = decoded.rsplit(":", 2)
@@ -83,7 +92,8 @@ def validate_oauth_init_token(token: str, secret: str) -> Optional[str]:
         if not hmac.compare_digest(signature, expected):
             logger.warning(
                 f"OAuth token signature mismatch. Phone: {phone}. "
-                f"Expected: {expected[:8]}..., Got: {signature[:8]}..."
+                f"Expected ({len(expected)}): {expected}, Got ({len(signature)}): {signature}. "
+                f"Message used: {message!r}"
             )
             return None
 

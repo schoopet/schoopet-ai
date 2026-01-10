@@ -2,6 +2,7 @@ import os
 import sys
 import argparse
 import logging
+import traceback
 
 import vertexai
 from vertexai.preview import reasoning_engines
@@ -139,7 +140,6 @@ def deploy(project_id: str, location: str, staging_bucket: str = None, agent_eng
 
         except Exception as e:
             print(f"\n❌ Update Failed: {e}")
-            import traceback
             traceback.print_exc()
             return None
 
@@ -163,7 +163,6 @@ def deploy(project_id: str, location: str, staging_bucket: str = None, agent_eng
 
         except Exception as e:
             print(f"\n❌ Deployment Failed: {e}")
-            import traceback
             traceback.print_exc()
             return None
 

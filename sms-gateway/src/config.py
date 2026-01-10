@@ -16,12 +16,11 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: str
     TWILIO_AUTH_TOKEN: str
     TWILIO_PHONE_NUMBER: str
+    TWILIO_WHATSAPP_NUMBER: str = ""  # Optional, defaults to TWILIO_PHONE_NUMBER
 
     # Service Configuration
     SESSION_TIMEOUT_MINUTES: int = 10
-    MAX_SMS_SEGMENTS: int = 10
     AGENT_TIMEOUT_SECONDS: int = 30
-    SMS_SEGMENT_DELAY_MS: int = 500
 
     # Feature Flags
     ENABLE_SIGNATURE_VALIDATION: bool = True
@@ -53,6 +52,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"  # Ignore unknown environment variables
 
 
 @lru_cache

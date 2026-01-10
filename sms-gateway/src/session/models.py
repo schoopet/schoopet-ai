@@ -16,7 +16,7 @@ class SessionDocument(BaseModel):
     last_activity: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     message_count: int = Field(default=0)
     opted_in: bool = Field(default=False, description="Whether user has opted in to receive messages")
-    opt_in_requested_at: datetime = Field(default=None, description="When opt-in was first requested")
+    opt_in_requested_at: Optional[datetime] = Field(default=None, description="When opt-in was first requested")
 
     def to_firestore(self) -> dict:
         """Convert to Firestore-compatible dictionary."""

@@ -1,4 +1,4 @@
-"""Twilio webhook handler for incoming SMS messages."""
+"""Twilio webhook handler for incoming SMS and WhatsApp messages."""
 import asyncio
 import logging
 import time
@@ -6,8 +6,8 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
+from ..channel import MessageChannel
 from ..config import get_settings
-from ..sms.splitter import SMSSplitter
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,6 @@ _session_manager = None
 _agent_client = None
 _sms_sender = None
 _rate_limiter = None
-_sms_splitter = SMSSplitter()
 
 
 def init_services(validator, session_manager, agent_client, sms_sender, rate_limiter=None):
@@ -99,26 +98,30 @@ async def handle_incoming_sms(
             raise HTTPException(status_code=400, detail="Invalid signature")
 
     # Extract required fields
-    from_number = params.get("From")
+    from_raw = params.get("From")
     to_number = params.get("To")
     body = params.get("Body", "").strip()
     message_sid = params.get("MessageSid", "unknown")
 
-    if not from_number or not body:
-        logger.warning(f"Missing required fields: From={from_number}, Body={bool(body)}")
+    if not from_raw or not body:
+        logger.warning(f"Missing required fields: From={from_raw}, Body={bool(body)}")
         raise HTTPException(status_code=400, detail="Missing required fields")
 
+    # Parse channel and phone number from Twilio address
+    channel, phone_number = MessageChannel.from_twilio_address(from_raw)
+
     logger.info(
-        f"Received SMS: MessageSid={message_sid}, From={from_number}, "
+        f"Received {channel.value}: MessageSid={message_sid}, From={phone_number}, "
         f"Body length={len(body)}"
     )
 
     # Schedule background processing
     background_tasks.add_task(
         process_message_async,
-        phone_number=from_number,
+        phone_number=phone_number,
         message=body,
         message_sid=message_sid,
+        channel=channel,
     )
 
     # Return empty TwiML immediately
@@ -132,6 +135,7 @@ async def process_message_async(
     phone_number: str,
     message: str,
     message_sid: str,
+    channel: MessageChannel = MessageChannel.SMS,
 ) -> None:
     """Process incoming message in the background.
 
@@ -145,8 +149,8 @@ async def process_message_async(
     For opted-in users:
     1. Gets or creates session for the phone number
     2. Sends message to Agent Engine
-    3. Splits response into SMS segments
-    4. Sends response SMS(es)
+    3. Splits response into message segments
+    4. Sends response message(s)
     5. Updates session activity timestamp
     """
     settings = get_settings()
@@ -167,19 +171,19 @@ async def process_message_async(
         if normalized_message == "STOP":
             logger.info(f"User {phone_number} requested opt-out")
             await _session_manager.set_opted_out(phone_number)
-            await _sms_sender.send(phone_number, OPT_OUT_MSG)
+            await _sms_sender.send(phone_number, OPT_OUT_MSG, channel=channel)
             return
 
         # Handle HELP keyword - always process regardless of opt-in status
         if normalized_message == "HELP":
             logger.info(f"User {phone_number} requested help")
-            await _sms_sender.send(phone_number, HELP_MSG)
+            await _sms_sender.send(phone_number, HELP_MSG, channel=channel)
             return
 
         # New user - send opt-in request
         if session_info.is_new_user:
             logger.info(f"New user {phone_number} - sending opt-in request")
-            await _sms_sender.send(phone_number, OPT_IN_REQUEST_MSG)
+            await _sms_sender.send(phone_number, OPT_IN_REQUEST_MSG, channel=channel)
             return
 
         # User not opted in - check if they're opting in now
@@ -187,12 +191,12 @@ async def process_message_async(
             if normalized_message == "YES":
                 logger.info(f"User {phone_number} opted in")
                 await _session_manager.set_opted_in(phone_number)
-                await _sms_sender.send(phone_number, OPT_IN_SUCCESS_MSG)
+                await _sms_sender.send(phone_number, OPT_IN_SUCCESS_MSG, channel=channel)
                 return
             else:
                 # Not opted in and didn't say YES
                 logger.info(f"User {phone_number} not opted in, sending reminder")
-                await _sms_sender.send(phone_number, NOT_OPTED_IN_MSG)
+                await _sms_sender.send(phone_number, NOT_OPTED_IN_MSG, channel=channel)
                 return
 
         # Check rate limit before processing (opted-in users only)
@@ -200,7 +204,7 @@ async def process_message_async(
             is_allowed, count = await _rate_limiter.check_and_increment(phone_number)
             if not is_allowed:
                 logger.warning(f"Rate limit exceeded for {phone_number}: {count} messages today")
-                await _sms_sender.send(phone_number, RATE_LIMIT_MSG)
+                await _sms_sender.send(phone_number, RATE_LIMIT_MSG, channel=channel)
                 return
 
         # User is opted in - get or create agent session and process message
@@ -221,53 +225,53 @@ async def process_message_async(
             )
         except asyncio.TimeoutError:
             logger.error(f"Agent timeout for {phone_number}")
-            await _send_error_sms(
+            await _send_error_message(
                 phone_number,
                 "I'm taking longer than usual to respond. Please try again in a moment.",
+                channel=channel,
             )
             return
 
         if not response:
             logger.warning(f"Empty response from agent for {phone_number}")
-            await _send_error_sms(
+            await _send_error_message(
                 phone_number,
                 "I couldn't generate a response. Please try again.",
+                channel=channel,
             )
             return
 
-        # Split response into SMS segments
-        segments = _sms_splitter.split(response, max_segments=settings.MAX_SMS_SEGMENTS)
-
-        if not segments:
-            logger.warning(f"No segments generated for {phone_number}")
-            return
-
-        # Send response SMS(es)
-        await _sms_sender.send_multi(phone_number, segments)
+        # Send response (Twilio handles message splitting automatically)
+        await _sms_sender.send(phone_number, response, channel=channel)
 
         # Update session activity
         await _session_manager.update_last_activity(phone_number)
 
         processing_time = (time.time() - start_time) * 1000
         logger.info(
-            f"Processed message {message_sid} in {processing_time:.0f}ms: "
-            f"{len(segments)} SMS segments sent to {phone_number}"
+            f"Processed {channel.value} {message_sid} in {processing_time:.0f}ms: "
+            f"response sent to {phone_number} ({len(response)} chars)"
         )
 
     except Exception as e:
         logger.exception(f"Error processing message {message_sid}: {e}")
-        await _send_error_sms(
+        await _send_error_message(
             phone_number,
             "Something went wrong. Please try again.",
+            channel=channel,
         )
 
 
-async def _send_error_sms(phone_number: str, message: str) -> None:
+async def _send_error_message(
+    phone_number: str,
+    message: str,
+    channel: MessageChannel = MessageChannel.SMS,
+) -> None:
     """Send an error message to the user.
 
     Wrapped in try/except to prevent cascading failures.
     """
     try:
-        await _sms_sender.send(phone_number, message)
+        await _sms_sender.send(phone_number, message, channel=channel)
     except Exception as e:
-        logger.error(f"Failed to send error SMS to {phone_number}: {e}")
+        logger.error(f"Failed to send error {channel.value} to {phone_number}: {e}")

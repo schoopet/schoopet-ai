@@ -3,6 +3,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
+from src.channel import MessageChannel
+
 
 class TestWebhookEndpoint:
     """Integration tests for /webhook/sms endpoint."""
@@ -17,6 +19,7 @@ class TestWebhookEndpoint:
         settings.TWILIO_ACCOUNT_SID = "AC123"
         settings.TWILIO_AUTH_TOKEN = "test_token"
         settings.TWILIO_PHONE_NUMBER = "+14155559999"
+        settings.TWILIO_WHATSAPP_NUMBER = "+14155559999"
         settings.SESSION_TIMEOUT_MINUTES = 10
         settings.AGENT_TIMEOUT_SECONDS = 30
         settings.SMS_SEGMENT_DELAY_MS = 500
@@ -182,6 +185,12 @@ class TestBackgroundProcessing:
         validator.validate.return_value = True
 
         session_manager = AsyncMock()
+        # Mock get_or_create_user for opt-in check
+        user_info = MagicMock()
+        user_info.opted_in = True
+        user_info.is_new_user = False
+        session_manager.get_or_create_user.return_value = user_info
+        # Mock get_or_create_session for agent session
         session_info = MagicMock()
         session_info.agent_session_id = "session-123"
         session_info.is_new_session = False
@@ -192,13 +201,16 @@ class TestBackgroundProcessing:
 
         sms_sender = AsyncMock()
         sms_sender.send.return_value = "SM123"
-        sms_sender.send_multi.return_value = ["SM123"]
+
+        rate_limiter = AsyncMock()
+        rate_limiter.check_and_increment.return_value = (True, 1)
 
         return {
             "validator": validator,
             "session_manager": session_manager,
             "agent_client": agent_client,
             "sms_sender": sms_sender,
+            "rate_limiter": rate_limiter,
         }
 
     @pytest.mark.asyncio
@@ -211,19 +223,21 @@ class TestBackgroundProcessing:
             session_manager=mock_services["session_manager"],
             agent_client=mock_services["agent_client"],
             sms_sender=mock_services["sms_sender"],
+            rate_limiter=mock_services["rate_limiter"],
         )
 
         await process_message_async(
             phone_number="+14155551234",
             message="Hello",
             message_sid="SM123",
+            channel=MessageChannel.SMS,
         )
 
         mock_services["agent_client"].send_message.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_process_message_sends_sms(self, mock_services):
-        """Background processing should send SMS response."""
+    async def test_process_message_sends_response(self, mock_services):
+        """Background processing should send response message."""
         from src.webhook.handler import process_message_async, init_services
 
         init_services(
@@ -231,15 +245,18 @@ class TestBackgroundProcessing:
             session_manager=mock_services["session_manager"],
             agent_client=mock_services["agent_client"],
             sms_sender=mock_services["sms_sender"],
+            rate_limiter=mock_services["rate_limiter"],
         )
 
         await process_message_async(
             phone_number="+14155551234",
             message="Hello",
             message_sid="SM123",
+            channel=MessageChannel.SMS,
         )
 
-        mock_services["sms_sender"].send_multi.assert_called_once()
+        # Verify send was called (Twilio handles splitting)
+        mock_services["sms_sender"].send.assert_called()
 
     @pytest.mark.asyncio
     async def test_process_message_updates_session(self, mock_services):
@@ -251,12 +268,14 @@ class TestBackgroundProcessing:
             session_manager=mock_services["session_manager"],
             agent_client=mock_services["agent_client"],
             sms_sender=mock_services["sms_sender"],
+            rate_limiter=mock_services["rate_limiter"],
         )
 
         await process_message_async(
             phone_number="+14155551234",
             message="Hello",
             message_sid="SM123",
+            channel=MessageChannel.SMS,
         )
 
         mock_services["session_manager"].update_last_activity.assert_called_once_with(
@@ -276,12 +295,14 @@ class TestBackgroundProcessing:
             session_manager=mock_services["session_manager"],
             agent_client=mock_services["agent_client"],
             sms_sender=mock_services["sms_sender"],
+            rate_limiter=mock_services["rate_limiter"],
         )
 
         await process_message_async(
             phone_number="+14155551234",
             message="Hello",
             message_sid="SM123",
+            channel=MessageChannel.SMS,
         )
 
         # Should send error SMS
@@ -301,12 +322,14 @@ class TestBackgroundProcessing:
             session_manager=mock_services["session_manager"],
             agent_client=mock_services["agent_client"],
             sms_sender=mock_services["sms_sender"],
+            rate_limiter=mock_services["rate_limiter"],
         )
 
         await process_message_async(
             phone_number="+14155551234",
             message="Hello",
             message_sid="SM123",
+            channel=MessageChannel.SMS,
         )
 
         # Should send error SMS

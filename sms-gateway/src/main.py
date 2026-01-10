@@ -14,7 +14,6 @@ from .oauth.secret_manager import SecretManagerClient
 from .ratelimit.limiter import RateLimiter
 from .session.manager import SessionManager
 from .sms.sender import SMSSender
-from .sms.splitter import SMSSplitter
 from .webhook.handler import router as webhook_router, init_services
 from .webhook.validator import TwilioValidator
 
@@ -56,12 +55,12 @@ async def lifespan(app: FastAPI):
         timeout_minutes=settings.SESSION_TIMEOUT_MINUTES,
     )
 
-    # Initialize SMS Sender
+    # Initialize SMS/WhatsApp Sender
     sms_sender = SMSSender(
         account_sid=settings.TWILIO_ACCOUNT_SID,
         auth_token=settings.TWILIO_AUTH_TOKEN,
         from_number=settings.TWILIO_PHONE_NUMBER,
-        segment_delay_ms=settings.SMS_SEGMENT_DELAY_MS,
+        whatsapp_from_number=settings.TWILIO_WHATSAPP_NUMBER or settings.TWILIO_PHONE_NUMBER,
     )
 
     # Initialize Twilio Validator
@@ -150,9 +149,7 @@ async def health_check():
 @app.get("/")
 async def root():
     """Root endpoint with service info."""
-    settings = get_settings()
     return {
         "service": "Shoopet SMS Gateway",
-        "project": settings.GOOGLE_CLOUD_PROJECT,
-        "agent_engine_id": settings.AGENT_ENGINE_ID,
+        "status": "running",
     }
