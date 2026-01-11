@@ -41,24 +41,26 @@ class TestCalendarTool:
         """Should list calendar events successfully when authorized."""
         # Mock valid token from OAuthClient
         calendar_tool._oauth_client.get_valid_access_token.return_value = ACCESS_TOKEN
-        
+
         mock_client = mock_httpx.return_value.__enter__.return_value
         mock_client.get.return_value.status_code = 200
         mock_client.get.return_value.json.return_value = {
             "items": [
                 {
+                    "id": "event123abc",
                     "summary": "Meeting with John",
                     "start": {"dateTime": "2024-01-01T10:00:00Z"},
                     "end": {"dateTime": "2024-01-01T11:00:00Z"}
                 }
             ]
         }
-        
+
         result = calendar_tool.list_calendar_events(start_date="2024-01-01", tool_context=tool_context)
-        
+
         assert "Found 1 event(s)" in result
         assert "Meeting with John" in result
-        
+        assert "[ID: event123abc]" in result
+
         calendar_tool._oauth_client.get_valid_access_token.assert_called_with(PHONE_NUMBER, "calendar")
         mock_client.get.assert_called()
 
@@ -251,3 +253,135 @@ class TestCalendarToolTimezone:
         call_args = mock_client.put.call_args
         event_data = call_args.kwargs.get("json", call_args[1].get("json", {}))
         assert event_data["start"]["timeZone"] == "Europe/London"
+
+
+class TestListToUpdateFlow:
+    """Tests for the list_calendar_events -> update_calendar_event flow."""
+
+    @patch("httpx.Client")
+    def test_list_returns_event_id_for_update(self, mock_httpx, calendar_tool, tool_context):
+        """Should be able to use event ID from list to update an event."""
+        calendar_tool._oauth_client.get_valid_access_token.return_value = ACCESS_TOKEN
+
+        mock_client = mock_httpx.return_value.__enter__.return_value
+
+        # Step 1: List events - returns events with IDs
+        event_id = "abc123xyz"
+        mock_client.get.return_value.status_code = 200
+        mock_client.get.return_value.json.return_value = {
+            "items": [
+                {
+                    "id": event_id,
+                    "summary": "Team Standup",
+                    "start": {"dateTime": "2024-01-15T09:00:00Z"},
+                    "end": {"dateTime": "2024-01-15T09:30:00Z"},
+                    "location": "Conference Room A"
+                }
+            ]
+        }
+
+        list_result = calendar_tool.list_calendar_events(
+            start_date="2024-01-15",
+            tool_context=tool_context
+        )
+
+        # Verify event ID is in the output
+        assert f"[ID: {event_id}]" in list_result
+        assert "Team Standup" in list_result
+
+        # Step 2: Update the event using the ID from list
+        # Reset mock for update flow
+        mock_client.get.return_value.json.return_value = {
+            "id": event_id,
+            "summary": "Team Standup",
+            "start": {"dateTime": "2024-01-15T09:00:00Z"},
+            "end": {"dateTime": "2024-01-15T09:30:00Z"},
+            "location": "Conference Room A"
+        }
+        mock_client.put.return_value.status_code = 200
+        mock_client.put.return_value.json.return_value = {}
+
+        update_result = calendar_tool.update_calendar_event(
+            event_id=event_id,
+            title="Daily Standup",
+            location="Conference Room B",
+            tool_context=tool_context
+        )
+
+        assert "Updated event" in update_result
+
+        # Verify the update was called with the correct event ID
+        put_call = mock_client.put.call_args
+        assert event_id in put_call[0][0]  # ID should be in the URL
+
+        # Verify the update payload has new values
+        event_data = put_call.kwargs.get("json", put_call[1].get("json", {}))
+        assert event_data["summary"] == "Daily Standup"
+        assert event_data["location"] == "Conference Room B"
+
+    @patch("httpx.Client")
+    def test_list_multiple_events_with_ids(self, mock_httpx, calendar_tool, tool_context):
+        """Should return IDs for all listed events."""
+        calendar_tool._oauth_client.get_valid_access_token.return_value = ACCESS_TOKEN
+
+        mock_client = mock_httpx.return_value.__enter__.return_value
+        mock_client.get.return_value.status_code = 200
+        mock_client.get.return_value.json.return_value = {
+            "items": [
+                {
+                    "id": "event_001",
+                    "summary": "Morning Meeting",
+                    "start": {"dateTime": "2024-01-15T09:00:00Z"},
+                    "end": {"dateTime": "2024-01-15T10:00:00Z"}
+                },
+                {
+                    "id": "event_002",
+                    "summary": "Lunch with Client",
+                    "start": {"dateTime": "2024-01-15T12:00:00Z"},
+                    "end": {"dateTime": "2024-01-15T13:00:00Z"}
+                },
+                {
+                    "id": "event_003",
+                    "summary": "Project Review",
+                    "start": {"dateTime": "2024-01-15T15:00:00Z"},
+                    "end": {"dateTime": "2024-01-15T16:00:00Z"}
+                }
+            ]
+        }
+
+        result = calendar_tool.list_calendar_events(
+            start_date="2024-01-15",
+            tool_context=tool_context
+        )
+
+        assert "Found 3 event(s)" in result
+        assert "[ID: event_001]" in result
+        assert "[ID: event_002]" in result
+        assert "[ID: event_003]" in result
+
+    @patch("httpx.Client")
+    def test_all_day_event_includes_id(self, mock_httpx, calendar_tool, tool_context):
+        """Should include ID for all-day events."""
+        calendar_tool._oauth_client.get_valid_access_token.return_value = ACCESS_TOKEN
+
+        mock_client = mock_httpx.return_value.__enter__.return_value
+        mock_client.get.return_value.status_code = 200
+        mock_client.get.return_value.json.return_value = {
+            "items": [
+                {
+                    "id": "allday_event_123",
+                    "summary": "Company Holiday",
+                    "start": {"date": "2024-01-15"},
+                    "end": {"date": "2024-01-15"}
+                }
+            ]
+        }
+
+        result = calendar_tool.list_calendar_events(
+            start_date="2024-01-15",
+            tool_context=tool_context
+        )
+
+        assert "[ID: allday_event_123]" in result
+        assert "Company Holiday" in result
+        assert "(all day)" in result

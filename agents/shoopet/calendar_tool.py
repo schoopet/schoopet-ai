@@ -24,6 +24,7 @@ class CalendarTool:
 
     def _format_event(self, event: Dict[str, Any]) -> str:
         """Format a calendar event for display."""
+        event_id = event.get("id", "")
         summary = event.get("summary", "No title")
         start = event.get("start", {})
         end = event.get("end", {})
@@ -49,6 +50,8 @@ class CalendarTool:
         result = f"- {summary}: {time_str}"
         if location:
             result += f" @ {location}"
+        if event_id:
+            result += f" [ID: {event_id}]"
 
         return result
 
