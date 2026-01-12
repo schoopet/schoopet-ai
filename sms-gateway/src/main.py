@@ -8,6 +8,8 @@ from google.cloud import secretmanager
 
 from .config import get_settings
 from .agent.client import AgentEngineClient
+from .internal.handler import router as internal_router, init_internal_services
+from .internal.auth import init_allowed_service_accounts, set_internal_hmac_secret
 from .oauth.handler import router as oauth_router, init_oauth_services
 from .oauth.manager import OAuthManager
 from .oauth.secret_manager import SecretManagerClient
@@ -83,6 +85,15 @@ async def lifespan(app: FastAPI):
         rate_limiter=rate_limiter,
     )
 
+    # Initialize internal services for async task handling
+    init_internal_services(
+        session_manager=session_manager,
+        agent_client=agent_client,
+        sms_sender=sms_sender,
+    )
+    init_allowed_service_accounts()
+    logger.info("Internal services initialized")
+
     # Initialize OAuth services (if configured)
     oauth_manager = None
     if settings.GOOGLE_OAUTH_CLIENT_ID and settings.GOOGLE_OAUTH_CLIENT_SECRET:
@@ -109,15 +120,26 @@ async def lifespan(app: FastAPI):
             secret_name = f"projects/{settings.GOOGLE_CLOUD_PROJECT}/secrets/oauth-hmac-secret/versions/latest"
             response = sm_client.access_secret_version(request={"name": secret_name})
             app.state.oauth_hmac_secret = response.payload.data.decode("UTF-8")
-            logger.info("HMAC secret loaded from Secret Manager")
+            logger.info("OAuth HMAC secret loaded from Secret Manager")
         except Exception as e:
-            logger.error(f"Failed to load HMAC secret: {e}")
+            logger.error(f"Failed to load OAuth HMAC secret: {e}")
             app.state.oauth_hmac_secret = None
 
         logger.info("OAuth services initialized")
     else:
         logger.warning("OAuth not configured - calendar features disabled")
         app.state.oauth_hmac_secret = None
+
+    # Load internal HMAC secret for service-to-service auth
+    try:
+        sm_client = secretmanager.SecretManagerServiceClient()
+        secret_name = f"projects/{settings.GOOGLE_CLOUD_PROJECT}/secrets/internal-hmac-secret/versions/latest"
+        response = sm_client.access_secret_version(request={"name": secret_name})
+        internal_secret = response.payload.data.decode("UTF-8")
+        set_internal_hmac_secret(internal_secret)
+        logger.info("Internal HMAC secret loaded from Secret Manager")
+    except Exception as e:
+        logger.warning(f"Internal HMAC secret not available: {e} (OIDC auth will still work)")
 
     logger.info("SMS Gateway started successfully")
 
@@ -138,6 +160,7 @@ app = FastAPI(
 # Include routers
 app.include_router(webhook_router)
 app.include_router(oauth_router)
+app.include_router(internal_router)
 
 
 @app.get("/health")

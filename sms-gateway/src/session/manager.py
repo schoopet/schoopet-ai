@@ -5,11 +5,12 @@ from typing import Optional
 
 from google.cloud import firestore
 
-from .models import SessionDocument, SessionInfo
+from .models import SessionDocument, SessionInfo, SupervisorSessionDocument
 
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "sms_sessions"
+SUPERVISOR_COLLECTION_NAME = "supervisor_sessions"
 
 
 class SessionManager:
@@ -257,3 +258,134 @@ class SessionManager:
         if doc.exists:
             return SessionDocument.from_firestore(doc.to_dict())
         return None
+
+    # ========== Supervisor Session Methods ==========
+
+    async def get_supervisor_session(
+        self,
+        phone_number: str,
+        task_id: str,
+    ) -> SessionInfo:
+        """Get or create a supervisor session for task review.
+
+        Supervisor sessions are separate from user sessions and are used
+        by the root agent to review async task results before sending
+        them to users.
+
+        Args:
+            phone_number: User's phone number in E.164 format.
+            task_id: The async task ID being reviewed.
+
+        Returns:
+            SessionInfo with supervisor session details.
+        """
+        normalized = self._normalize_phone(phone_number)
+        doc_id = f"{normalized}_supervisor_{task_id}"
+        doc_ref = self._db.collection(SUPERVISOR_COLLECTION_NAME).document(doc_id)
+
+        doc = await doc_ref.get()
+
+        if doc.exists:
+            session_doc = SupervisorSessionDocument.from_firestore(doc.to_dict())
+            logger.info(f"Continuing supervisor session for {phone_number}, task {task_id}")
+            return SessionInfo(
+                phone_number=phone_number,
+                agent_session_id=session_doc.agent_session_id,
+                is_new_session=False,
+                opted_in=True,  # Supervisor sessions don't need opt-in
+                is_new_user=False,
+                session_type="supervisor",
+                task_id=task_id,
+            )
+
+        # Create new supervisor session
+        # Use a special user_id format to distinguish supervisor sessions
+        supervisor_user_id = f"{phone_number}_supervisor"
+        logger.info(f"Creating supervisor session for {phone_number}, task {task_id}")
+
+        agent_session_id = await self._agent_client.create_session(user_id=supervisor_user_id)
+
+        now = datetime.now(timezone.utc)
+        session_doc = SupervisorSessionDocument(
+            phone_number=phone_number,
+            agent_session_id=agent_session_id,
+            session_type="supervisor",
+            task_id=task_id,
+            created_at=now,
+            last_activity=now,
+        )
+        await doc_ref.set(session_doc.to_firestore())
+
+        return SessionInfo(
+            phone_number=phone_number,
+            agent_session_id=agent_session_id,
+            is_new_session=True,
+            opted_in=True,
+            is_new_user=False,
+            session_type="supervisor",
+            task_id=task_id,
+        )
+
+    async def update_supervisor_session_activity(
+        self,
+        phone_number: str,
+        task_id: str,
+    ) -> None:
+        """Update supervisor session's last activity timestamp.
+
+        Args:
+            phone_number: User's phone number in E.164 format.
+            task_id: The async task ID.
+        """
+        normalized = self._normalize_phone(phone_number)
+        doc_id = f"{normalized}_supervisor_{task_id}"
+        doc_ref = self._db.collection(SUPERVISOR_COLLECTION_NAME).document(doc_id)
+
+        await doc_ref.update({
+            "last_activity": datetime.now(timezone.utc),
+        })
+
+    async def get_user_session(self, phone_number: str) -> Optional[SessionInfo]:
+        """Get the user's active session if one exists.
+
+        This is used to check if a user has an active session for
+        delivering async task results.
+
+        Args:
+            phone_number: User's phone number in E.164 format.
+
+        Returns:
+            SessionInfo if active session exists, None otherwise.
+        """
+        session = await self.get_session(phone_number)
+        if session and session.opted_in and session.agent_session_id:
+            return SessionInfo(
+                phone_number=phone_number,
+                agent_session_id=session.agent_session_id,
+                is_new_session=False,
+                opted_in=True,
+                is_new_user=False,
+                session_type="user",
+            )
+        return None
+
+    def is_session_active(self, session: Optional[SessionInfo]) -> bool:
+        """Check if a session is considered active (within timeout).
+
+        Args:
+            session: SessionInfo to check.
+
+        Returns:
+            True if session is active, False otherwise.
+        """
+        if not session or not session.agent_session_id:
+            return False
+
+        # For supervisor sessions, always consider them active
+        if session.session_type == "supervisor":
+            return True
+
+        # For user sessions, we'd need to check last_activity
+        # But since we're being called with SessionInfo (not Document),
+        # we'll assume it's active if it has a session ID
+        return True

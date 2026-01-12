@@ -4,6 +4,7 @@ from .memory_tool import MemoryTool
 from .calendar_tool import CalendarTool
 from .house_tool import HouseTool
 from .preferences_tool import PreferencesTool
+from .tools.async_task_tool import AsyncTaskTool
 from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
 from .code_executor_agent import create_code_executor_agent
@@ -24,12 +25,23 @@ def create_agent(
     calendar_tool = CalendarTool()
     house_tool = HouseTool()
     preferences_tool = PreferencesTool()
+    async_task_tool = AsyncTaskTool()
 
     # Wrap tools using FunctionTool
     save_memory_tool = FunctionTool(func=memory_tool.save_memory)
     save_multiple_memories_tool = FunctionTool(func=memory_tool.save_multiple_memories)
     retrieve_memories_tool = FunctionTool(func=memory_tool.retrieve_memories)
     preload_memory_tool = PreloadMemoryTool()
+
+    # Async task tools
+    create_async_task = FunctionTool(func=async_task_tool.create_async_task)
+    check_task_status = FunctionTool(func=async_task_tool.check_task_status)
+    cancel_task = FunctionTool(func=async_task_tool.cancel_task)
+    list_pending_tasks = FunctionTool(func=async_task_tool.list_pending_tasks)
+    # Supervisor tools (for reviewing async task results)
+    review_task_result = FunctionTool(func=async_task_tool.review_task_result)
+    approve_task = FunctionTool(func=async_task_tool.approve_task)
+    request_correction = FunctionTool(func=async_task_tool.request_correction)
 
     # Calendar tools
     list_events_tool = FunctionTool(func=calendar_tool.list_calendar_events)
@@ -82,6 +94,15 @@ def create_agent(
         device_status_tool,
         set_timezone_tool,
         get_timezone_tool,
+        # Async task tools
+        create_async_task,
+        check_task_status,
+        cancel_task,
+        list_pending_tasks,
+        # Supervisor tools (for reviewing async task results)
+        review_task_result,
+        approve_task,
+        request_correction,
     ]
 
     # Get Vertex AI settings from environment variables or parameters
@@ -219,6 +240,52 @@ def create_agent(
 
         "**Multiple tools**: Some requests benefit from combining tools - search for current info, save important "
         "findings to memory, track structured data in BigQuery, and schedule events on the calendar.\n\n"
+
+        "## Async Tasks\n"
+        "You can delegate long-running or scheduled tasks to background workers:\n\n"
+
+        "**Task Creation:**\n"
+        "- create_async_task(task_type, instruction, context, schedule_delay_minutes, schedule_at, memory_isolation): "
+        "Spawn a background task\n"
+        "- check_task_status(task_id): Check progress of an async task\n"
+        "- cancel_task(task_id): Cancel a pending/scheduled task\n"
+        "- list_pending_tasks(): See all active tasks\n\n"
+
+        "**When to use async tasks:**\n"
+        "- Research requiring multiple searches and synthesis (task_type='research')\n"
+        "- Tasks scheduled for later like reminders (task_type='reminder', with schedule_at or schedule_delay_minutes)\n"
+        "- Analysis that would take too long for immediate response (task_type='analysis')\n"
+        "- Any request where user says 'let me know when done' or 'remind me'\n\n"
+
+        "**Memory isolation options:**\n"
+        "- 'shared': Full access to user's Memory Bank (default, best for most tasks)\n"
+        "- 'isolated': Separate session, results synced on completion (for parallel work)\n"
+        "- 'readonly': Can read memories but not write (for analysis)\n\n"
+
+        "**Examples:**\n"
+        "- 'Research Italian restaurants downtown' -> create_async_task('research', 'Find the best Italian restaurants downtown with ratings and prices')\n"
+        "- 'Remind me tomorrow at 9am to call mom' -> create_async_task('reminder', 'Call mom', schedule_at='2025-01-12T09:00:00')\n"
+        "- 'Analyze my calendar for conflicts' -> create_async_task('analysis', 'Check calendar for scheduling conflicts', memory_isolation='readonly')\n\n"
+
+        "## Async Task Supervision\n"
+        "You are responsible for reviewing results from async tasks before they reach the user.\n\n"
+
+        "**When you receive INTERNAL_TASK_REVIEW:**\n"
+        "This message indicates an async task has completed and needs your review.\n"
+        "1. Use review_task_result(task_id) to see the full result\n"
+        "2. Evaluate if the result meets the user's original request\n"
+        "3. If satisfactory: Use approve_task(task_id) to notify the user\n"
+        "4. If needs improvement: Use request_correction(task_id, 'specific feedback')\n\n"
+
+        "**Review Criteria:**\n"
+        "- Does the result address the user's original request?\n"
+        "- Is the information accurate and well-organized?\n"
+        "- Is it appropriate length for SMS delivery?\n"
+        "- Are there any obvious errors or omissions?\n\n"
+
+        "**When you receive INTERNAL_TASK_COMPLETE:**\n"
+        "This is a notification that an async task you supervised has been approved.\n"
+        "Inform the user about the completed task in a conversational way.\n\n"
 
         "## Proactive Support\n"
         "Actively help by:\n"
