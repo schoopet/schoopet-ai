@@ -92,7 +92,7 @@ class TaskWorker:
 
         # Check if task can be executed
         status = task.get("status")
-        if status not in ["pending", "revision_requested"]:
+        if status not in ["pending", "scheduled", "revision_requested"]:
             logger.info(f"Task {task_id} already processed: {status}")
             return {"success": True, "message": f"Task already in status: {status}"}
 

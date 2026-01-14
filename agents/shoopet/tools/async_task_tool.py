@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from google.adk.tools import ToolContext
 
-from ..async.models import (
+from ..async_tasks.models import (
     AsyncTaskDocument,
     MemoryIsolation,
     TaskStatus,

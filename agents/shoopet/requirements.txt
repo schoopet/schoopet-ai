@@ -2,6 +2,7 @@ google-adk[eval]>=0.1.0
 google-cloud-aiplatform>=1.111.0
 google-cloud-firestore>=2.14.0
 google-cloud-secret-manager>=2.16.0
+google-cloud-tasks>=2.14.0
 httpx>=0.26.0
 pydantic
 cloudpickle
