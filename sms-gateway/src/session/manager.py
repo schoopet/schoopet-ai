@@ -228,11 +228,12 @@ class SessionManager:
             is_new_user=False,
         )
 
-    async def update_last_activity(self, phone_number: str) -> None:
-        """Update session's last activity timestamp and increment message count.
+    async def update_last_activity(self, phone_number: str, channel: str = "sms") -> None:
+        """Update session's last activity timestamp, channel, and increment message count.
 
         Args:
             phone_number: User's phone number in E.164 format.
+            channel: The channel used for this message (sms or whatsapp).
         """
         doc_id = self._normalize_phone(phone_number)
         doc_ref = self._collection.document(doc_id)
@@ -240,6 +241,7 @@ class SessionManager:
         await doc_ref.update({
             "last_activity": datetime.now(timezone.utc),
             "message_count": firestore.Increment(1),
+            "channel": channel,
         })
 
     async def get_session(self, phone_number: str) -> Optional[SessionDocument]:
@@ -366,6 +368,7 @@ class SessionManager:
                 opted_in=True,
                 is_new_user=False,
                 session_type="user",
+                channel=session.channel,
             )
         return None
 

@@ -79,7 +79,10 @@ def create_search_agent(
         "## Boundary with Main Agent\n"
         "**You handle**: Real-time searches, factual lookups, current information, research\n"
         "**Main agent handles**: Personal memories, social context, relationship tracking, stored facts\n"
-        "**Collaboration**: You find new information via search; main agent stores important findings in memory\n"
+        "**Collaboration**: You find new information via search; main agent stores important findings in memory\n\n"
+
+        "If you are unable to fulfill the user's request, or if you determine that you are not the optimal agent to handle it, "
+        "you must explicitly return control to the parent agent explaining why."
     )
 
     # Initialize Agent

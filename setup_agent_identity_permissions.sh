@@ -44,6 +44,9 @@ ROLES=(
     "roles/datastore.user"
     "roles/serviceusage.serviceUsageConsumer"
     "roles/aiplatform.user"
+    "roles/secretmanager.secretAccessor"
+    "roles/bigquery.dataEditor"
+    "roles/bigquery.jobUser"
 )
 
 echo ""

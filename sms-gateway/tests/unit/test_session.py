@@ -51,9 +51,15 @@ class TestSessionManager:
     @pytest.fixture
     def mock_firestore(self):
         """Create mock Firestore client."""
-        client = AsyncMock()
+        client = MagicMock()
         collection = MagicMock()
-        document = AsyncMock()
+        document = MagicMock()
+        
+        # document.get is awaited, so it must return a coroutine that resolves to a mock_doc
+        # We use AsyncMock for the method itself.
+        document.get = AsyncMock()
+        document.set = AsyncMock()
+        document.update = AsyncMock()
 
         client.collection.return_value = collection
         collection.document.return_value = document
@@ -89,16 +95,20 @@ class TestSessionManager:
     ):
         """First message from new number creates new session."""
         _, doc_ref = mock_firestore
-        mock_doc = AsyncMock()
+        
+        # mock_doc should be a MagicMock (synchronous methods like to_dict)
+        mock_doc = MagicMock()
         mock_doc.exists = False
+        
+        # doc_ref.get is an AsyncMock, so we set its return_value to the mock_doc
         doc_ref.get.return_value = mock_doc
 
         result = await session_manager.get_or_create_session("+14155551234")
 
-        # For a non-opted-in user, no agent session is created
-        assert result.opted_in is False
-        assert result.is_new_session is False
-        mock_agent_client.create_session.assert_not_called()
+        # The session manager creates a new session with opted_in=True
+        assert result.opted_in is True
+        assert result.is_new_session is True
+        mock_agent_client.create_session.assert_called_once_with(user_id="+14155551234")
 
     @pytest.mark.asyncio
     async def test_recent_activity_continues_session(
@@ -118,7 +128,7 @@ class TestSessionManager:
             "opted_in": True,
         }
 
-        mock_doc = AsyncMock()
+        mock_doc = MagicMock()
         mock_doc.exists = True
         mock_doc.to_dict.return_value = existing_data
         doc_ref.get.return_value = mock_doc
@@ -147,7 +157,7 @@ class TestSessionManager:
             "opted_in": True,
         }
 
-        mock_doc = AsyncMock()
+        mock_doc = MagicMock()
         mock_doc.exists = True
         mock_doc.to_dict.return_value = stale_data
         doc_ref.get.return_value = mock_doc
@@ -185,7 +195,7 @@ class TestSessionManager:
             "opted_in": True,
         }
 
-        mock_doc = AsyncMock()
+        mock_doc = MagicMock()
         mock_doc.exists = True
         mock_doc.to_dict.return_value = existing_data
         doc_ref.get.return_value = mock_doc
@@ -200,7 +210,7 @@ class TestSessionManager:
         """Should return None if session doesn't exist."""
         _, doc_ref = mock_firestore
 
-        mock_doc = AsyncMock()
+        mock_doc = MagicMock()
         mock_doc.exists = False
         doc_ref.get.return_value = mock_doc
 

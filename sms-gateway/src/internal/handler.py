@@ -162,23 +162,36 @@ async def notify_user(
         # Check if user has an active session
         user_session = await _session_manager.get_user_session(payload.user_id)
 
-        if user_session and _session_manager.is_session_active(user_session):
+        if user_session and _session_manager.is_session_active(user_session) and _agent_client:
             # User has active session - send via root agent
             # This allows for conversational delivery
             internal_message = f"INTERNAL_TASK_COMPLETE: {payload.message}"
 
-            if _agent_client:
-                await _agent_client.send_message(
-                    user_id=payload.user_id,
-                    session_id=user_session.agent_session_id,
-                    message=internal_message,
-                )
-                logger.info(f"Notification sent via user session {user_session.agent_session_id}")
+            agent_response = await _agent_client.send_message(
+                user_id=payload.user_id,
+                session_id=user_session.agent_session_id,
+                message=internal_message,
+            )
+            logger.info(f"Agent response for task notification: {agent_response[:100]}...")
 
-                return InternalResponse(
-                    status="notified_via_session",
-                    message="User notified through active session"
+            # Send the agent's response to the user via the same channel as their session
+            if agent_response and _sms_sender:
+                from ..channel import MessageChannel
+                # Use the session's channel (from user's last message), not the payload default
+                session_channel = user_session.channel if user_session.channel else "sms"
+                channel = MessageChannel.WHATSAPP if session_channel == "whatsapp" else MessageChannel.SMS
+
+                await _sms_sender.send(
+                    to_number=payload.user_id,
+                    body=agent_response,
+                    channel=channel,
                 )
+                logger.info(f"Notification sent via {session_channel} after agent processing")
+
+            return InternalResponse(
+                status="notified_via_session",
+                message="User notified through active session"
+            )
 
         # No active session or agent client - send directly via SMS
         from ..channel import MessageChannel
@@ -243,5 +256,8 @@ def _build_review_message(payload: TaskReviewRequest) -> str:
     parts.append("")
     parts.append("Use review_task_result(task_id) for full details.")
     parts.append("Then use approve_task(task_id) or request_correction(task_id, feedback).")
+    parts.append("")
+    parts.append("IMPORTANT: This notification is NOT shown to the user.")
+    parts.append("You MUST notify the user of this notification and provide any information they should know.")
 
     return "\n".join(parts)

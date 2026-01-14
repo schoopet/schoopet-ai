@@ -421,29 +421,34 @@ class TaskWorker:
             logger.error(f"Failed to notify for review: {e}")
 
     async def _get_oidc_token(self) -> Optional[str]:
-        """Get OIDC token for service-to-service auth."""
-        try:
-            from google.auth import default
-            from google.auth.transport.requests import Request
+        """Get OIDC token for service-to-service auth.
 
-            credentials, _ = default()
-            credentials.refresh(Request())
-
-            # For service accounts, get ID token
-            if hasattr(credentials, "id_token"):
-                return credentials.id_token
-
-            # Alternative: create ID token credentials
-            from google.oauth2 import service_account
-            if isinstance(credentials, service_account.Credentials):
-                id_creds = service_account.IDTokenCredentials.from_credentials(
-                    credentials,
-                    target_audience=self._sms_gateway_url
-                )
-                id_creds.refresh(Request())
-                return id_creds.token
-
+        On Cloud Run, fetches ID token from the metadata server.
+        """
+        if not self._sms_gateway_url:
+            logger.warning("SMS_GATEWAY_URL not set, cannot get OIDC token")
             return None
+
+        try:
+            # On Cloud Run, fetch ID token from metadata server
+            metadata_url = (
+                "http://metadata.google.internal/computeMetadata/v1/"
+                f"instance/service-accounts/default/identity?audience={self._sms_gateway_url}"
+            )
+
+            http_client = await self._get_http_client()
+            async with http_client.get(
+                metadata_url,
+                headers={"Metadata-Flavor": "Google"}
+            ) as response:
+                if response.status == 200:
+                    token = await response.text()
+                    logger.debug("Successfully obtained OIDC token from metadata server")
+                    return token
+                else:
+                    text = await response.text()
+                    logger.warning(f"Failed to get ID token from metadata: {response.status} - {text}")
+                    return None
 
         except Exception as e:
             logger.warning(f"Could not get OIDC token: {e}")

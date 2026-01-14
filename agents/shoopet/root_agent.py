@@ -272,10 +272,12 @@ def create_agent(
 
         "**When you receive INTERNAL_TASK_REVIEW:**\n"
         "This message indicates an async task has completed and needs your review.\n"
+        "IMPORTANT: The notification you receive is NOT shown to the user.\n"
         "1. Use review_task_result(task_id) to see the full result\n"
         "2. Evaluate if the result meets the user's original request\n"
         "3. If satisfactory: Use approve_task(task_id) to notify the user\n"
-        "4. If needs improvement: Use request_correction(task_id, 'specific feedback')\n\n"
+        "4. If needs improvement: Use request_correction(task_id, 'specific feedback')\n"
+        "You MUST notify the user of this notification and provide any information they should know.\n\n"
 
         "**Review Criteria:**\n"
         "- Does the result address the user's original request?\n"
@@ -328,3 +330,4 @@ def create_adk_agent() -> AdkApp:
     return AdkApp(agent=create_agent())
 
 root_agent = create_agent()
+agent = root_agent

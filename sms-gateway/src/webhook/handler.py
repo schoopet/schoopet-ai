@@ -241,11 +241,11 @@ async def process_message_async(
             )
             return
 
-        # Send response (Twilio handles message splitting automatically)
+        # Send response (sender handles message splitting if needed)
         await _sms_sender.send(phone_number, response, channel=channel)
 
-        # Update session activity
-        await _session_manager.update_last_activity(phone_number)
+        # Update session activity with channel
+        await _session_manager.update_last_activity(phone_number, channel=channel.value)
 
         processing_time = (time.time() - start_time) * 1000
         logger.info(

@@ -17,6 +17,7 @@ class SessionDocument(BaseModel):
     message_count: int = Field(default=0)
     opted_in: bool = Field(default=False, description="Whether user has opted in to receive messages")
     opt_in_requested_at: Optional[datetime] = Field(default=None, description="When opt-in was first requested")
+    channel: str = Field(default="sms", description="Last used channel: sms or whatsapp")
 
     def to_firestore(self) -> dict:
         """Convert to Firestore-compatible dictionary."""
@@ -27,6 +28,7 @@ class SessionDocument(BaseModel):
             "last_activity": self.last_activity,
             "message_count": self.message_count,
             "opted_in": self.opted_in,
+            "channel": self.channel,
         }
         if self.opt_in_requested_at:
             data["opt_in_requested_at"] = self.opt_in_requested_at
@@ -43,6 +45,7 @@ class SessionDocument(BaseModel):
             message_count=data.get("message_count", 0),
             opted_in=data.get("opted_in", False),
             opt_in_requested_at=data.get("opt_in_requested_at"),
+            channel=data.get("channel", "sms"),
         )
 
 
@@ -56,6 +59,7 @@ class SessionInfo(BaseModel):
     is_new_user: bool = False
     session_type: str = Field(default="user", description="Session type: user or supervisor")
     task_id: Optional[str] = Field(default=None, description="Associated task ID for supervisor sessions")
+    channel: str = Field(default="sms", description="Communication channel: sms or whatsapp")
 
 
 class SupervisorSessionDocument(BaseModel):

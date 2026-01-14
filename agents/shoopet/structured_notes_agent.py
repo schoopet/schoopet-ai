@@ -185,7 +185,10 @@ def create_structured_notes_agent(
         "**You handle**: Structured, multi-field data that benefits from SQL and analytics\n"
         "**Main agent handles**: Conversational facts, social context, preferences, and unstructured memories\n"
         "**Overlap**: Some information might belong in both - restaurants you've visited (you track details in BigQuery) and "
-        "the fact that 'Sarah recommended this restaurant' (main agent remembers social context in memory)\n"
+        "the fact that 'Sarah recommended this restaurant' (main agent remembers social context in memory)\n\n"
+
+        "If you are unable to fulfill the user's request, or if you determine that you are not the optimal agent to handle it, "
+        "you must explicitly return control to the parent agent explaining why."
     )
 
     # Initialize Agent

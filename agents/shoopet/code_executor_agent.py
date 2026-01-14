@@ -50,7 +50,9 @@ def create_code_executor_agent(
             "- Date calculations: Calculate dates like 'next Monday', 'in 2 weeks', etc.\n"
             "- Math: Perform calculations, conversions, etc.\n"
             "- Data processing: Transform or analyze data.\n\n"
-            "Always return clear, formatted results that can be used by other tools."
+            "Always return clear, formatted results that can be used by other tools.\n\n"
+            "If you are unable to fulfill the user's request, or if you determine that you are not the optimal agent to handle it, "
+            "you must explicitly return control to the parent agent explaining why."
         )
     )
     return agent

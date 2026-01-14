@@ -9,3 +9,4 @@ cloudpickle
 pytest
 pytest-asyncio
 python-dotenv
+pyOpenSSL

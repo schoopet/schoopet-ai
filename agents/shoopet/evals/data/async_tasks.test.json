@@ -1,0 +1,29 @@
+[
+    {
+        "query": "Create a background research task with instruction 'Research history of jazz'.",
+        "expected_tool_use": [
+            {
+                "tool_name": "create_async_task",
+                "tool_input": {
+                    "task_type": "research",
+                    "instruction": "Research history of jazz"
+                }
+            }
+        ],
+        "reference": "I have created a research task to research the history of jazz."
+    },
+    {
+        "query": "Set a reminder to 'Call Mom' in 60 minutes using an async task.",
+        "expected_tool_use": [
+            {
+                "tool_name": "create_async_task",
+                "tool_input": {
+                    "task_type": "reminder",
+                    "instruction": "Call Mom",
+                    "schedule_delay_minutes": 60
+                }
+            }
+        ],
+        "reference": "I have set a reminder to call Mom in 60 minutes."
+    }
+]

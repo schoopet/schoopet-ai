@@ -279,7 +279,7 @@ class TestBackgroundProcessing:
         )
 
         mock_services["session_manager"].update_last_activity.assert_called_once_with(
-            "+14155551234"
+            "+14155551234", channel="sms"
         )
 
     @pytest.mark.asyncio

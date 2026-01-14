@@ -1,7 +1,8 @@
 """Twilio SMS and WhatsApp sending functionality."""
 import asyncio
 import logging
-from typing import Optional
+import textwrap
+from typing import List, Optional
 
 from twilio.rest import Client as TwilioClient
 from twilio.base.exceptions import TwilioRestException
@@ -9,6 +10,9 @@ from twilio.base.exceptions import TwilioRestException
 from ..channel import MessageChannel
 
 logger = logging.getLogger(__name__)
+
+# Twilio API limit for body length
+MAX_BODY_LENGTH = 1600
 
 
 class SMSSender:
@@ -38,11 +42,10 @@ class SMSSender:
         to_number: str,
         body: str,
         channel: MessageChannel = MessageChannel.SMS,
-    ) -> str:
+    ) -> List[str]:
         """Send a single SMS or WhatsApp message.
 
-        Twilio automatically handles message splitting for SMS (concatenated SMS)
-        and WhatsApp has a high character limit (~1600 chars).
+        Handles message splitting if the body exceeds Twilio's 1600 character limit.
 
         Args:
             to_number: Recipient phone number in E.164 format.
@@ -50,7 +53,7 @@ class SMSSender:
             channel: Message channel (SMS or WhatsApp).
 
         Returns:
-            The Twilio MessageSid on success.
+            List of Twilio MessageSids on success.
 
         Raises:
             TwilioRestException: If sending fails.
@@ -63,17 +66,35 @@ class SMSSender:
             from_addr = self._from_number
             to_addr = to_number
 
-        # Run synchronous Twilio client in thread pool
-        message = await asyncio.to_thread(
-            self._client.messages.create,
-            to=to_addr,
-            from_=from_addr,
-            body=body,
+        # Split message if it exceeds the limit
+        # replace_whitespace=False preserves newlines which is important for formatting
+        chunks = textwrap.wrap(
+            body,
+            width=MAX_BODY_LENGTH,
+            replace_whitespace=False,
+            drop_whitespace=False
         )
+        
+        if not chunks:
+            # Handle empty body case if it ever happens
+            chunks = [""]
 
-        logger.info(
-            f"Sent {channel.value} to {to_number}: MessageSid={message.sid}, "
-            f"Status={message.status}"
-        )
+        message_sids = []
 
-        return message.sid
+        for i, chunk in enumerate(chunks):
+            # Run synchronous Twilio client in thread pool
+            message = await asyncio.to_thread(
+                self._client.messages.create,
+                to=to_addr,
+                from_=from_addr,
+                body=chunk,
+            )
+            
+            message_sids.append(message.sid)
+
+            logger.info(
+                f"Sent {channel.value} part {i+1}/{len(chunks)} to {to_number}: "
+                f"MessageSid={message.sid}, Status={message.status}"
+            )
+
+        return message_sids

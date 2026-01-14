@@ -256,7 +256,7 @@ class AsyncTaskTool:
 
             if task.status == TaskStatus.SCHEDULED and task.scheduled_at:
                 status_msg += f"\nScheduled for: {task.scheduled_at.strftime('%Y-%m-%d %H:%M UTC')}"
-            elif task.status == TaskStatus.COMPLETED and task.result:
+            elif task.status in [TaskStatus.APPROVED, TaskStatus.NOTIFIED] and task.result:
                 # Truncate long results
                 result_preview = task.result[:200] + "..." if len(task.result) > 200 else task.result
                 status_msg += f"\nResult preview: {result_preview}"
@@ -384,7 +384,7 @@ class AsyncTaskTool:
                 if task.scheduled_at:
                     task_info += f" (scheduled: {task.scheduled_at.strftime('%m/%d %H:%M')})"
 
-                task_info += f" [ID: {task.task_id[:8]}...]"
+                task_info += f" [ID: {task.task_id}]"
                 result.append(task_info)
 
             return "\n".join(result)

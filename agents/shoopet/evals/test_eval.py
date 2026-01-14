@@ -4,8 +4,8 @@ import pathlib
 import sys
 import os
 
-# Add the parent directory to sys.path to allow importing the agent
-sys.path.append(str(pathlib.Path(__file__).parent.parent))
+# Add the agents directory to sys.path to allow importing the shoopet package
+sys.path.append(str(pathlib.Path(__file__).parent.parent.parent))
 
 import dotenv
 import pytest
@@ -22,7 +22,7 @@ async def test_root_agent():
     """Run evaluations for the root agent."""
 
     await AgentEvaluator.evaluate(
-        "shoopet.agent",  # Module path to the agent
+        "shoopet.root_agent",  # Module path to the agent
         str(pathlib.Path(__file__).parent / "data"),
         num_runs=1,  # Set to 1 for initial testing, increase as needed
     )
