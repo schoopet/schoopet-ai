@@ -2,7 +2,7 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch, ANY
-from agents.shoopet.calendar_tool import CalendarTool
+from agents.schoopet.calendar_tool import CalendarTool
 from google.adk.tools import ToolContext
 
 # Sample data
@@ -20,7 +20,7 @@ def tool_context():
 @pytest.fixture
 def calendar_tool():
     """Create a CalendarTool instance with mocked OAuthClient."""
-    with patch("agents.shoopet.calendar_tool.OAuthClient") as mock_client_cls:
+    with patch("agents.schoopet.calendar_tool.OAuthClient") as mock_client_cls:
         tool = CalendarTool()
         
         # Configure the mock client instance attached to the tool

@@ -1,11 +1,11 @@
-# Shoopet SMS Gateway
+# Schoopet SMS Gateway
 
-A Cloud Run service that integrates Twilio SMS with the Shoopet agent deployed on Vertex AI Agent Engine.
+A Cloud Run service that integrates Twilio SMS with the Schoopet agent deployed on Vertex AI Agent Engine.
 
 ## Features
 
 - Receives SMS via Twilio webhooks
-- Routes messages to Shoopet agent on Vertex AI
+- Routes messages to Schoopet agent on Vertex AI
 - Maintains conversation sessions with 10-minute timeout
 - Splits long responses into multiple SMS messages
 - Validates Twilio webhook signatures for security
@@ -143,7 +143,7 @@ The SMS gateway is accessible at `api.schoopet.com`. To set up a custom domain f
 
 ```bash
 gcloud beta run domain-mappings create \
-  --service shoopet-sms-gateway \
+  --service schoopet-sms-gateway \
   --domain api.schoopet.com \
   --region us-central1 \
   --project mmontan-ml

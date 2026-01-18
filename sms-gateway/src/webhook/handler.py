@@ -30,7 +30,7 @@ OPT_OUT_MSG = (
     "Reply YES anytime to opt back in."
 )
 HELP_MSG = (
-    "Shoopet SMS Assistant: Send a message to get started. "
+    "Schoopet SMS Assistant: Send a message to get started. "
     "Reply STOP to unsubscribe. Msg frequency varies. "
     "For more help, visit our website."
 )

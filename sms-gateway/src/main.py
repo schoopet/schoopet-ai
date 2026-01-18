@@ -1,4 +1,4 @@
-"""FastAPI application for Shoopet SMS Gateway."""
+"""FastAPI application for Schoopet SMS Gateway."""
 import logging
 from contextlib import asynccontextmanager
 
@@ -151,7 +151,7 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI application
 app = FastAPI(
-    title="Shoopet SMS Gateway",
+    title="Schoopet SMS Gateway",
     description="Twilio SMS integration for Vertex AI Agent Engine",
     version="1.0.0",
     lifespan=lifespan,
@@ -173,6 +173,6 @@ async def health_check():
 async def root():
     """Root endpoint with service info."""
     return {
-        "service": "Shoopet SMS Gateway",
+        "service": "Schoopet SMS Gateway",
         "status": "running",
     }

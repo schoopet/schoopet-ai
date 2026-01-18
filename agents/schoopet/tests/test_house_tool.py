@@ -1,7 +1,7 @@
 """Unit tests for HouseTool."""
 import pytest
 from unittest.mock import MagicMock, patch, ANY
-from agents.shoopet.house_tool import HouseTool
+from agents.schoopet.house_tool import HouseTool
 from google.adk.tools import ToolContext
 
 # Sample data
@@ -20,7 +20,7 @@ def tool_context():
 @pytest.fixture
 def house_tool():
     """Create a HouseTool instance with mocked OAuthClient."""
-    with patch("agents.shoopet.house_tool.OAuthClient") as mock_client_cls, \
+    with patch("agents.schoopet.house_tool.OAuthClient") as mock_client_cls, \
          patch("os.getenv", return_value=SDM_PROJECT_ID):
         
         tool = HouseTool()

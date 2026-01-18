@@ -82,7 +82,7 @@ class TestWebhookEndpoint:
         return {
             "From": "+14155551234",
             "To": "+14155559999",
-            "Body": "Hello Shoopet!",
+            "Body": "Hello Schoopet!",
             "MessageSid": "SM1234567890abcdef",
             "AccountSid": "AC123",
         }
@@ -172,7 +172,7 @@ class TestWebhookEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert "service" in data
-        assert data["service"] == "Shoopet SMS Gateway"
+        assert data["service"] == "Schoopet SMS Gateway"
 
 
 class TestBackgroundProcessing:

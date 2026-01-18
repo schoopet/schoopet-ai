@@ -1,7 +1,7 @@
 """Unit tests for BigQueryTools."""
 import pytest
 from unittest.mock import MagicMock, patch
-from agents.shoopet.bigquery_tool import BigQueryTools
+from agents.schoopet.bigquery_tool import BigQueryTools
 
 PROJECT_ID = "test-project"
 

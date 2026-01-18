@@ -1,5 +1,5 @@
 #!/bin/bash
-# Setup Shoopet Infrastructure
+# Setup Schoopet Infrastructure
 #
 # Enables APIs, creates Service Accounts, grants IAM roles, and sets up Cloud Tasks.
 
@@ -10,7 +10,7 @@ REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 QUEUE_NAME="async-agent-tasks"
 
 echo "=========================================="
-echo "Setting up Shoopet Infrastructure"
+echo "Setting up Schoopet Infrastructure"
 echo "=========================================="
 echo "Project: $PROJECT_ID"
 echo "Region: $REGION"
@@ -37,7 +37,7 @@ WORKER_SA_EMAIL="$WORKER_SA_NAME@$PROJECT_ID.iam.gserviceaccount.com"
 
 if ! gcloud iam service-accounts describe "$WORKER_SA_EMAIL" --project "$PROJECT_ID" >/dev/null 2>&1; then
     gcloud iam service-accounts create "$WORKER_SA_NAME" \
-        --display-name "Shoopet Task Worker" \
+        --display-name "Schoopet Task Worker" \
         --project "$PROJECT_ID"
     echo "Created $WORKER_SA_EMAIL"
     echo "Waiting for propagation..."
@@ -78,12 +78,12 @@ done
 # - Run Invoker (to call Task Worker)
 
 # Agent Identity SA
-AGENT_SA_NAME="shoopet-agent-identity"
+AGENT_SA_NAME="schoopet-agent-identity"
 AGENT_SA_EMAIL="$AGENT_SA_NAME@$PROJECT_ID.iam.gserviceaccount.com"
 
 if ! gcloud iam service-accounts describe "$AGENT_SA_EMAIL" --project "$PROJECT_ID" >/dev/null 2>&1; then
     gcloud iam service-accounts create "$AGENT_SA_NAME" \
-        --display-name "Shoopet Agent Identity" \
+        --display-name "Schoopet Agent Identity" \
         --project "$PROJECT_ID"
     echo "Created $AGENT_SA_EMAIL"
     echo "Waiting for propagation..."

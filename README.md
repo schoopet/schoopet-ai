@@ -1,1 +1,1 @@
-# shoopet-ai
+# schoopet-ai

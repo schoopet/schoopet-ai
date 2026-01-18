@@ -2,7 +2,7 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch, ANY
-from agents.shoopet.tools.async_task_tool import AsyncTaskTool, AsyncTaskDocument, TaskStatus
+from agents.schoopet.tools.async_task_tool import AsyncTaskTool, AsyncTaskDocument, TaskStatus
 from google.adk.tools import ToolContext
 
 # Sample data
@@ -31,7 +31,7 @@ def mock_firestore():
 @pytest.fixture
 def mock_cloud_tasks():
     """Mock Cloud Tasks client."""
-    with patch("agents.shoopet.tools.async_task_tool.get_cloud_tasks_client") as mock_ct:
+    with patch("agents.schoopet.tools.async_task_tool.get_cloud_tasks_client") as mock_ct:
         client = MagicMock()
         mock_ct.return_value = client
         yield client

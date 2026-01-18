@@ -1,12 +1,12 @@
 #!/bin/bash
-# Deploy Shoopet Agent to Vertex AI Agent Engine
+# Deploy Schoopet Agent to Vertex AI Agent Engine
 #
 # Usage:
 #   ./deploy.sh              # Update existing agent (uses GOOGLE_CLOUD_AGENT_ENGINE_ID from .env)
 #   ./deploy.sh --new        # Create a new agent engine
 #   ./deploy.sh --identity   # Deploy with Agent Identity enabled
 #
-# Environment variables (loaded from shoopet/.env):
+# Environment variables (loaded from schoopet/.env):
 #   GOOGLE_CLOUD_PROJECT       - GCP project ID (required)
 #   GOOGLE_CLOUD_LOCATION      - GCP region (default: us-central1)
 #   GOOGLE_CLOUD_AGENT_ENGINE_ID - Existing agent engine ID for updates
@@ -24,17 +24,17 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}  Shoopet Agent Deployment${NC}"
+echo -e "${BLUE}  Schoopet Agent Deployment${NC}"
 echo -e "${BLUE}========================================${NC}"
 
 # Load environment variables from .env file
-if [ -f "shoopet/.env" ]; then
-    echo -e "${GREEN}Loading environment from shoopet/.env${NC}"
+if [ -f "schoopet/.env" ]; then
+    echo -e "${GREEN}Loading environment from schoopet/.env${NC}"
     set -a
-    source shoopet/.env
+    source schoopet/.env
     set +a
 else
-    echo -e "${YELLOW}Warning: shoopet/.env not found, using environment variables${NC}"
+    echo -e "${YELLOW}Warning: schoopet/.env not found, using environment variables${NC}"
 fi
 
 # Parse arguments
@@ -74,7 +74,7 @@ done
 # Validate required environment variables
 if [ -z "$GOOGLE_CLOUD_PROJECT" ]; then
     echo -e "${RED}Error: GOOGLE_CLOUD_PROJECT is not set${NC}"
-    echo "Set it in shoopet/.env or pass --project <project-id>"
+    echo "Set it in schoopet/.env or pass --project <project-id>"
     exit 1
 fi
 
@@ -86,13 +86,13 @@ echo -e "Project:  ${GREEN}$GOOGLE_CLOUD_PROJECT${NC}"
 echo -e "Location: ${GREEN}$GOOGLE_CLOUD_LOCATION${NC}"
 
 # Activate virtual environment
-VENV_PATH="/Users/mmontan/shoopet/.venv"
+VENV_PATH="/Users/mmontan/schoopet/.venv"
 echo -e "${GREEN}Activating virtual environment: $VENV_PATH${NC}"
 source "$VENV_PATH/bin/activate"
 PYTHON_CMD="$VENV_PATH/bin/python"
 
 # Build deployment command
-DEPLOY_CMD="$PYTHON_CMD -m shoopet.deploy"
+DEPLOY_CMD="$PYTHON_CMD -m schoopet.deploy"
 DEPLOY_CMD="$DEPLOY_CMD --project $GOOGLE_CLOUD_PROJECT"
 DEPLOY_CMD="$DEPLOY_CMD --location $GOOGLE_CLOUD_LOCATION"
 

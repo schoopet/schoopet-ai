@@ -23,7 +23,7 @@ echo "=========================================="
 
 # Get the project number (needed for service account)
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
-APP_SA="shoopet-sms-gateway@${PROJECT_ID}.iam.gserviceaccount.com"
+APP_SA="schoopet-sms-gateway@${PROJECT_ID}.iam.gserviceaccount.com"
 
 echo ""
 echo "App service account: $APP_SA"

@@ -46,12 +46,12 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
 
     config = {
         "requirements": requirements_file,
-        "extra_packages": ["shoopet"],
+        "extra_packages": ["schoopet"],
         "staging_bucket": staging_bucket,
         "agent_framework": "google-adk",
         "env_vars": env_vars,
-        "display_name": "shoopet-agent-engine",
-        "description": "Shoopet Agent with Memory and Structured Notes",
+        "display_name": "schoopet-agent-engine",
+        "description": "Schoopet Agent with Memory and Structured Notes",
         "context_spec": {
             "memory_bank_config": memory_config
         }
@@ -83,7 +83,7 @@ def _display_result(remote_agent, agent_engine_id: str = None):
 
 def deploy(project_id: str, location: str, staging_bucket: str = None, agent_engine_id: str = None, use_agent_identity: bool = False):
     """
-    Deploys the Shoopet agent to Vertex AI Reasoning Engines using agent object deployment.
+    Deploys the Schoopet agent to Vertex AI Reasoning Engines using agent object deployment.
 
     Args:
         project_id: GCP Project ID
@@ -109,7 +109,7 @@ def deploy(project_id: str, location: str, staging_bucket: str = None, agent_eng
     )
 
     # Path to requirements file
-    requirements_file = os.path.join("shoopet", "requirements.txt")
+    requirements_file = os.path.join("schoopet", "requirements.txt")
     print(f"📦 Using requirements from: {requirements_file}")
 
     # Instantiate the agent locally
@@ -175,7 +175,7 @@ def deploy(project_id: str, location: str, staging_bucket: str = None, agent_eng
             return None
 
 def main():
-    parser = argparse.ArgumentParser(description="Deploy Shoopet Agent to Vertex AI")
+    parser = argparse.ArgumentParser(description="Deploy Schoopet Agent to Vertex AI")
     parser.add_argument("--project", help="Google Cloud Project ID", default=os.getenv("GOOGLE_CLOUD_PROJECT"))
     parser.add_argument("--location", help="Google Cloud Region", default=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
     parser.add_argument("--staging-bucket", help="GCS Staging Bucket (optional)", default=os.getenv("GCS_STAGING_BUCKET"))

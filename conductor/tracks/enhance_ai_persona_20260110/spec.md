@@ -9,7 +9,7 @@ The current AI agent behavior may be too verbose or generic. The new product gui
 3.  **Directness:** Ensure the AI gets to the point quickly while remaining supportive.
 
 ## Requirements
--   **System Prompts:** Update the system instructions in `agents/shoopet/root_agent.py` (and others if necessary) to reflect the new guidelines.
+-   **System Prompts:** Update the system instructions in `agents/schoopet/root_agent.py` (and others if necessary) to reflect the new guidelines.
 -   **Testing:** Create a test case that compares "Before" and "After" responses to common queries (e.g., "Remind me to buy milk").
 -   **Constraint:** Responses should ideally stay under 160-320 characters when possible, or be broken into clear, short segments.
 

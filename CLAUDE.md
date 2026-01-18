@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Shoopet is a multi-component project:
-1. **Python Agent** (`agents/shoopet/`) - A Google ADK-based multi-agent system with:
+Schoopet is a multi-component project:
+1. **Python Agent** (`agents/schoopet/`) - A Google ADK-based multi-agent system with:
    - Main agent: Conversational memory for social interactions
    - Structured Notes subagent: Structured notes management via BigQuery tables
    - Search subagent: Real-time Google Search integration
@@ -24,7 +24,7 @@ Shoopet is a multi-component project:
 
 The agent is built using Google's Agent Development Kit (ADK) with a native multi-agent architecture:
 
-- **agent.py**: Defines the main agent (Shoopet) with Gemini LLM and memory tools
+- **agent.py**: Defines the main agent (Schoopet) with Gemini LLM and memory tools
   - Handles conversational memory, social interactions, and relationships
   - Delegates to the **Structured Notes** subagent natively via `sub_agents`.
   - Uses the **Search** agent as a tool (via `AgentTool`) for real-time information.
@@ -54,7 +54,7 @@ The agent is built using Google's Agent Development Kit (ADK) with a native mult
 
 ### Environment Configuration
 
-Environment variables can be set in `.env` file (agents/shoopet/.env):
+Environment variables can be set in `.env` file (agents/schoopet/.env):
 - `GOOGLE_GENAI_USE_VERTEXAI="true"` - Enable Vertex AI backend
 - `GOOGLE_CLOUD_PROJECT` - GCP project ID (e.g., "mmontan-ml")
 - `GOOGLE_CLOUD_LOCATION` - Region (default: us-central1)
@@ -70,8 +70,8 @@ gcloud beta services mcp enable bigquery.googleapis.com --project=PROJECT_ID
 ### Package Structure
 
 The agent uses proper Python package structure with relative imports:
-- `agents/shoopet/` is the package root
-- Must be run with `python -m shoopet.main` to maintain package context
+- `agents/schoopet/` is the package root
+- Must be run with `python -m schoopet.main` to maintain package context
 - Uses relative imports (e.g., `from .tools.memory_tool import ...`)
 - This ensures code works correctly with both CLI and ADK web interface
 
@@ -80,28 +80,28 @@ The agent uses proper Python package structure with relative imports:
 ### Agent Development
 
 ```bash
-# Navigate to agents directory (parent of shoopet)
+# Navigate to agents directory (parent of schoopet)
 cd agents
 
 # Install dependencies (requires Python 3.11+)
-python -m venv shoopet/.venv
-source shoopet/.venv/bin/activate  # On Windows: shoopet\.venv\Scripts\activate
-pip install -r shoopet/requirements.txt
+python -m venv schoopet/.venv
+source schoopet/.venv/bin/activate  # On Windows: schoopet\.venv\Scripts\activate
+pip install -r schoopet/requirements.txt
 
 # Deploy agent to Vertex AI Agent Engine (remote)
-python -m shoopet.deploy
+python -m schoopet.deploy
 # First run creates new Agent Engine and outputs ID
 # Add ID to .env as AGENT_ENGINE_ID for subsequent updates
 # Subsequent runs update the existing Agent Engine
 
 # Chat with deployed remote agent (recommended)
-python -m shoopet.chat
+python -m schoopet.chat
 # Clean turn-based interface to interact with deployed agent
 # Connects to remote Agent Engine (no local execution)
 # Type 'quit' or 'exit' to save session and terminate
 
 # Run agent locally with CLI (for development/testing)
-python -m shoopet.main
+python -m schoopet.main
 # Runs agent locally but still creates/updates Agent Engine
 # Type 'quit' or 'exit' to save session to memory and terminate
 
@@ -117,12 +117,12 @@ gcloud beta services mcp enable bigquery.googleapis.com --project=mmontan-ml
 #    - BigQuery Data Viewer
 ```
 
-**Important**: Always use `python -m shoopet.<module>` (not `python <module>.py`) to run agent commands. This maintains the proper Python package context and ensures relative imports work correctly.
+**Important**: Always use `python -m schoopet.<module>` (not `python <module>.py`) to run agent commands. This maintains the proper Python package context and ensures relative imports work correctly.
 
 **Recommended workflow**:
-1. Deploy agent once: `python -m shoopet.deploy`
-2. Chat with deployed agent: `python -m shoopet.chat`
-3. Update deployment after code changes: `python -m shoopet.deploy` (uses existing AGENT_ENGINE_ID)
+1. Deploy agent once: `python -m schoopet.deploy`
+2. Chat with deployed agent: `python -m schoopet.chat`
+3. Update deployment after code changes: `python -m schoopet.deploy` (uses existing AGENT_ENGINE_ID)
 
 ### Website Development
 
@@ -174,7 +174,7 @@ Direct memory management tools for explicit fact storage:
 
 The system uses a main agent with one native subagent and one shared tool agent:
 
-**Main Agent (Shoopet)**:
+**Main Agent (Schoopet)**:
 - Model: `gemini-3-pro-preview`
 - Conversational memory for social interactions and relationships
 - Automatic memory bank persistence
@@ -242,7 +242,7 @@ The system uses feature-based OAuth token separation to manage different Google 
   - `manager.py`: Token exchange, storage, refresh logic
   - `secret_manager.py`: Secure refresh token storage
   - `models.py`: `OAuthState` and `OAuthToken` Pydantic models with `feature` field
-- **Agent (`agents/shoopet/oauth_client.py`)**: Shared client for tools
+- **Agent (`agents/schoopet/oauth_client.py`)**: Shared client for tools
   - Lazy initialization (avoids pickling issues with Firestore/Secret Manager clients)
   - HMAC-signed link generation for secure authorization initiation
   - Automatic token refresh when expired

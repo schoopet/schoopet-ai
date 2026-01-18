@@ -3,7 +3,7 @@ import sys
 import argparse
 import os
 from google.adk.tools import ToolContext
-from shoopet.house_tool import HouseTool
+from schoopet.house_tool import HouseTool
 
 def main():
     parser = argparse.ArgumentParser(description="Manage House Tool (Smart Home) manually")

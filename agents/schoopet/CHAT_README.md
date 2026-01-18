@@ -1,6 +1,6 @@
-# Shoopet Chat Client
+# Schoopet Chat Client
 
-Interactive command-line client for chatting with your deployed Shoopet agent on Vertex AI.
+Interactive command-line client for chatting with your deployed Schoopet agent on Vertex AI.
 
 ## Features
 
@@ -20,7 +20,7 @@ Interactive command-line client for chatting with your deployed Shoopet agent on
 ### From agents directory:
 ```bash
 cd agents
-python -m shoopet.chat
+python -m schoopet.chat
 ```
 
 ## Requirements
@@ -34,7 +34,7 @@ The chat client reads configuration from environment variables (`.env` file):
 ## Command-Line Options
 
 ```bash
-python -m shoopet.chat --help
+python -m schoopet.chat --help
 
 Options:
   --project PROJECT             Google Cloud Project ID
@@ -50,7 +50,7 @@ Options:
    ./chat.sh
    ```
 
-2. **Chat with Shoopet:**
+2. **Chat with Schoopet:**
    - Type your message and press Enter
    - Agent responses stream in real-time
    - Each turn is clearly outlined with numbered boxes
@@ -64,7 +64,7 @@ Options:
 
 ```
 ╔══════════════════════════════════════════════════════════════╗
-║           🐾 Shoopet Chat - Remote Agent Client             ║
+║           🐾 Schoopet Chat - Remote Agent Client             ║
 ╚══════════════════════════════════════════════════════════════╝
 Session ID: abc123...
 User ID: cli-user
@@ -73,10 +73,10 @@ Agent Engine: 172357243746910208
 Type your message and press Enter. Type 'quit' or 'exit' to end.
 
 ╭─ Turn 1 ─ You ─────────────────────────────────────╮
-│ Hi Shoopet! Remember me?
+│ Hi Schoopet! Remember me?
 ╰────────────────────────────────────────────────────────────╯
 
-╭─ Turn 1 ─ Shoopet ──────────────────────────────╮
+╭─ Turn 1 ─ Schoopet ──────────────────────────────╮
 │ Of course I remember you! How have you been?
 ╰────────────────────────────────────────────────────────────╯
 ```
@@ -95,7 +95,7 @@ Before using the chat client, you must deploy your agent:
 
 ```bash
 cd agents
-python -m shoopet.deploy
+python -m schoopet.deploy
 ```
 
 This creates (or updates) the Agent Engine on Vertex AI and gives you an `AGENT_ENGINE_ID` to add to your `.env` file.
@@ -103,11 +103,11 @@ This creates (or updates) the Agent Engine on Vertex AI and gives you an `AGENT_
 ## Troubleshooting
 
 **Error: "AGENT_ENGINE_ID must be provided"**
-- Run `python -m shoopet.deploy` first to create your agent
+- Run `python -m schoopet.deploy` first to create your agent
 - Add the ID to your `.env` file
 
 **Error: "GOOGLE_CLOUD_PROJECT not set"**
-- Create `.env` file in `agents/shoopet/` directory
+- Create `.env` file in `agents/schoopet/` directory
 - Add: `GOOGLE_CLOUD_PROJECT=your-project-id`
 
 **No response from agent:**

@@ -2,7 +2,7 @@
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
-from agents.shoopet.preferences_tool import PreferencesTool
+from agents.schoopet.preferences_tool import PreferencesTool
 from google.adk.tools import ToolContext
 
 # Sample data

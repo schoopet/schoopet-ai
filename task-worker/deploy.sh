@@ -13,7 +13,7 @@ set -e
 # Configuration
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-mmontan-ml}"
 REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
-SERVICE_NAME="shoopet-task-worker"
+SERVICE_NAME="schoopet-task-worker"
 SERVICE_ACCOUNT="task-worker@${PROJECT_ID}.iam.gserviceaccount.com"
 
 # Validate required variables
@@ -28,7 +28,7 @@ if [ -z "$SMS_GATEWAY_URL" ]; then
 fi
 
 echo "=========================================="
-echo "Deploying Shoopet Task Worker"
+echo "Deploying Schoopet Task Worker"
 echo "=========================================="
 echo "Project: $PROJECT_ID"
 echo "Region: $REGION"

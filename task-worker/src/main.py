@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI application
 app = FastAPI(
-    title="Shoopet Task Worker",
+    title="Schoopet Task Worker",
     description="Async agent task execution service",
     version="1.0.0",
     lifespan=lifespan,
@@ -119,6 +119,6 @@ async def health_check():
 async def root():
     """Root endpoint with service info."""
     return {
-        "service": "Shoopet Task Worker",
+        "service": "Schoopet Task Worker",
         "status": "running",
     }

@@ -14,7 +14,7 @@ set -e
 # Configuration
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-mmontan-ml}"
 REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
-SERVICE_NAME="shoopet-sms-gateway"
+SERVICE_NAME="schoopet-sms-gateway"
 AGENT_ENGINE_ID="${AGENT_ENGINE_ID}"
 
 # Validate required variables
@@ -25,7 +25,7 @@ if [ -z "$AGENT_ENGINE_ID" ]; then
 fi
 
 echo "=========================================="
-echo "Deploying Shoopet SMS Gateway"
+echo "Deploying Schoopet SMS Gateway"
 echo "=========================================="
 echo "Project: $PROJECT_ID"
 echo "Region: $REGION"

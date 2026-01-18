@@ -15,7 +15,7 @@
 ### 2. AI Agents (`agents/`)
 A sophisticated multi-agent system using Google's Agent Development Kit (ADK):
 
-*   **Main Agent (Shoopet):** Handles conversational memory, social interactions, and relationship building. Uses `gemini-3-pro-preview`.
+*   **Main Agent (Schoopet):** Handles conversational memory, social interactions, and relationship building. Uses `gemini-3-pro-preview`.
 *   **Structured Notes Subagent:** Manages queryable lists (e.g., shopping lists, book logs) via **BigQuery MCP** integration.
 *   **Search Subagent:** Performs real-time Google searches using `gemini-2.0-flash-exp` (wrapped as an `AgentTool`).
 *   **Memory System:** Uses Vertex AI Native Memory Bank with automatic persistence.
@@ -33,14 +33,14 @@ A sophisticated multi-agent system using Google's Agent Development Kit (ADK):
 
 **Important:** Always run agent modules from the `agents` directory using the `-m` flag to preserve package context.
 
-*   **Deploy Agent:** `cd agents && python -m shoopet.deploy`
-*   **Chat with Remote Agent:** `cd agents && python -m shoopet.chat` (Recommended for testing)
-*   **Run Agent Locally:** `cd agents && python -m shoopet.main`
+*   **Deploy Agent:** `cd agents && python -m schoopet.deploy`
+*   **Chat with Remote Agent:** `cd agents && python -m schoopet.chat` (Recommended for testing)
+*   **Run Agent Locally:** `cd agents && python -m schoopet.main`
 *   **ADK Web Interface:** `cd agents && adk web`
 *   **Website Dev:** `cd web && npm run dev`
 *   **Website Deploy:** `./deploy_web.sh`
 
-### Environment Variables (`agents/shoopet/.env`)
+### Environment Variables (`agents/schoopet/.env`)
 *   `GOOGLE_CLOUD_PROJECT`: GCP Project ID.
 *   `AGENT_ENGINE_ID`: ID of the deployed Vertex AI Reasoning Engine.
 *   `GOOGLE_GENAI_USE_VERTEXAI`: Set to `"true"`.

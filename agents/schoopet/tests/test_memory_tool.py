@@ -1,7 +1,7 @@
 """Unit tests for MemoryTool."""
 import pytest
 from unittest.mock import MagicMock, patch
-from agents.shoopet.memory_tool import MemoryTool
+from agents.schoopet.memory_tool import MemoryTool
 from google.adk.tools import ToolContext
 
 # Sample data

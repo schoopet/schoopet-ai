@@ -7,7 +7,7 @@ from typing import List
 # Add the parent directory to sys.path
 sys.path.append(str(pathlib.Path(__file__).parent.parent.parent))
 
-from shoopet.root_agent import create_agent
+from schoopet.root_agent import create_agent
 from google.adk.runners import Runner
 from google.adk.sessions.local_session_service import LocalSessionService
 from google.genai import types
@@ -21,7 +21,7 @@ os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "mmontan-ml")
 os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 TEST_PROMPTS = [
-    "Hey Shoopet, I'm feeling a bit overwhelmed with my to-do list today. Can you help me pick one thing to start with?",
+    "Hey Schoopet, I'm feeling a bit overwhelmed with my to-do list today. Can you help me pick one thing to start with?",
     "Remind me to call the dentist tomorrow at 10am.",
     "What do you know about my friend Sarah?",
     "I just finished reading 'Atomic Habits'. It was great!",
@@ -29,7 +29,7 @@ TEST_PROMPTS = [
 ]
 
 async def run_baseline():
-    print("--- SHOOPET PERSONA BASELINE TEST ---")
+    print("--- SCHOOPET PERSONA BASELINE TEST ---")
     
     agent = create_agent()
     session_service = LocalSessionService()

@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import MagicMock, patch, ANY
 from datetime import datetime, timezone, timedelta
-from agents.shoopet.oauth_client import OAuthClient
+from agents.schoopet.oauth_client import OAuthClient
 
 # Sample data
 PHONE_NUMBER = "+14155551234"

@@ -1,5 +1,5 @@
 """
-Simple chat client for deployed Shoopet Agent Engine.
+Simple chat client for deployed Schoopet Agent Engine.
 """
 import argparse
 import os
@@ -68,7 +68,7 @@ _api_client.BaseApiClient.async_request_streamed = _logged_async_request_streame
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Chat with deployed Shoopet Agent Engine")
+    parser = argparse.ArgumentParser(description="Chat with deployed Schoopet Agent Engine")
     parser.add_argument(
         "--user", "-u",
         default="cli-user",
