@@ -55,6 +55,12 @@ jobs:
       - name: Run SMS gateway tests
         env:
           PYTHONPATH: ${{ github.workspace }}/sms-gateway
+          GOOGLE_CLOUD_PROJECT: test-project
+          GOOGLE_CLOUD_LOCATION: us-central1
+          AGENT_ENGINE_ID: test-engine-id
+          TWILIO_ACCOUNT_SID: ACtest123
+          TWILIO_AUTH_TOKEN: test-auth-token
+          TWILIO_PHONE_NUMBER: "+15551234567"
         run: |
           python -m pytest tests/ -v --tb=short
 
@@ -82,5 +88,9 @@ jobs:
       - name: Run task worker tests
         env:
           PYTHONPATH: ${{ github.workspace }}/task-worker
+          GOOGLE_CLOUD_PROJECT: test-project
+          GOOGLE_CLOUD_LOCATION: us-central1
+          AGENT_ENGINE_ID: test-engine-id
+          SMS_GATEWAY_URL: http://localhost:8080
         run: |
           python -m pytest tests/ -v --tb=short
