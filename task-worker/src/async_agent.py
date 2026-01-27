@@ -7,6 +7,7 @@ This module provides async agents that execute different task types:
 - notification: General notifications
 """
 import logging
+import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,6 @@ class AsyncAgent:
 
         # Lazy-loaded clients
         self._vertex_client = None
-        self._model = None
 
     def _get_vertex_client(self):
         """Get Vertex AI client, initializing lazily."""
@@ -56,15 +56,26 @@ class AsyncAgent:
             )
         return self._vertex_client
 
-    def _get_model(self):
-        """Get the Gemini model for task execution."""
-        if self._model is None:
-            import vertexai
-            from vertexai.generative_models import GenerativeModel
+    def _create_agent(self, instruction: str):
+        """Create an ADK LlmAgent with the given instruction."""
+        from google.adk.agents.llm_agent import LlmAgent
+        from google.adk.models.google_llm import Gemini
 
-            vertexai.init(project=self.project, location=self.location)
-            self._model = GenerativeModel("gemini-2.0-flash-001")
-        return self._model
+        # Initialize Model (Gemini on Vertex AI)
+        model = Gemini(
+            model_name="gemini-2.0-flash-001",
+            vertexai=True,
+            project=self.project,
+            location=self.location
+        )
+
+        agent = LlmAgent(
+            name=f"async-{self.task_type}-agent",
+            model=model,
+            tools=[],  # No tools for now
+            instruction=instruction,
+        )
+        return agent
 
     def _get_system_instruction(self) -> str:
         """Get task-type specific system instruction."""
@@ -121,21 +132,29 @@ class AsyncAgent:
             The task result as a string
         """
         try:
-            model = self._get_model()
+            # Create agent with system instruction
+            system_instruction = self._get_system_instruction()
+            agent = self._create_agent(system_instruction)
 
-            # Build the full prompt with context
-            full_prompt = self._build_full_prompt(prompt, context)
+            # Build user message with context
+            user_message = self._build_user_message(prompt, context)
 
-            # Generate response
-            response = model.generate_content(
-                full_prompt,
-                generation_config={
-                    "max_output_tokens": 2048,
-                    "temperature": 0.7,
-                }
-            )
+            # Execute agent (using to_thread for blocking call)
+            response = await asyncio.to_thread(agent.query, user_message)
 
-            result = response.text
+            result = ""
+            if hasattr(response, "text"):
+                result = response.text
+            elif hasattr(response, "content"):
+                 # Handle response.content if it's an object with parts
+                 if hasattr(response.content, "parts"):
+                     for part in response.content.parts:
+                         if hasattr(part, "text"):
+                             result += part.text
+                 else:
+                     result = str(response.content)
+            else:
+                result = str(response)
 
             # Collect memories if enabled
             if self.collect_memories:
@@ -170,13 +189,13 @@ class AsyncAgent:
 
         return result, self._collected_memories
 
-    def _build_full_prompt(self, prompt: str, context: Dict[str, Any] = None) -> str:
-        """Build the full prompt with system instruction and context."""
-        parts = [self._get_system_instruction()]
+    def _build_user_message(self, prompt: str, context: Dict[str, Any] = None) -> str:
+        """Build the user message with context."""
+        parts = []
 
         # Add preloaded memories if available
         if self.preloaded_memories:
-            parts.append("\n## Relevant Context from User's Memory:")
+            parts.append("## Relevant Context from User's Memory:")
             for memory in self.preloaded_memories:
                 parts.append(f"- {memory}")
 
