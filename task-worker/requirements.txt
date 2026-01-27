@@ -9,6 +9,9 @@ google-cloud-aiplatform>=1.38.0
 google-auth>=2.25.0
 vertexai>=1.38.0
 
+# Agent Framework
+google-adk[eval]>=0.1.0
+
 # HTTP client
 aiohttp>=3.9.0
 
