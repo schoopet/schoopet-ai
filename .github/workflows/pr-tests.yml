@@ -1,0 +1,83 @@
+name: PR Tests
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+jobs:
+  test-agent:
+    name: Test Agent
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agents/schoopet
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run agent tests
+        run: |
+          python -m pytest tests/ -v --tb=short
+
+  test-sms-gateway:
+    name: Test SMS Gateway
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sms-gateway
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run SMS gateway tests
+        run: |
+          python -m pytest tests/ -v --tb=short
+
+  test-task-worker:
+    name: Test Task Worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: task-worker
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run task worker tests
+        run: |
+          python -m pytest tests/ -v --tb=short
