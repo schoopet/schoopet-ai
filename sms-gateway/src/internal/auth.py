@@ -13,6 +13,8 @@ Security measures:
 - Timestamp validation (5-minute window) for replay attack prevention
 - Constant-time comparison for timing attack prevention
 """
+import asyncio
+import functools
 import hashlib
 import hmac
 import logging
@@ -95,10 +97,15 @@ async def verify_oidc_token(authorization: str) -> str:
         # The audience should be the URL of this service
         audience = os.getenv("SMS_GATEWAY_URL", "")
 
-        claims = id_token.verify_oauth2_token(
-            token,
-            google_requests.Request(),
-            audience=audience if audience else None,
+        loop = asyncio.get_running_loop()
+        claims = await loop.run_in_executor(
+            None,
+            functools.partial(
+                id_token.verify_oauth2_token,
+                token,
+                google_requests.Request(),
+                audience=audience if audience else None,
+            ),
         )
 
         email = claims.get("email")
