@@ -37,7 +37,7 @@ The agent is built using Google's Agent Development Kit (ADK) with a native mult
   - Wrapped as an `AgentTool` to be used by both the Main Agent and Structured Notes Agent.
   - Uses `gemini-2.0-flash-exp` to support mixed tool usage (Search + Functions).
 - **deploy.py**: Deploys agent to Vertex AI Agent Engine (creates or updates remote reasoning engine)
-- **chat.py**: Interactive chat client for deployed remote agent (recommended for regular use)
+- **agent-engine-cli**: Interactive chat client for deployed remote agent (available on GitHub: [google/agent-engine-cli](https://github.com/google/agent-engine-cli))
 - **main.py**: Local development CLI that initializes/updates Agent Engine and runs agent locally
 - **memory_config.py**: Configures Vertex AI Memory Bank with custom social_memories topic and managed topics
 - **tools/memory_tool.py**: Direct memory management tools for saving and retrieving facts with user-scoped security
@@ -95,8 +95,7 @@ python -m schoopet.deploy
 # Subsequent runs update the existing Agent Engine
 
 # Chat with deployed remote agent (recommended)
-python -m schoopet.chat
-# Clean turn-based interface to interact with deployed agent
+# Use the agent-engine-cli (e.g., npx agent-engine-cli chat)
 # Connects to remote Agent Engine (no local execution)
 # Type 'quit' or 'exit' to save session and terminate
 
@@ -121,7 +120,7 @@ gcloud beta services mcp enable bigquery.googleapis.com --project=mmontan-ml
 
 **Recommended workflow**:
 1. Deploy agent once: `python -m schoopet.deploy`
-2. Chat with deployed agent: `python -m schoopet.chat`
+2. Chat with deployed agent: Use `agent-engine-cli` (GitHub)
 3. Update deployment after code changes: `python -m schoopet.deploy` (uses existing AGENT_ENGINE_ID)
 
 ### Website Development

@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     DAILY_MESSAGE_LIMIT: int = 1000
     RATE_LIMIT_EXCLUDED_PHONES: list[str] = ["+19494136310"]
 
+    # Telegram Configuration
+    TELEGRAM_BOT_TOKEN: str = ""  # Empty = Telegram disabled
+
     # OAuth Configuration
     GOOGLE_OAUTH_CLIENT_ID: str = ""
     GOOGLE_OAUTH_CLIENT_SECRET: str = ""

@@ -22,17 +22,19 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 _session_manager = None
 _agent_client = None
 _sms_sender = None
+_telegram_sender = None
 
 
-def init_internal_services(session_manager, agent_client, sms_sender):
+def init_internal_services(session_manager, agent_client, sms_sender, telegram_sender=None):
     """Initialize internal handler services.
 
     Called by main.py during application startup.
     """
-    global _session_manager, _agent_client, _sms_sender
+    global _session_manager, _agent_client, _sms_sender, _telegram_sender
     _session_manager = session_manager
     _agent_client = agent_client
     _sms_sender = sms_sender
+    _telegram_sender = telegram_sender
     logger.info("Internal handler services initialized")
 
 
@@ -54,7 +56,7 @@ class UserNotifyRequest(BaseModel):
     user_id: str = Field(..., description="User's phone number")
     task_id: str = Field(..., description="Task ID that was completed")
     message: str = Field(..., description="Message to send to user")
-    channel: str = Field(default="sms", description="Notification channel (sms/whatsapp)")
+    channel: str = Field(default="sms", description="Notification channel (sms/whatsapp/telegram)")
 
 
 class InternalResponse(BaseModel):
@@ -147,7 +149,7 @@ async def notify_user(
 
     Security: Requires valid OIDC token or HMAC signature.
     """
-    if not _session_manager or not _sms_sender:
+    if not _session_manager or (not _sms_sender and not _telegram_sender):
         raise HTTPException(
             status_code=503,
             detail="Internal services not initialized"
@@ -175,17 +177,20 @@ async def notify_user(
             logger.info(f"Agent response for task notification: {agent_response[:100]}...")
 
             # Send the agent's response to the user via the same channel as their session
-            if agent_response and _sms_sender:
+            if agent_response:
                 from ..channel import MessageChannel
                 # Use the session's channel (from user's last message), not the payload default
                 session_channel = user_session.channel if user_session.channel else "sms"
-                channel = MessageChannel.WHATSAPP if session_channel == "whatsapp" else MessageChannel.SMS
 
-                await _sms_sender.send(
-                    to_number=payload.user_id,
-                    body=agent_response,
-                    channel=channel,
-                )
+                if session_channel == "telegram" and _telegram_sender:
+                    await _telegram_sender.send(payload.user_id, agent_response)
+                elif _sms_sender:
+                    channel = MessageChannel.WHATSAPP if session_channel == "whatsapp" else MessageChannel.SMS
+                    await _sms_sender.send(
+                        to_number=payload.user_id,
+                        body=agent_response,
+                        channel=channel,
+                    )
                 logger.info(f"Notification sent via {session_channel} after agent processing")
 
             return InternalResponse(
@@ -193,16 +198,17 @@ async def notify_user(
                 message="User notified through active session"
             )
 
-        # No active session or agent client - send directly via SMS
-        from ..channel import MessageChannel
-
-        channel = MessageChannel.WHATSAPP if payload.channel == "whatsapp" else MessageChannel.SMS
-
-        await _sms_sender.send(
-            to_number=payload.user_id,
-            body=payload.message,
-            channel=channel,
-        )
+        # No active session or agent client - send directly
+        if payload.channel == "telegram" and _telegram_sender:
+            await _telegram_sender.send(payload.user_id, payload.message)
+        elif _sms_sender:
+            from ..channel import MessageChannel
+            channel = MessageChannel.WHATSAPP if payload.channel == "whatsapp" else MessageChannel.SMS
+            await _sms_sender.send(
+                to_number=payload.user_id,
+                body=payload.message,
+                channel=channel,
+            )
 
         logger.info(f"Notification sent directly via {payload.channel}")
 

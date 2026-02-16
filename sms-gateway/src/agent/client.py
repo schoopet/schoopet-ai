@@ -98,6 +98,14 @@ class AgentEngineClient:
 
                 # Handle dict events (from async_stream_query)
                 if isinstance(event, dict):
+                    # Check for error events from Agent Engine
+                    if "code" in event and "message" in event:
+                        logger.error(
+                            f"Agent Engine error: code={event['code']}, "
+                            f"message={event['message']}"
+                        )
+                        continue
+
                     content = event.get("content", {})
                     if isinstance(content, dict):
                         parts = content.get("parts", [])

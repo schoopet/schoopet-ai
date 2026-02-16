@@ -34,7 +34,7 @@ A sophisticated multi-agent system using Google's Agent Development Kit (ADK):
 **Important:** Always run agent modules from the `agents` directory using the `-m` flag to preserve package context.
 
 *   **Deploy Agent:** `cd agents && python -m schoopet.deploy`
-*   **Chat with Remote Agent:** `cd agents && python -m schoopet.chat` (Recommended for testing)
+*   **Chat with Remote Agent:** Use the [agent-engine-cli](https://github.com/google/agent-engine-cli) library on GitHub.
 *   **Run Agent Locally:** `cd agents && python -m schoopet.main`
 *   **ADK Web Interface:** `cd agents && adk web`
 *   **Website Dev:** `cd web && npm run dev`

@@ -16,6 +16,9 @@ from .oauth.secret_manager import SecretManagerClient
 from .ratelimit.limiter import RateLimiter
 from .session.manager import SessionManager
 from .sms.sender import SMSSender
+from .telegram.handler import router as telegram_router, init_services as init_telegram_services
+from .telegram.sender import TelegramSender
+from .telegram.validator import TelegramValidator
 from .webhook.handler import router as webhook_router, init_services
 from .webhook.validator import TwilioValidator
 
@@ -85,11 +88,29 @@ async def lifespan(app: FastAPI):
         rate_limiter=rate_limiter,
     )
 
+    # Initialize Telegram services (if configured)
+    telegram_sender = None
+    if settings.TELEGRAM_BOT_TOKEN:
+        logger.info("Initializing Telegram services...")
+        telegram_sender = TelegramSender(bot_token=settings.TELEGRAM_BOT_TOKEN)
+        telegram_validator = TelegramValidator(bot_token=settings.TELEGRAM_BOT_TOKEN)
+        init_telegram_services(
+            validator=telegram_validator,
+            session_manager=session_manager,
+            agent_client=agent_client,
+            telegram_sender=telegram_sender,
+            rate_limiter=rate_limiter,
+        )
+        logger.info("Telegram services initialized")
+    else:
+        logger.info("Telegram not configured (TELEGRAM_BOT_TOKEN not set)")
+
     # Initialize internal services for async task handling
     init_internal_services(
         session_manager=session_manager,
         agent_client=agent_client,
         sms_sender=sms_sender,
+        telegram_sender=telegram_sender,
     )
     init_allowed_service_accounts()
     logger.info("Internal services initialized")
@@ -147,6 +168,8 @@ async def lifespan(app: FastAPI):
 
     # Cleanup
     logger.info("Shutting down SMS Gateway...")
+    if telegram_sender:
+        await telegram_sender.close()
 
 
 # Create FastAPI application
@@ -159,6 +182,7 @@ app = FastAPI(
 
 # Include routers
 app.include_router(webhook_router)
+app.include_router(telegram_router)
 app.include_router(oauth_router)
 app.include_router(internal_router)
 

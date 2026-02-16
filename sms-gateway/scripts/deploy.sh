@@ -14,7 +14,7 @@ set -e
 # Configuration
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-mmontan-ml}"
 REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
-SERVICE_NAME="schoopet-sms-gateway"
+SERVICE_NAME="shoopet-sms-gateway"
 AGENT_ENGINE_ID="${AGENT_ENGINE_ID}"
 
 # Validate required variables
@@ -62,7 +62,7 @@ gcloud run deploy "$SERVICE_NAME" \
     --cpu 1 \
     --timeout 300 \
     --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=$REGION,AGENT_ENGINE_ID=$AGENT_ENGINE_ID,GOOGLE_OAUTH_REDIRECT_URI=https://api.schoopet.com/oauth/google/callback" \
-    --set-secrets "TWILIO_ACCOUNT_SID=twilio-account-sid:latest,TWILIO_AUTH_TOKEN=twilio-auth-token:latest,TWILIO_PHONE_NUMBER=twilio-phone-number:latest,TWILIO_WHATSAPP_NUMBER=twilio-whatsapp-number:latest,GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest"
+    --set-secrets "TWILIO_ACCOUNT_SID=twilio-account-sid:latest,TWILIO_AUTH_TOKEN=twilio-auth-token:latest,TWILIO_PHONE_NUMBER=twilio-phone-number:latest,TWILIO_WHATSAPP_NUMBER=twilio-whatsapp-number:latest,GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,TELEGRAM_BOT_TOKEN=telegram-bot-token:latest"
 
 # Get the service URL
 echo ""
