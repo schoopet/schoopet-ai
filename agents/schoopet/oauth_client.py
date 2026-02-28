@@ -228,3 +228,14 @@ class OAuthClient:
                 access_token = self._refresh_access_token(user_id, refresh_token, feature)
 
         return access_token
+
+    def get_slack_team_id(self, user_id: str) -> Optional[str]:
+        """Look up the Slack team_id for a user from their session document."""
+        firestore_client = self._get_firestore_client()
+        if not firestore_client:
+            return None
+        normalized = self._normalize_user_id(user_id)
+        doc = firestore_client.collection("sms_sessions").document(normalized).get()
+        if doc.exists:
+            return doc.to_dict().get("slack_team_id")
+        return None

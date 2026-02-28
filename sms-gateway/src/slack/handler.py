@@ -100,8 +100,9 @@ async def handle_slack_webhook(
         return Response(status_code=200)
 
     event_id = payload.get("event_id", "")
+    team_id = payload.get("team_id", "")
     logger.info(
-        f"Received Slack DM: user={user_id}, event_id={event_id}, "
+        f"Received Slack DM: user={user_id}, team={team_id}, event_id={event_id}, "
         f"text length={len(text)}"
     )
 
@@ -109,12 +110,13 @@ async def handle_slack_webhook(
         process_slack_message,
         user_id=user_id,
         message=text,
+        team_id=team_id,
     )
 
     return Response(status_code=200)
 
 
-async def process_slack_message(user_id: str, message: str) -> None:
+async def process_slack_message(user_id: str, message: str, team_id: str = "") -> None:
     """Process incoming Slack DM in the background.
 
     Flow (no opt-in required for Slack workspace users):
@@ -153,6 +155,9 @@ async def process_slack_message(user_id: str, message: str) -> None:
             f"is_new_session={session_info.is_new_session}"
         )
 
+        # Store slack_team_id before agent runs so tools can read it from Firestore
+        await _session_manager.update_last_activity(user_id, channel="slack", slack_team_id=team_id)
+
         # Query the agent
         try:
             response = await _agent_client.send_message(
@@ -178,9 +183,6 @@ async def process_slack_message(user_id: str, message: str) -> None:
 
         # Send response
         await _slack_sender.send(user_id, response)
-
-        # Update session activity
-        await _session_manager.update_last_activity(user_id, channel="slack")
 
         processing_time = (time.time() - start_time) * 1000
         logger.info(

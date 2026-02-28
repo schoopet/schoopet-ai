@@ -1,4 +1,10 @@
-"""Google Calendar tool for agent using OAuth tokens."""
+"""Google Calendar tool for agent using OAuth tokens.
+
+Token resolution order (per operation):
+1. System token (workspace_system) — succeeds if the calendar is shared with the agent account.
+2. User personal token (calendar) — backwards-compatible fallback.
+3. Neither works → two-option message (authorize as you, or share with agent account).
+"""
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
@@ -9,13 +15,37 @@ from .oauth_client import OAuthClient
 # Google Calendar API endpoints
 CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 
+# System-level shared agent account constants
+CALENDAR_SYSTEM_USER_ID = "email_system"
+CALENDAR_SYSTEM_FEATURE = "workspace_system"
+AGENT_EMAIL = "schoopet.agent@gmail.com"
+
+SLACK_ALLOWED_TEAM_ID = os.getenv("SLACK_ALLOWED_TEAM_ID", "")
+
+
+def _is_allowed_slack_user(user_id: str, oauth_client: "OAuthClient") -> bool:
+    """Return True only if user belongs to the configured Slack workspace."""
+    if not SLACK_ALLOWED_TEAM_ID:
+        return False
+    return oauth_client.get_slack_team_id(user_id) == SLACK_ALLOWED_TEAM_ID
+
+
+def _no_calendar_access(phone: str, oauth_client: "OAuthClient") -> str:
+    link = oauth_client.get_oauth_link(phone, "calendar")
+    return (
+        f"Schoopet's shared account ({AGENT_EMAIL}) can't access your calendar.\n\n"
+        f"**Option 1 – Authorize me to act as you**:\n{link}\n\n"
+        f"**Option 2 – Share with Schoopet**: Share your Google Calendar with "
+        f"{AGENT_EMAIL} (add as reader/editor in Calendar settings)."
+    )
+
 
 class CalendarTool:
-    """Tool for accessing Google Calendar via user OAuth tokens.
+    """Tool for accessing Google Calendar via OAuth tokens.
 
-    This tool fetches OAuth tokens stored by the SMS Gateway and uses them
-    to access the user's Google Calendar. If no token exists, it returns
-    a link for the user to authorize access.
+    Tries the shared agent account first, then falls back to the user's
+    personal "calendar" OAuth token. If neither works, returns a two-option
+    message explaining how to grant access.
     """
 
     def __init__(self):
@@ -37,7 +67,6 @@ class CalendarTool:
         else:
             start_dt = start.get("dateTime", "")
             end_dt = end.get("dateTime", "")
-            # Parse and format nicely
             try:
                 start_parsed = datetime.fromisoformat(start_dt.replace("Z", "+00:00"))
                 end_parsed = datetime.fromisoformat(end_dt.replace("Z", "+00:00"))
@@ -54,6 +83,121 @@ class CalendarTool:
             result += f" [ID: {event_id}]"
 
         return result
+
+    # ── Private token-specific helpers ─────────────────────────────────────────
+
+    def _list_events_with_token(
+        self,
+        token: str,
+        start_dt: datetime,
+        end_dt: datetime,
+        max_results: int,
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> Optional[str]:
+        """Attempt to list events using the given token. Returns None on 401/403."""
+        import httpx
+
+        with httpx.Client() as client:
+            response = client.get(
+                f"{CALENDAR_API_BASE}/calendars/primary/events",
+                headers={"Authorization": f"Bearer {token}"},
+                params={
+                    "timeMin": start_dt.isoformat(),
+                    "timeMax": end_dt.isoformat(),
+                    "maxResults": max_results,
+                    "singleEvents": "true",
+                    "orderBy": "startTime",
+                },
+            )
+
+        if response.status_code in (401, 403):
+            return None
+
+        response.raise_for_status()
+        events = response.json().get("items", [])
+        if not events:
+            return f"No events found between {start_date or 'today'} and {end_date or '7 days from now'}."
+
+        formatted_events = [self._format_event(event) for event in events]
+        return f"Found {len(events)} event(s):\n" + "\n".join(formatted_events)
+
+    def _create_event_with_token(
+        self,
+        token: str,
+        event: dict,
+        title: str,
+        start: str,
+    ) -> Optional[str]:
+        """Attempt to create an event using the given token. Returns None on 401/403."""
+        import httpx
+
+        with httpx.Client() as client:
+            response = client.post(
+                f"{CALENDAR_API_BASE}/calendars/primary/events",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=event,
+            )
+
+        if response.status_code in (401, 403):
+            return None
+
+        response.raise_for_status()
+        created_event = response.json()
+        event_link = created_event.get("htmlLink", "")
+        return f"Created event: '{title}' on {start}. Link: {event_link}"
+
+    def _update_event_with_token(
+        self,
+        token: str,
+        event_id: str,
+        existing_event: dict,
+    ) -> Optional[str]:
+        """Attempt to update an event using the given token. Returns None on 401/403."""
+        import httpx
+
+        with httpx.Client() as client:
+            response = client.put(
+                f"{CALENDAR_API_BASE}/calendars/primary/events/{event_id}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=existing_event,
+            )
+
+        if response.status_code in (401, 403):
+            return None
+
+        response.raise_for_status()
+        return f"Updated event: '{existing_event.get('summary', event_id)}'"
+
+    def _fetch_event_with_token(
+        self,
+        token: str,
+        event_id: str,
+    ) -> Optional[dict]:
+        """Fetch an existing event. Returns None on 401/403, raises on 404."""
+        import httpx
+
+        with httpx.Client() as client:
+            response = client.get(
+                f"{CALENDAR_API_BASE}/calendars/primary/events/{event_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        if response.status_code == 404:
+            raise ValueError(f"Event not found: {event_id}")
+        if response.status_code in (401, 403):
+            return None
+
+        response.raise_for_status()
+        return response.json()
+
+    # ── Public methods with system-first fallback ───────────────────────────────
 
     def list_calendar_events(
         self,
@@ -75,7 +219,7 @@ class CalendarTool:
                 UTC for the Google Calendar API. Defaults to "UTC".
 
         Returns:
-            Formatted list of events or authorization link if not connected.
+            Formatted list of events or access instructions if not connected.
 
         Note:
             - Requires user_id from tool_context (phone number).
@@ -84,29 +228,16 @@ class CalendarTool:
             - When the user expresses a time range (e.g., "today", "tomorrow"), the agent
               should determine their timezone and pass it here.
         """
-        # Validate tool_context
         if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
             return "ERROR: Cannot access calendar - no user_id in tool_context."
 
         phone_number = tool_context.user_id
 
-        # Check for valid token
-        access_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
-        if not access_token:
-            oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-            return (
-                f"Your Google Calendar is not connected yet. "
-                f"Please authorize access by visiting:\n{oauth_link}\n\n"
-                f"After authorizing, try again."
-            )
-
-        # Validate and get user timezone
         try:
             user_tz = ZoneInfo(user_timezone)
         except KeyError:
             return f"Invalid timezone: {user_timezone}. Use IANA format (e.g., 'America/Los_Angeles')."
 
-        # Parse dates in user's local timezone, then convert to UTC for the Calendar API
         try:
             if start_date:
                 start_local = datetime.strptime(start_date, "%Y-%m-%d").replace(
@@ -128,44 +259,28 @@ class CalendarTool:
         except ValueError as e:
             return f"Invalid date format. Please use YYYY-MM-DD. Error: {e}"
 
-        # Call Calendar API
         try:
-            # Import here to avoid issues during pickling
-            import httpx
-
-            with httpx.Client() as client:
-                response = client.get(
-                    f"{CALENDAR_API_BASE}/calendars/primary/events",
-                    headers={"Authorization": f"Bearer {access_token}"},
-                    params={
-                        "timeMin": start_dt.isoformat(),
-                        "timeMax": end_dt.isoformat(),
-                        "maxResults": max_results,
-                        "singleEvents": "true",
-                        "orderBy": "startTime",
-                    },
+            sys_token = self._oauth_client.get_valid_access_token(
+                CALENDAR_SYSTEM_USER_ID, CALENDAR_SYSTEM_FEATURE
+            )
+            if sys_token and _is_allowed_slack_user(phone_number, self._oauth_client):
+                result = self._list_events_with_token(
+                    sys_token, start_dt, end_dt, max_results, start_date, end_date
                 )
+                if result is not None:
+                    return result
 
-                if response.status_code == 401:
-                    # Token might be revoked
-                    oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-                    return (
-                        f"Your calendar authorization has expired. "
-                        f"Please re-authorize by visiting:\n{oauth_link}"
-                    )
-
-                response.raise_for_status()
-                data = response.json()
-
-            events = data.get("items", [])
-            if not events:
-                return f"No events found between {start_date or 'today'} and {end_date or '7 days from now'}."
-
-            formatted_events = [self._format_event(event) for event in events]
-            return f"Found {len(events)} event(s):\n" + "\n".join(formatted_events)
-
+            user_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
+            if user_token:
+                result = self._list_events_with_token(
+                    user_token, start_dt, end_dt, max_results, start_date, end_date
+                )
+                if result is not None:
+                    return result
         except Exception as e:
             return f"Error accessing calendar: {str(e)}"
+
+        return _no_calendar_access(phone_number, self._oauth_client)
 
     def create_calendar_event(
         self,
@@ -192,41 +307,27 @@ class CalendarTool:
                 Used to interpret event times and set the event's timezone.
 
         Returns:
-            Confirmation message or authorization link if not connected.
+            Confirmation message or access instructions if not connected.
 
         Note: Requires user_id from tool_context (phone number).
         """
-        # Validate tool_context
         if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
             return "ERROR: Cannot access calendar - no user_id in tool_context."
 
         phone_number = tool_context.user_id
 
-        # Check for valid token
-        access_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
-        if not access_token:
-            oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-            return (
-                f"Your Google Calendar is not connected yet. "
-                f"Please authorize access by visiting:\n{oauth_link}\n\n"
-                f"After authorizing, try again."
-            )
-
         # Build event payload
         event = {"summary": title}
-
         if description:
             event["description"] = description
         if location:
             event["location"] = location
 
         try:
-            if all_day or len(start) == 10:  # YYYY-MM-DD format
-                # All-day event
+            if all_day or len(start) == 10:
                 event["start"] = {"date": start}
                 event["end"] = {"date": end or start}
             else:
-                # Timed event
                 if "T" not in start:
                     start = f"{start}T00:00:00"
 
@@ -244,36 +345,24 @@ class CalendarTool:
         except ValueError as e:
             return f"Invalid datetime format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM. Error: {e}"
 
-        # Create event via API
         try:
-            # Import here to avoid issues during pickling
-            import httpx
+            sys_token = self._oauth_client.get_valid_access_token(
+                CALENDAR_SYSTEM_USER_ID, CALENDAR_SYSTEM_FEATURE
+            )
+            if sys_token and _is_allowed_slack_user(phone_number, self._oauth_client):
+                result = self._create_event_with_token(sys_token, event, title, start)
+                if result is not None:
+                    return result
 
-            with httpx.Client() as client:
-                response = client.post(
-                    f"{CALENDAR_API_BASE}/calendars/primary/events",
-                    headers={
-                        "Authorization": f"Bearer {access_token}",
-                        "Content-Type": "application/json",
-                    },
-                    json=event,
-                )
-
-                if response.status_code == 401:
-                    oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-                    return (
-                        f"Your calendar authorization has expired. "
-                        f"Please re-authorize by visiting:\n{oauth_link}"
-                    )
-
-                response.raise_for_status()
-                created_event = response.json()
-
-            event_link = created_event.get("htmlLink", "")
-            return f"Created event: '{title}' on {start}. Link: {event_link}"
-
+            user_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
+            if user_token:
+                result = self._create_event_with_token(user_token, event, title, start)
+                if result is not None:
+                    return result
         except Exception as e:
             return f"Error creating event: {str(e)}"
+
+        return _no_calendar_access(phone_number, self._oauth_client)
 
     def update_calendar_event(
         self,
@@ -304,46 +393,39 @@ class CalendarTool:
 
         Note: Requires user_id from tool_context (phone number).
         """
-        # Validate tool_context
         if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
             return "ERROR: Cannot access calendar - no user_id in tool_context."
 
         phone_number = tool_context.user_id
 
-        # Check for valid token
-        access_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
-        if not access_token:
-            oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-            return (
-                f"Your Google Calendar is not connected yet. "
-                f"Please authorize access by visiting:\n{oauth_link}\n\n"
-                f"After authorizing, try again."
-            )
-
-        # Import here to avoid issues during pickling
-        import httpx
-
-        # First, get the existing event
+        # Try to fetch the existing event with a working token, then update it
         try:
-            with httpx.Client() as client:
-                response = client.get(
-                    f"{CALENDAR_API_BASE}/calendars/primary/events/{event_id}",
-                    headers={"Authorization": f"Bearer {access_token}"},
-                )
+            raw_sys_token = self._oauth_client.get_valid_access_token(
+                CALENDAR_SYSTEM_USER_ID, CALENDAR_SYSTEM_FEATURE
+            )
+            sys_token = raw_sys_token if _is_allowed_slack_user(phone_number, self._oauth_client) else None
+            user_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
 
-                if response.status_code == 404:
-                    return f"Event not found: {event_id}"
-                if response.status_code == 401:
-                    oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-                    return f"Authorization expired. Please re-authorize: {oauth_link}"
+            existing_event = None
+            active_token = None
 
-                response.raise_for_status()
-                existing_event = response.json()
+            for token in filter(None, [sys_token, user_token]):
+                try:
+                    fetched = self._fetch_event_with_token(token, event_id)
+                    if fetched is not None:
+                        existing_event = fetched
+                        active_token = token
+                        break
+                except ValueError as e:
+                    return str(e)  # 404 — event not found
+
+            if existing_event is None or active_token is None:
+                return _no_calendar_access(phone_number, self._oauth_client)
 
         except Exception as e:
             return f"Error fetching event: {str(e)}"
 
-        # Update fields
+        # Apply updates to event payload
         if title:
             existing_event["summary"] = title
         if description:
@@ -371,63 +453,44 @@ class CalendarTool:
         except ValueError as e:
             return f"Invalid datetime format: {e}"
 
-        # Update event via API
         try:
-            with httpx.Client() as client:
-                response = client.put(
-                    f"{CALENDAR_API_BASE}/calendars/primary/events/{event_id}",
-                    headers={
-                        "Authorization": f"Bearer {access_token}",
-                        "Content-Type": "application/json",
-                    },
-                    json=existing_event,
-                )
-
-                if response.status_code == 401:
-                    oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-                    return f"Authorization expired. Please re-authorize: {oauth_link}"
-
-                response.raise_for_status()
-
-            return f"Updated event: '{existing_event.get('summary', event_id)}'"
-
+            result = self._update_event_with_token(active_token, event_id, existing_event)
+            if result is not None:
+                return result
         except Exception as e:
             return f"Error updating event: {str(e)}"
+
+        return _no_calendar_access(phone_number, self._oauth_client)
 
     def get_calendar_status(self, tool_context: ToolContext = None) -> str:
         """
         Check if Google Calendar is connected for the user.
 
         Returns:
-            Connection status and email if connected, or authorization link if not.
+            Connection status (system account, personal account, or neither).
 
         Note: Requires user_id from tool_context (phone number).
         """
-        # Validate tool_context
         if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
             return "ERROR: Cannot check calendar status - no user_id in tool_context."
 
         phone_number = tool_context.user_id
+        lines = []
 
-        token_data = self._oauth_client.get_token_data(phone_number, "calendar")
-        if not token_data:
-            oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-            return (
-                f"Google Calendar is not connected. "
-                f"To connect, visit:\n{oauth_link}"
-            )
+        sys_token = self._oauth_client.get_valid_access_token(
+            CALENDAR_SYSTEM_USER_ID, CALENDAR_SYSTEM_FEATURE
+        )
+        if sys_token and _is_allowed_slack_user(phone_number, self._oauth_client):
+            lines.append(f"System account ({AGENT_EMAIL}) is authorized for calendar access.")
+        else:
+            lines.append(f"System account ({AGENT_EMAIL}) is NOT authorized (or not a Slack workspace user).")
 
-        email = token_data.get("email", "Unknown")
-        is_expired = self._oauth_client.is_token_expired(token_data)
+        user_token_data = self._oauth_client.get_token_data(phone_number, "calendar")
+        if user_token_data:
+            email = user_token_data.get("email", "Unknown")
+            lines.append(f"Personal account ({email}) is authorized.")
+        else:
+            link = self._oauth_client.get_oauth_link(phone_number, "calendar")
+            lines.append(f"Personal account is not connected. Authorize here:\n{link}")
 
-        if is_expired:
-            # Try to refresh
-            access_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
-            if not access_token:
-                oauth_link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-                return (
-                    f"Google Calendar connection has expired. "
-                    f"Please re-authorize:\n{oauth_link}"
-                )
-
-        return f"Google Calendar is connected to: {email}"
+        return "\n".join(lines)

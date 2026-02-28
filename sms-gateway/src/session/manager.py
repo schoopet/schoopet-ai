@@ -224,21 +224,25 @@ class SessionManager:
             is_new_user=False,
         )
 
-    async def update_last_activity(self, phone_number: str, channel: str = "sms") -> None:
+    async def update_last_activity(self, phone_number: str, channel: str = "sms", slack_team_id: str = "") -> None:
         """Update session's last activity timestamp, channel, and increment message count.
 
         Args:
             phone_number: User's phone number in E.164 format.
             channel: The channel used for this message (sms or whatsapp).
+            slack_team_id: Slack workspace team_id (optional, only stored when non-empty).
         """
         doc_id = self._normalize_user_id(phone_number)
         doc_ref = self._collection.document(doc_id)
 
-        await doc_ref.update({
+        update_data = {
             "last_activity": datetime.now(timezone.utc),
             "message_count": firestore.Increment(1),
             "channel": channel,
-        })
+        }
+        if slack_team_id:
+            update_data["slack_team_id"] = slack_team_id
+        await doc_ref.update(update_data)
 
     async def get_session(self, phone_number: str) -> Optional[SessionDocument]:
         """Get session document if it exists.

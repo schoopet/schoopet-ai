@@ -18,6 +18,7 @@ class SessionDocument(BaseModel):
     opted_in: bool = Field(default=False, description="Whether user has opted in to receive messages")
     opt_in_requested_at: Optional[datetime] = Field(default=None, description="When opt-in was first requested")
     channel: str = Field(default="sms", description="Last used channel: sms or whatsapp")
+    slack_team_id: Optional[str] = Field(default=None, description="Slack workspace team_id")
 
     def to_firestore(self) -> dict:
         """Convert to Firestore-compatible dictionary."""
@@ -32,6 +33,8 @@ class SessionDocument(BaseModel):
         }
         if self.opt_in_requested_at:
             data["opt_in_requested_at"] = self.opt_in_requested_at
+        if self.slack_team_id:
+            data["slack_team_id"] = self.slack_team_id
         return data
 
     @classmethod
@@ -46,6 +49,7 @@ class SessionDocument(BaseModel):
             opted_in=data.get("opted_in", False),
             opt_in_requested_at=data.get("opt_in_requested_at"),
             channel=data.get("channel", "sms"),
+            slack_team_id=data.get("slack_team_id"),
         )
 
 
