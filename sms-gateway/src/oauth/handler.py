@@ -196,15 +196,18 @@ async def initiate_oauth(
             detail="Invalid or expired authorization link. Please request a new one from the assistant.",
         )
 
+    # Allow the system email key to bypass E.164 phone validation and opt-in check
+    is_system_key = phone == "email_system"
+
     # Validate phone number format (should always pass if token is valid)
-    if not _validate_phone(phone):
+    if not is_system_key and not _validate_phone(phone):
         raise HTTPException(
             status_code=400,
             detail="Invalid phone number in token",
         )
 
-    # Optionally verify user is opted in
-    if _session_manager:
+    # Optionally verify user is opted in (skip for system keys)
+    if not is_system_key and _session_manager:
         session = await _session_manager.get_session(phone)
         if not session or not session.opted_in:
             raise HTTPException(

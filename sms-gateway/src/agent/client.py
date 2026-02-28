@@ -1,9 +1,10 @@
 """Vertex AI Agent Engine client wrapper."""
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Union
 
 import vertexai
+from google.genai import types
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ class AgentEngineClient:
         self,
         user_id: str,
         session_id: str,
-        message: str,
+        message: Union[str, types.Content],
     ) -> str:
         """Send a message to the agent and collect the full response.
 
@@ -75,7 +76,8 @@ class AgentEngineClient:
         Args:
             user_id: User identifier (phone number).
             session_id: Agent Engine session ID.
-            message: The user's message text.
+            message: The user's message — either a plain string or a
+                     types.Content with multimodal parts (text + inline_data).
 
         Returns:
             The complete agent response text.

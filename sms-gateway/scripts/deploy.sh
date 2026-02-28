@@ -61,8 +61,8 @@ gcloud run deploy "$SERVICE_NAME" \
     --memory 512Mi \
     --cpu 1 \
     --timeout 300 \
-    --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=$REGION,AGENT_ENGINE_ID=$AGENT_ENGINE_ID,GOOGLE_OAUTH_REDIRECT_URI=https://api.schoopet.com/oauth/google/callback" \
-    --set-secrets "TWILIO_ACCOUNT_SID=twilio-account-sid:latest,TWILIO_AUTH_TOKEN=twilio-auth-token:latest,TWILIO_PHONE_NUMBER=twilio-phone-number:latest,TWILIO_WHATSAPP_NUMBER=twilio-whatsapp-number:latest,GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,TELEGRAM_BOT_TOKEN=telegram-bot-token:latest"
+    --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=$REGION,AGENT_ENGINE_ID=$AGENT_ENGINE_ID,GOOGLE_OAUTH_REDIRECT_URI=https://api.schoopet.com/oauth/google/callback,EMAIL_DRIVE_FOLDER_ID=${EMAIL_DRIVE_FOLDER_ID:-},EMAIL_SHEET_ID=${EMAIL_SHEET_ID:-},EMAIL_PUBSUB_TOPIC=projects/mmontan-ml/topics/email-notifications" \
+    --set-secrets "TWILIO_ACCOUNT_SID=twilio-account-sid:latest,TWILIO_AUTH_TOKEN=twilio-auth-token:latest,TWILIO_PHONE_NUMBER=twilio-phone-number:latest,TWILIO_WHATSAPP_NUMBER=twilio-whatsapp-number:latest,GOOGLE_OAUTH_CLIENT_ID=google-oauth-client-id:latest,GOOGLE_OAUTH_CLIENT_SECRET=google-oauth-client-secret:latest,TELEGRAM_BOT_TOKEN=telegram-bot-token:latest,SLACK_BOT_TOKEN=slack-bot-token:latest,SLACK_SIGNING_SECRET=slack-signing-secret:latest"
 
 # Get the service URL
 echo ""
