@@ -1,62 +1,303 @@
-[
+{
+  "eval_set_id": "55655525-7943-4d1a-901b-ddd4d0c91961",
+  "name": "55655525-7943-4d1a-901b-ddd4d0c91961",
+  "description": null,
+  "eval_cases": [
     {
-        "query": "What's the weather like in San Francisco today?",
-        "expected_tool_use": [
-            {
-                "tool_name": "search_agent",
-                "tool_input": {
-                    "request": "What's the weather like in San Francisco today?"
-                }
-            }
-        ],
-        "reference": "The weather in San Francisco today includes current temperature, humidity levels, and forecast conditions. The temperature is around 50°F with varying cloud cover and potential for light precipitation."
-    },
-    {
-        "query": "What are the best Italian restaurants near downtown San Francisco?",
-        "expected_tool_use": [
-            {
-                "tool_name": "search_agent",
-                "tool_input": {
-                    "request": "What are the best Italian restaurants near downtown San Francisco?"
-                }
-            }
-        ],
-        "reference": "Based on current reviews and ratings, here are some highly-rated Italian restaurants near downtown San Francisco in areas like the Financial District and North Beach, offering authentic Italian cuisine with homemade pasta and traditional dishes."
-    },
-    {
-        "query": "What time does Olive Garden close today?",
-        "expected_tool_use": [
-            {
-                "tool_name": "search_agent",
-                "tool_input": {
-                    "request": "What time does Olive Garden close today?"
-                }
-            }
-        ],
-        "reference": "Olive Garden typically closes around 10:00 PM or 11:00 PM depending on the location and day of the week. Hours may vary by specific location."
-    },
-    {
-        "query": "What are the latest reviews for the iPhone 16?",
-        "expected_tool_use": [
-            {
-                "tool_name": "search_agent",
-                "tool_input": {
-                    "request": "What are the latest reviews for the iPhone 16?"
-                }
-            }
-        ],
-        "reference": "The iPhone 16 has received positive reviews highlighting new features, improved camera capabilities, performance upgrades, and battery life. Reviews discuss the overall design, pricing, and how it compares to previous models."
-    },
-    {
-        "query": "What's the current stock price of Apple?",
-        "expected_tool_use": [
-            {
-                "tool_name": "search_agent",
-                "tool_input": {
-                    "request": "What's the current stock price of Apple?"
-                }
-            }
-        ],
-        "reference": "Apple's stock price is currently trading with daily market fluctuations. The stock price includes current value, percentage change, and market performance indicators."
+      "eval_id": "schoopet/evals/data/search.test.json",
+      "conversation": [
+        {
+          "invocation_id": "8c938d33-ab05-48e2-a232-e0f0d8652101",
+          "user_content": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "What's the weather like in San Francisco today?",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "The weather in San Francisco today includes current temperature, humidity levels, and forecast conditions. The temperature is around 50°F with varying cloud cover and potential for light precipitation.",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "id": null,
+                "args": {
+                  "request": "What's the weather like in San Francisco today?"
+                },
+                "name": "search_agent",
+                "partial_args": null,
+                "will_continue": null
+              }
+            ],
+            "tool_responses": [],
+            "intermediate_responses": []
+          },
+          "creation_timestamp": 1772286746.911679,
+          "rubrics": null,
+          "app_details": null
+        },
+        {
+          "invocation_id": "72adfa11-aae4-460c-851d-e806f1c838bc",
+          "user_content": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "What are the best Italian restaurants near downtown San Francisco?",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "Based on current reviews and ratings, here are some highly-rated Italian restaurants near downtown San Francisco in areas like the Financial District and North Beach, offering authentic Italian cuisine with homemade pasta and traditional dishes.",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "id": null,
+                "args": {
+                  "request": "What are the best Italian restaurants near downtown San Francisco?"
+                },
+                "name": "search_agent",
+                "partial_args": null,
+                "will_continue": null
+              }
+            ],
+            "tool_responses": [],
+            "intermediate_responses": []
+          },
+          "creation_timestamp": 1772286746.911693,
+          "rubrics": null,
+          "app_details": null
+        },
+        {
+          "invocation_id": "a69cd273-48f6-4db8-894e-fe5d9d731918",
+          "user_content": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "What time does Olive Garden close today?",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "Olive Garden typically closes around 10:00 PM or 11:00 PM depending on the location and day of the week. Hours may vary by specific location.",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "id": null,
+                "args": {
+                  "request": "What time does Olive Garden close today?"
+                },
+                "name": "search_agent",
+                "partial_args": null,
+                "will_continue": null
+              }
+            ],
+            "tool_responses": [],
+            "intermediate_responses": []
+          },
+          "creation_timestamp": 1772286746.911707,
+          "rubrics": null,
+          "app_details": null
+        },
+        {
+          "invocation_id": "c7421c95-9830-467a-93d8-ad05acfdfd16",
+          "user_content": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "What are the latest reviews for the iPhone 16?",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "The iPhone 16 has received positive reviews highlighting new features, improved camera capabilities, performance upgrades, and battery life. Reviews discuss the overall design, pricing, and how it compares to previous models.",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "id": null,
+                "args": {
+                  "request": "What are the latest reviews for the iPhone 16?"
+                },
+                "name": "search_agent",
+                "partial_args": null,
+                "will_continue": null
+              }
+            ],
+            "tool_responses": [],
+            "intermediate_responses": []
+          },
+          "creation_timestamp": 1772286746.911724,
+          "rubrics": null,
+          "app_details": null
+        },
+        {
+          "invocation_id": "8b87bfe6-c9ce-4925-a1ca-a3c49bc0e71a",
+          "user_content": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "What's the current stock price of Apple?",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "Apple's stock price is currently trading with daily market fluctuations. The stock price includes current value, percentage change, and market performance indicators.",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "id": null,
+                "args": {
+                  "request": "What's the current stock price of Apple?"
+                },
+                "name": "search_agent",
+                "partial_args": null,
+                "will_continue": null
+              }
+            ],
+            "tool_responses": [],
+            "intermediate_responses": []
+          },
+          "creation_timestamp": 1772286746.9117372,
+          "rubrics": null,
+          "app_details": null
+        }
+      ],
+      "conversation_scenario": null,
+      "session_input": null,
+      "creation_timestamp": 1772286746.9117382,
+      "rubrics": null,
+      "final_session_state": {}
     }
-]
+  ],
+  "creation_timestamp": 1772286746.9117398
+}

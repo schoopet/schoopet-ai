@@ -1,29 +1,135 @@
-[
+{
+  "eval_set_id": "95c158be-53a7-42af-a41b-301d57528723",
+  "name": "95c158be-53a7-42af-a41b-301d57528723",
+  "description": null,
+  "eval_cases": [
     {
-        "query": "Create a background research task with instruction 'Research history of jazz'.",
-        "expected_tool_use": [
-            {
-                "tool_name": "create_async_task",
-                "tool_input": {
-                    "task_type": "research",
-                    "instruction": "Research history of jazz"
-                }
-            }
-        ],
-        "reference": "I have created a research task to research the history of jazz."
-    },
-    {
-        "query": "Set a reminder to 'Call Mom' in 60 minutes using an async task.",
-        "expected_tool_use": [
-            {
-                "tool_name": "create_async_task",
-                "tool_input": {
-                    "task_type": "reminder",
-                    "instruction": "Call Mom",
-                    "schedule_delay_minutes": 60
-                }
-            }
-        ],
-        "reference": "I have set a reminder to call Mom in 60 minutes."
+      "eval_id": "schoopet/evals/data/async_tasks.test.json",
+      "conversation": [
+        {
+          "invocation_id": "9f856cf7-d3bd-48e5-8e47-85126c956a18",
+          "user_content": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "Create a background research task with instruction 'Research history of jazz'.",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "I have created a research task to research the history of jazz.",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "id": null,
+                "args": {
+                  "task_type": "research",
+                  "instruction": "Research history of jazz"
+                },
+                "name": "create_async_task",
+                "partial_args": null,
+                "will_continue": null
+              }
+            ],
+            "tool_responses": [],
+            "intermediate_responses": []
+          },
+          "creation_timestamp": 1772286746.912063,
+          "rubrics": null,
+          "app_details": null
+        },
+        {
+          "invocation_id": "3e1f749a-448c-434a-b7d5-b674dff50922",
+          "user_content": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "Set a reminder to 'Call Mom' in 60 minutes using an async task.",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "media_resolution": null,
+                "code_execution_result": null,
+                "executable_code": null,
+                "file_data": null,
+                "function_call": null,
+                "function_response": null,
+                "inline_data": null,
+                "text": "I have set a reminder to call Mom in 60 minutes.",
+                "thought": null,
+                "thought_signature": null,
+                "video_metadata": null
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "id": null,
+                "args": {
+                  "task_type": "reminder",
+                  "instruction": "Call Mom",
+                  "schedule_delay_minutes": 60
+                },
+                "name": "create_async_task",
+                "partial_args": null,
+                "will_continue": null
+              }
+            ],
+            "tool_responses": [],
+            "intermediate_responses": []
+          },
+          "creation_timestamp": 1772286746.912077,
+          "rubrics": null,
+          "app_details": null
+        }
+      ],
+      "conversation_scenario": null,
+      "session_input": null,
+      "creation_timestamp": 1772286746.9120781,
+      "rubrics": null,
+      "final_session_state": {}
     }
-]
+  ],
+  "creation_timestamp": 1772286746.912079
+}
