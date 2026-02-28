@@ -1,6 +1,7 @@
 """Vertex AI Agent Engine client wrapper."""
 import asyncio
 import logging
+import time
 from typing import Optional, Union
 
 import vertexai
@@ -88,8 +89,11 @@ class AgentEngineClient:
         logger.info(f"Sending message to agent: user={user_id}, session={session_id}")
 
         full_response = []
+        t_start = time.monotonic()
+        ttft_ms: float | None = None
 
         async def stream_response():
+            nonlocal ttft_ms
             async for event in self._adk_app.async_stream_query(
                 user_id=user_id,
                 session_id=session_id,
@@ -113,6 +117,8 @@ class AgentEngineClient:
                         parts = content.get("parts", [])
                         for part in parts:
                             if isinstance(part, dict) and "text" in part:
+                                if ttft_ms is None:
+                                    ttft_ms = (time.monotonic() - t_start) * 1000
                                 full_response.append(part["text"])
                     continue
 
@@ -121,12 +127,20 @@ class AgentEngineClient:
                     if hasattr(event.content, "parts"):
                         for part in event.content.parts:
                             if hasattr(part, "text") and part.text:
+                                if ttft_ms is None:
+                                    ttft_ms = (time.monotonic() - t_start) * 1000
                                 full_response.append(part.text)
 
         # Apply timeout to the streaming operation
         await asyncio.wait_for(stream_response(), timeout=self._timeout)
 
+        total_ms = (time.monotonic() - t_start) * 1000
         response_text = "".join(full_response)
-        logger.info(f"Agent response length: {len(response_text)} chars")
+        logger.info(
+            f"Agent response: {len(response_text)} chars "
+            f"[ttft={ttft_ms:.0f}ms, total={total_ms:.0f}ms]"
+            if ttft_ms is not None
+            else f"Agent response: {len(response_text)} chars [no text received, total={total_ms:.0f}ms]"
+        )
 
         return response_text

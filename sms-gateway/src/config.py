@@ -59,11 +59,6 @@ class Settings(BaseSettings):
             "https://www.googleapis.com/auth/userinfo.email",
             "openid",
         ],
-        "gmail_system": [
-            "https://www.googleapis.com/auth/gmail.readonly",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "openid",
-        ],
         "google-workspace": [
             "https://www.googleapis.com/auth/drive.file",
             "https://www.googleapis.com/auth/spreadsheets",
@@ -71,6 +66,7 @@ class Settings(BaseSettings):
             "openid",
         ],
         "workspace_system": [
+            "https://www.googleapis.com/auth/gmail.readonly",
             "https://www.googleapis.com/auth/drive.file",
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/calendar.events",

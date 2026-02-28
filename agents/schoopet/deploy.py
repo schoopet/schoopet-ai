@@ -44,6 +44,7 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
         "TASK_WORKER_URL": os.getenv("TASK_WORKER_URL", ""),
         "TASK_WORKER_SA": os.getenv("TASK_WORKER_SA", ""),
         "SMS_GATEWAY_URL": os.getenv("SMS_GATEWAY_URL", "https://api.schoopet.com"),
+        "SLACK_ALLOWED_TEAM_ID": os.getenv("SLACK_ALLOWED_TEAM_ID", ""),
     }
     # Filter out empty values
     env_vars = {k: v for k, v in env_vars_raw.items() if v}

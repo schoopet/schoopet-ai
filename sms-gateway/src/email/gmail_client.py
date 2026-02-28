@@ -1,7 +1,7 @@
 """Gmail API client for the email processing module.
 
-Uses the system gmail_system OAuth token (stored under phone key "email_system",
-feature "gmail_system") to read the dedicated inbox.
+Uses the system workspace_system OAuth token (stored under phone key "email_system",
+feature "workspace_system") to read the dedicated inbox.
 """
 import base64
 import logging
@@ -15,7 +15,7 @@ GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 # Fixed identifiers for the system Gmail account
 SYSTEM_PHONE = "email_system"
-SYSTEM_FEATURE = "gmail_system"
+SYSTEM_FEATURE = "workspace_system"
 
 # MIME types natively understood by Gemini as inline_data
 GEMINI_SUPPORTED_MIME_TYPES = {
@@ -72,7 +72,7 @@ class GmailClient:
         """
         token = await self._get_token()
         if not token:
-            logger.error("No gmail_system token available — cannot fetch messages")
+            logger.error("No workspace_system token available — cannot fetch messages")
             return []
 
         async with httpx.AsyncClient() as client:

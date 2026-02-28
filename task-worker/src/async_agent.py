@@ -58,16 +58,27 @@ class AsyncAgent:
 
     def _create_agent(self, instruction: str):
         """Create an ADK LlmAgent with the given instruction."""
+        import os
+        from functools import cached_property
         from google.adk.agents.llm_agent import LlmAgent
-        from google.adk.models.google_llm import Gemini
+        from google.adk.models.google_llm import Gemini as _BaseGemini
+        from google.genai import types
 
-        # Initialize Model (Gemini on Vertex AI)
-        model = Gemini(
-            model_name="gemini-3-flash-preview",
-            vertexai=True,
-            project=self.project,
-            location=self.location
-        )
+        class GlobalGemini(_BaseGemini):
+            @cached_property
+            def api_client(self):
+                from google.genai import Client
+                return Client(
+                    project=os.environ.get("GOOGLE_CLOUD_PROJECT"),
+                    location="global",
+                    http_options=types.HttpOptions(
+                        headers=self._tracking_headers(),
+                        retry_options=self.retry_options,
+                    ),
+                )
+
+        # Initialize Model (gemini-3-pro-preview requires the global endpoint)
+        model = GlobalGemini(model="gemini-3-pro-preview")
 
         agent = LlmAgent(
             name=f"async-{self.task_type}-agent",

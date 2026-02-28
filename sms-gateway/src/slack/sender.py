@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 MAX_MESSAGE_LENGTH = 3000
 
 SLACK_API_BASE = "https://slack.com/api"
+ACK_TEXT = "⏳ _Working on it..._"
 
 
 class SlackSender:
@@ -103,6 +104,47 @@ class SlackSender:
         self._channel_cache[user_id] = channel_id
         logger.info(f"Opened DM channel {channel_id} for Slack user {user_id}")
         return channel_id
+
+    async def send_ack(self, user_id: str) -> tuple[str, str]:
+        """Send an acknowledgment placeholder and return (channel_id, ts)."""
+        channel_id = await self._get_dm_channel(user_id)
+        response = await self._client.post(
+            f"{SLACK_API_BASE}/chat.postMessage",
+            headers=self._headers,
+            json={"channel": channel_id, "text": ACK_TEXT},
+        )
+        response.raise_for_status()
+        result = response.json()
+        if not result.get("ok"):
+            raise RuntimeError(f"Failed to send ack to {user_id}: {result.get('error')}")
+        return channel_id, result["message"]["ts"]
+
+    async def update_message(self, channel_id: str, ts: str, text: str) -> None:
+        """Update an existing Slack message in-place."""
+        response = await self._client.post(
+            f"{SLACK_API_BASE}/chat.update",
+            headers=self._headers,
+            json={"channel": channel_id, "ts": ts, "text": text or "(empty response)"},
+        )
+        response.raise_for_status()
+        result = response.json()
+        if not result.get("ok"):
+            logger.error(f"Slack chat.update error: {result.get('error')}")
+
+    async def send_response(self, channel_id: str, ack_ts: str, text: str) -> None:
+        """Replace ack message with response; overflow chunks posted as new messages."""
+        chunks = _split_message(text or "(empty response)")
+        await self.update_message(channel_id, ack_ts, chunks[0])
+        for chunk in chunks[1:]:
+            resp = await self._client.post(
+                f"{SLACK_API_BASE}/chat.postMessage",
+                headers=self._headers,
+                json={"channel": channel_id, "text": chunk},
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            if not result.get("ok"):
+                logger.error(f"Slack API error sending overflow chunk: {result.get('error')}")
 
     async def close(self):
         """Close the underlying HTTP client."""

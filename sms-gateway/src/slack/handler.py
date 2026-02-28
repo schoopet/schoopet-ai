@@ -122,10 +122,20 @@ async def process_slack_message(user_id: str, message: str, team_id: str = "") -
     Flow (no opt-in required for Slack workspace users):
     1. Get or create user record
     2. Auto opt-in on first message
-    3. Rate limit check
-    4. Forward to agent and send response
+    3. Send immediate ack
+    4. Rate limit check
+    5. Forward to agent and update ack with response
     """
     start_time = time.time()
+    channel_id: str | None = None
+    ack_ts: str | None = None
+
+    async def _reply(text: str) -> None:
+        """Update ack message or fall back to new message."""
+        if channel_id and ack_ts:
+            await _slack_sender.update_message(channel_id, ack_ts, text)
+        else:
+            await _slack_sender.send(user_id, text)
 
     try:
         # Get or create user record
@@ -136,6 +146,11 @@ async def process_slack_message(user_id: str, message: str, team_id: str = "") -
             logger.info(f"Auto opt-in for Slack user {user_id}")
             await _session_manager.set_opted_in(user_id)
 
+        # Acknowledge immediately before any slow operations
+        t_before_ack = time.time()
+        channel_id, ack_ts = await _slack_sender.send_ack(user_id)
+        ack_ms = (time.time() - t_before_ack) * 1000
+
         # Check rate limit
         if _rate_limiter:
             is_allowed, count = await _rate_limiter.check_and_increment(user_id)
@@ -143,7 +158,7 @@ async def process_slack_message(user_id: str, message: str, team_id: str = "") -
                 logger.warning(
                     f"Rate limit exceeded for Slack user {user_id}: {count} messages today"
                 )
-                await _slack_sender.send(user_id, RATE_LIMIT_MSG)
+                await _reply(RATE_LIMIT_MSG)
                 return
 
         # Get or create agent session
@@ -159,6 +174,7 @@ async def process_slack_message(user_id: str, message: str, team_id: str = "") -
         await _session_manager.update_last_activity(user_id, channel="slack", slack_team_id=team_id)
 
         # Query the agent
+        t_before_agent = time.time()
         try:
             response = await _agent_client.send_message(
                 user_id=user_id,
@@ -167,35 +183,30 @@ async def process_slack_message(user_id: str, message: str, team_id: str = "") -
             )
         except asyncio.TimeoutError:
             logger.error(f"Agent timeout for Slack user {user_id}")
-            await _slack_sender.send(
-                user_id,
-                "I'm taking longer than usual to respond. Please try again in a moment.",
-            )
+            await _reply("I'm taking longer than usual to respond. Please try again in a moment.")
             return
+        agent_ms = (time.time() - t_before_agent) * 1000
 
         if not response:
             logger.warning(f"Empty response from agent for Slack user {user_id}")
-            await _slack_sender.send(
-                user_id,
-                "I couldn't generate a response. Please try again.",
-            )
+            await _reply("I couldn't generate a response. Please try again.")
             return
 
-        # Send response
-        await _slack_sender.send(user_id, response)
+        # Replace ack with actual response (overflow chunks posted as new messages)
+        t_before_send = time.time()
+        await _slack_sender.send_response(channel_id, ack_ts, response)
+        send_ms = (time.time() - t_before_send) * 1000
 
-        processing_time = (time.time() - start_time) * 1000
+        total_ms = (time.time() - start_time) * 1000
         logger.info(
-            f"Processed Slack message in {processing_time:.0f}ms: "
+            f"Processed Slack message in {total_ms:.0f}ms "
+            f"[ack={ack_ms:.0f}ms, agent={agent_ms:.0f}ms, send={send_ms:.0f}ms]: "
             f"response sent to {user_id} ({len(response)} chars)"
         )
 
     except Exception as e:
         logger.exception(f"Error processing Slack message for {user_id}: {e}")
         try:
-            await _slack_sender.send(
-                user_id,
-                "Something went wrong. Please try again.",
-            )
+            await _reply("Something went wrong. Please try again.")
         except Exception as send_err:
             logger.error(f"Failed to send error message to Slack user {user_id}: {send_err}")

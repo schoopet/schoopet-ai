@@ -61,6 +61,7 @@ Environment variables can be set in `.env` file (agents/schoopet/.env):
 - `AGENT_ENGINE_ID` - Reasoning engine ID (from Vertex AI)
 - `OAUTH_BASE_URL` - SMS Gateway URL for OAuth links (e.g., "https://sms-gateway-xxx.run.app")
 - `GOOGLE_SDM_PROJECT_ID` - Google SDM project ID for smart home access (optional)
+- `SLACK_ALLOWED_TEAM_ID` - Slack workspace team_id that is allowed to use system OAuth tokens (find in Slack Admin > About). If unset, system tokens are never used.
 
 BigQuery MCP is enabled automatically when GOOGLE_CLOUD_PROJECT is set and BigQuery MCP service is enabled:
 ```bash
@@ -123,6 +124,34 @@ gcloud beta services mcp enable bigquery.googleapis.com --project=mmontan-ml
 2. Chat with deployed agent: Use `agent-engine-cli` (GitHub)
 3. Update deployment after code changes: `python -m schoopet.deploy` (uses existing AGENT_ENGINE_ID)
 
+### System Token (workspace_system)
+
+The system account (`schoopet.agent@gmail.com`) needs a `workspace_system` OAuth token to access Drive/Sheets/Calendar on behalf of allowed Slack users. To regenerate the auth link (expires in 10 minutes):
+
+```bash
+cd agents && source schoopet/.venv/bin/activate
+python3 -c "
+import sys; sys.path.insert(0, '.')
+import dotenv, pathlib
+dotenv.load_dotenv(pathlib.Path('schoopet/.env'))
+from schoopet.oauth_client import OAuthClient
+client = OAuthClient()
+print(client.get_oauth_link('email_system', 'workspace_system'))
+"
+```
+
+Open the printed link in a browser signed in as `schoopet.agent@gmail.com`.
+
+### Evals
+
+```bash
+# Run from agents/ directory (NOT agents/schoopet/)
+cd agents && python -m pytest schoopet/evals/test_eval.py -v
+
+# Eval data files must use .test.json extension
+# Located in agents/schoopet/evals/data/
+```
+
 ### Website Development
 
 ```bash
@@ -174,7 +203,7 @@ Direct memory management tools for explicit fact storage:
 The system uses a main agent with one native subagent and one shared tool agent:
 
 **Main Agent (Schoopet)**:
-- Model: `gemini-3.1-pro-preview`
+- Model: `gemini-3-pro-preview` (global endpoint only — see GlobalGemini below)
 - Conversational memory for social interactions and relationships
 - Automatic memory bank persistence
 - Direct memory tools (save/retrieve)
@@ -182,7 +211,7 @@ The system uses a main agent with one native subagent and one shared tool agent:
 - Uses `tools=[..., search_tool]` to access search capabilities.
 
 **Subagent 1: Structured Notes**:
-- Model: `gemini-3.1-pro-preview`
+- Model: `gemini-3-pro-preview`
 - Manages structured, queryable data via BigQuery tables
 - Full BigQuery MCP integration (5 tools: list datasets/tables, get info, execute SQL)
 - Uses `tools=[..., search_tool]` to enrich structured data with real-time info.
@@ -190,7 +219,7 @@ The system uses a main agent with one native subagent and one shared tool agent:
 - Authentication: Google Cloud credentials (automatic via ADK)
 
 **Tool Agent: Search**:
-- Model: `gemini-3.1-pro-preview` (Required for mixed tool support)
+- Model: `gemini-3-pro-preview` (Required for mixed tool support)
 - Wrapped as an `AgentTool` for use by other agents.
 - Performs real-time Google searches via GoogleSearchTool
 - Provides current information, factual lookups, and research.
@@ -227,6 +256,7 @@ The system uses feature-based OAuth token separation to manage different Google 
 **Supported Features**:
 - `calendar`: Google Calendar API (`calendar.events` scope)
 - `house`: Google Smart Device Management API (`sdm.service` scope)
+- `workspace_system`: System account (`schoopet.agent@gmail.com`) Drive + Sheets + Calendar scopes. Stored under `user_id="email_system"`. Firestore doc: `email_system_workspace_system`. Used by Drive/Sheets/Calendar tools when the requesting user belongs to the allowed Slack workspace (`SLACK_ALLOWED_TEAM_ID`).
 
 **OAuth Flow**:
 1. Agent tool detects missing token, generates HMAC-signed authorization link
@@ -283,3 +313,32 @@ Tools that access external Google APIs on behalf of users:
 - Base path set to './' for relative deployment
 - Minimal JavaScript (scroll effects only)
 - Static assets served from public/ directory
+
+### GlobalGemini — Global Vertex AI Endpoint
+
+`gemini-3-pro-preview` and other `gemini-3.x` preview models are only available on the **global** Vertex AI endpoint (`aiplatform.googleapis.com`), not the regional one (`us-central1-aiplatform.googleapis.com`).
+
+**Pattern**: All agents use `GlobalGemini` (`agents/schoopet/global_gemini.py`), a subclass of ADK's `Gemini` that overrides `api_client` to pass `location='global'` to the genai `Client`. This triggers the genai library to automatically set `https://aiplatform.googleapis.com/` as the base URL.
+
+**Critical pitfalls**:
+- Do NOT pass `base_url="https://aiplatform.googleapis.com/"` — the trailing slash prevents the `endswith('.googleapis.com')` check in the genai library, which clears project/location and makes every request go to URL `/` (404).
+- Use `model=model_name` (not `model_name=model_name`) — ADK's Gemini Pydantic model has field `model`, not `model_name`. Wrong kwarg is silently ignored, defaulting to `gemini-2.5-flash`.
+- Keep `google-adk[eval]` version in `requirements.txt` in sync with Agent Engine runtime to avoid pickle/unpickle AttributeErrors.
+
+### ADK Eval Format
+
+Eval files must use `.test.json` extension (`AgentEvaluator.evaluate()` only scans for that pattern).
+
+**New EvalSet format** (top-level `{eval_set_id, name, eval_cases[]}`):
+- `user_content: {role: "user", parts: [{text: "..."}]}`
+- `final_response: {role: "model", parts: [{text: "..."}]}`
+- `intermediate_data.tool_uses: [{id, name, args, partial_args, will_continue}]`
+
+**Dotenv in evals**: `dotenv.load_dotenv()` searches UP from cwd and misses `agents/schoopet/.env`. Use explicit path:
+```python
+dotenv.load_dotenv(pathlib.Path(__file__).parent.parent / ".env")
+```
+
+### Slack Workspace Gating
+
+System tokens are gated to a specific Slack workspace via `SLACK_ALLOWED_TEAM_ID` in `agents/schoopet/.env`. The Slack `team_id` is stored in the `sms_sessions` Firestore document (field `slack_team_id`) when a message is received. `OAuthClient.get_slack_team_id(user_id)` reads it. If `SLACK_ALLOWED_TEAM_ID` is unset, system tokens are never used (safe default).

@@ -217,6 +217,7 @@ async def process_message_async(
         )
 
         # Query the agent with timeout
+        t_before_agent = time.time()
         try:
             response = await _agent_client.send_message(
                 user_id=phone_number,
@@ -231,6 +232,7 @@ async def process_message_async(
                 channel=channel,
             )
             return
+        agent_ms = (time.time() - t_before_agent) * 1000
 
         if not response:
             logger.warning(f"Empty response from agent for {phone_number}")
@@ -242,14 +244,17 @@ async def process_message_async(
             return
 
         # Send response (sender handles message splitting if needed)
+        t_before_send = time.time()
         await _sms_sender.send(phone_number, response, channel=channel)
+        send_ms = (time.time() - t_before_send) * 1000
 
         # Update session activity with channel
         await _session_manager.update_last_activity(phone_number, channel=channel.value)
 
-        processing_time = (time.time() - start_time) * 1000
+        total_ms = (time.time() - start_time) * 1000
         logger.info(
-            f"Processed {channel.value} {message_sid} in {processing_time:.0f}ms: "
+            f"Processed {channel.value} {message_sid} in {total_ms:.0f}ms "
+            f"[agent={agent_ms:.0f}ms, send={send_ms:.0f}ms]: "
             f"response sent to {phone_number} ({len(response)} chars)"
         )
 

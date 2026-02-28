@@ -1,7 +1,7 @@
 """Email tool for the Schoopet agent.
 
 Provides on-demand email reading and sender authorization management.
-Uses the system gmail_system token (phone="email_system", feature="gmail_system")
+Uses the system workspace_system token (phone="email_system", feature="workspace_system")
 to read the shared inbox, filtered per-user by the email_authorizations Firestore
 collection.
 """
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # System Gmail account identifiers (mirror of gmail_client.py constants)
 SYSTEM_PHONE = "email_system"
-SYSTEM_FEATURE = "gmail_system"
+SYSTEM_FEATURE = "workspace_system"
 
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 AUTHORIZATIONS_COLLECTION = "email_workflows"
@@ -438,7 +438,7 @@ class EmailTool:
         if not token:
             return (
                 "System Gmail is NOT connected. "
-                "An admin needs to authorize the gmail_system OAuth token. "
+                "An admin needs to authorize the workspace_system OAuth token. "
                 "Contact support to set this up."
             )
         return "System Gmail is connected and ready to receive emails."
