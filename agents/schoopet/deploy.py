@@ -3,6 +3,12 @@ import sys
 import argparse
 import logging
 import traceback
+from pathlib import Path
+
+import dotenv
+# Load .env before any package imports so env vars are set when submodules
+# (e.g. structured_notes_agent) read GOOGLE_CLOUD_PROJECT at import time.
+dotenv.load_dotenv(Path(__file__).parent / ".env")
 
 import vertexai
 from vertexai.preview import reasoning_engines
