@@ -11,7 +11,6 @@ from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
 from .code_executor_agent import create_code_executor_agent
 from google.adk.agents.llm_agent import LlmAgent
-from google.adk.models.google_llm import Gemini
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from google.adk.tools.agent_tool import AgentTool
@@ -146,19 +145,6 @@ def create_agent(
         approve_task,
         request_correction,
     ]
-
-    # Get Vertex AI settings from environment variables or parameters
-    use_vertexai = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").lower() == "true"
-    vertex_project = project or os.getenv("GOOGLE_CLOUD_PROJECT")
-    vertex_location = location or os.getenv("GOOGLE_CLOUD_LOCATION")
-
-    # Initialize Model (Gemini on Vertex AI)
-    model = Gemini(
-        model_name=model_name,
-        vertexai=use_vertexai,
-        project=vertex_project,
-        location=vertex_location
-    )
 
     prompt = (
         "You are Schoopet, a supportive memory assistant designed to help with social interactions and relationships."
@@ -434,7 +420,7 @@ def create_agent(
     # Initialize Agent
     agent = LlmAgent(
         name="coordinator", # Name is required
-        model=model,
+        model=model_name,
         tools=tools,
         sub_agents=[structured_notes_agent],
         instruction=prompt,

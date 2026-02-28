@@ -9,9 +9,7 @@ This agent provides code execution capabilities for tasks like:
 Uses BuiltInCodeExecutor which requires Gemini 2.0+.
 Wrapped with AgentTool to work alongside other tools.
 """
-import os
 from google.adk.agents.llm_agent import LlmAgent
-from google.adk.models.google_llm import Gemini
 from google.adk.code_executors import BuiltInCodeExecutor
 
 
@@ -30,18 +28,9 @@ def create_code_executor_agent(
     Returns:
         LlmAgent configured with code execution capability.
     """
-    use_vertexai = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").lower() == "true"
-
-    model = Gemini(
-        model_name=model_name,
-        vertexai=use_vertexai,
-        project=project or os.getenv("GOOGLE_CLOUD_PROJECT"),
-        location=location or os.getenv("GOOGLE_CLOUD_LOCATION")
-    )
-
     agent = LlmAgent(
         name="code_executor",
-        model=model,
+        model=model_name,
         code_executor=BuiltInCodeExecutor(),
         instruction=(
             "You are a Python code execution assistant. "

@@ -1,6 +1,4 @@
-import os
 from google.adk.agents.llm_agent import LlmAgent
-from google.adk.models.google_llm import Gemini
 from google.adk.tools.google_search_tool import GoogleSearchTool
 
 
@@ -15,19 +13,6 @@ def create_search_agent(
     google_search_tool = GoogleSearchTool(bypass_multi_tools_limit=True)
 
     tools = [google_search_tool]
-
-    # Get Vertex AI settings from environment variables or parameters
-    use_vertexai = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").lower() == "true"
-    vertex_project = project or os.getenv("GOOGLE_CLOUD_PROJECT")
-    vertex_location = location or os.getenv("GOOGLE_CLOUD_LOCATION")
-
-    # Initialize Model (Gemini)
-    model = Gemini(
-        model_name=model_name,
-        vertexai=use_vertexai,
-        project=vertex_project,
-        location=vertex_location
-    )
 
     prompt = (
         "You are a Search Assistant, specialized in finding real-time information from Google Search. "
@@ -88,7 +73,7 @@ def create_search_agent(
     # Initialize Agent
     agent = LlmAgent(
         name="search_agent",
-        model=model,
+        model=model_name,
         tools=tools,
         instruction=prompt,
     )

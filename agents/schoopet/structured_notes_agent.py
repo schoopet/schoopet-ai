@@ -1,7 +1,6 @@
 import os
 from typing import List, Dict, Any
 from google.adk.agents.llm_agent import LlmAgent
-from google.adk.models.google_llm import Gemini
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.agent_tool import AgentTool
 from .search_agent import create_search_agent
@@ -44,19 +43,6 @@ def create_structured_notes_agent(
             print("Ensure Google Cloud credentials are configured and BigQuery API is enabled.")
     else:
         print("Warning: GOOGLE_CLOUD_PROJECT not configured. Structured notes agent will have limited functionality.")
-
-    # Get Vertex AI settings from environment variables or parameters
-    use_vertexai = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").lower() == "true"
-    vertex_project = project or os.getenv("GOOGLE_CLOUD_PROJECT")
-    vertex_location = location or os.getenv("GOOGLE_CLOUD_LOCATION")
-
-    # Initialize Model (Gemini)
-    model = Gemini(
-        model_name=model_name,
-        vertexai=use_vertexai,
-        project=vertex_project,
-        location=vertex_location
-    )
 
     # Initialize Search Agent (Subagent)
     search_agent = create_search_agent(
@@ -194,7 +180,7 @@ def create_structured_notes_agent(
     # Initialize Agent
     agent = LlmAgent(
         name="structured_notes_agent",
-        model=model,
+        model=model_name,
         tools=tools,
         instruction=prompt,
     )
