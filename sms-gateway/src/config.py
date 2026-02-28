@@ -32,12 +32,21 @@ class Settings(BaseSettings):
     # Telegram Configuration
     TELEGRAM_BOT_TOKEN: str = ""  # Empty = Telegram disabled
 
+    # Slack Configuration
+    SLACK_BOT_TOKEN: str = ""  # Empty = Slack disabled
+    SLACK_SIGNING_SECRET: str = ""
+
     # OAuth Configuration
     GOOGLE_OAUTH_CLIENT_ID: str = ""
     GOOGLE_OAUTH_CLIENT_SECRET: str = ""
     GOOGLE_OAUTH_REDIRECT_URI: str = ""  # e.g., https://sms-gateway-xxx.run.app/oauth/google/callback
     OAUTH_STATE_TTL_SECONDS: int = 600  # 10 minutes
     
+    # Email configuration
+    EMAIL_PUBSUB_TOPIC: str = ""  # Full Pub/Sub topic name for Gmail watch
+    EMAIL_DRIVE_FOLDER_ID: str = ""  # Default Drive folder for email attachments
+    EMAIL_SHEET_ID: str = ""  # Default Sheets ID for email logging
+
     # Scopes per feature
     OAUTH_SCOPES: dict[str, list[str]] = {
         "calendar": [
@@ -49,7 +58,18 @@ class Settings(BaseSettings):
             "https://www.googleapis.com/auth/sdm.service",
             "https://www.googleapis.com/auth/userinfo.email",
             "openid",
-        ]
+        ],
+        "gmail_system": [
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/userinfo.email",
+            "openid",
+        ],
+        "google-workspace": [
+            "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/userinfo.email",
+            "openid",
+        ],
     }
 
     class Config:

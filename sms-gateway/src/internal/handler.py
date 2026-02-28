@@ -23,18 +23,20 @@ _session_manager = None
 _agent_client = None
 _sms_sender = None
 _telegram_sender = None
+_slack_sender = None
 
 
-def init_internal_services(session_manager, agent_client, sms_sender, telegram_sender=None):
+def init_internal_services(session_manager, agent_client, sms_sender, telegram_sender=None, slack_sender=None):
     """Initialize internal handler services.
 
     Called by main.py during application startup.
     """
-    global _session_manager, _agent_client, _sms_sender, _telegram_sender
+    global _session_manager, _agent_client, _sms_sender, _telegram_sender, _slack_sender
     _session_manager = session_manager
     _agent_client = agent_client
     _sms_sender = sms_sender
     _telegram_sender = telegram_sender
+    _slack_sender = slack_sender
     logger.info("Internal handler services initialized")
 
 
@@ -149,7 +151,7 @@ async def notify_user(
 
     Security: Requires valid OIDC token or HMAC signature.
     """
-    if not _session_manager or (not _sms_sender and not _telegram_sender):
+    if not _session_manager or (not _sms_sender and not _telegram_sender and not _slack_sender):
         raise HTTPException(
             status_code=503,
             detail="Internal services not initialized"
@@ -184,6 +186,8 @@ async def notify_user(
 
                 if session_channel == "telegram" and _telegram_sender:
                     await _telegram_sender.send(payload.user_id, agent_response)
+                elif session_channel == "slack" and _slack_sender:
+                    await _slack_sender.send(payload.user_id, agent_response)
                 elif _sms_sender:
                     channel = MessageChannel.WHATSAPP if session_channel == "whatsapp" else MessageChannel.SMS
                     await _sms_sender.send(
@@ -201,6 +205,8 @@ async def notify_user(
         # No active session or agent client - send directly
         if payload.channel == "telegram" and _telegram_sender:
             await _telegram_sender.send(payload.user_id, payload.message)
+        elif payload.channel == "slack" and _slack_sender:
+            await _slack_sender.send(payload.user_id, payload.message)
         elif _sms_sender:
             from ..channel import MessageChannel
             channel = MessageChannel.WHATSAPP if payload.channel == "whatsapp" else MessageChannel.SMS
