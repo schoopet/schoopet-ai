@@ -70,6 +70,13 @@ class Settings(BaseSettings):
             "https://www.googleapis.com/auth/userinfo.email",
             "openid",
         ],
+        "workspace_system": [
+            "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/calendar.events",
+            "https://www.googleapis.com/auth/userinfo.email",
+            "openid",
+        ],
     }
 
     class Config:

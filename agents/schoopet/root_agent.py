@@ -11,12 +11,13 @@ from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
 from .code_executor_agent import create_code_executor_agent
 from google.adk.agents.llm_agent import LlmAgent
+from .global_gemini import GlobalGemini
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from google.adk.tools.agent_tool import AgentTool
 
 def create_agent(
-    model_name: str = "gemini-3.1-pro-preview",
+    model_name: str = "gemini-3-pro-preview",
     project: str = None,
     location: str = None
 ):
@@ -145,6 +146,8 @@ def create_agent(
         approve_task,
         request_correction,
     ]
+
+    model = GlobalGemini(model=model_name)
 
     prompt = (
         "You are Schoopet, a supportive memory assistant designed to help with social interactions and relationships."
@@ -420,7 +423,7 @@ def create_agent(
     # Initialize Agent
     agent = LlmAgent(
         name="coordinator", # Name is required
-        model=model_name,
+        model=model,
         tools=tools,
         sub_agents=[structured_notes_agent],
         instruction=prompt,

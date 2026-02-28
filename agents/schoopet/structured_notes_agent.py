@@ -1,6 +1,7 @@
 import os
 from typing import List, Dict, Any
 from google.adk.agents.llm_agent import LlmAgent
+from .global_gemini import GlobalGemini
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.agent_tool import AgentTool
 from .search_agent import create_search_agent
@@ -8,7 +9,7 @@ from .search_agent import create_search_agent
 
 
 def create_structured_notes_agent(
-    model_name: str = "gemini-3.1-pro-preview",
+    model_name: str = "gemini-3-pro-preview",
     project: str = None,
     location: str = None
 ):
@@ -43,6 +44,8 @@ def create_structured_notes_agent(
             print("Ensure Google Cloud credentials are configured and BigQuery API is enabled.")
     else:
         print("Warning: GOOGLE_CLOUD_PROJECT not configured. Structured notes agent will have limited functionality.")
+
+    model = GlobalGemini(model=model_name)
 
     # Initialize Search Agent (Subagent)
     search_agent = create_search_agent(
@@ -180,7 +183,7 @@ def create_structured_notes_agent(
     # Initialize Agent
     agent = LlmAgent(
         name="structured_notes_agent",
-        model=model_name,
+        model=model,
         tools=tools,
         instruction=prompt,
     )

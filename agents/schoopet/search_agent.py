@@ -1,9 +1,10 @@
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.tools.google_search_tool import GoogleSearchTool
+from .global_gemini import GlobalGemini
 
 
 def create_search_agent(
-    model_name: str = "gemini-3.1-pro-preview",
+    model_name: str = "gemini-3-pro-preview",
     project: str = None,
     location: str = None
 ):
@@ -13,6 +14,8 @@ def create_search_agent(
     google_search_tool = GoogleSearchTool(bypass_multi_tools_limit=True)
 
     tools = [google_search_tool]
+
+    model = GlobalGemini(model=model_name)
 
     prompt = (
         "You are a Search Assistant, specialized in finding real-time information from Google Search. "
@@ -73,7 +76,7 @@ def create_search_agent(
     # Initialize Agent
     agent = LlmAgent(
         name="search_agent",
-        model=model_name,
+        model=model,
         tools=tools,
         instruction=prompt,
     )

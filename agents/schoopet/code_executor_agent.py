@@ -11,10 +11,11 @@ Wrapped with AgentTool to work alongside other tools.
 """
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.code_executors import BuiltInCodeExecutor
+from .global_gemini import GlobalGemini
 
 
 def create_code_executor_agent(
-    model_name: str = "gemini-3.1-pro-preview",
+    model_name: str = "gemini-3-pro-preview",
     project: str = None,
     location: str = None
 ):
@@ -28,9 +29,11 @@ def create_code_executor_agent(
     Returns:
         LlmAgent configured with code execution capability.
     """
+    model = GlobalGemini(model=model_name)
+
     agent = LlmAgent(
         name="code_executor",
-        model=model_name,
+        model=model,
         code_executor=BuiltInCodeExecutor(),
         instruction=(
             "You are a Python code execution assistant. "
