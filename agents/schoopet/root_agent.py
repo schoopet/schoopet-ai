@@ -4,6 +4,8 @@ from .memory_tool import MemoryTool
 from .calendar_tool import CalendarTool
 from .house_tool import HouseTool
 from .preferences_tool import PreferencesTool
+from .email_tool import EmailTool
+from .drive_sheets_tool import DriveTool, SheetsTool
 from .tools.async_task_tool import AsyncTaskTool
 from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
@@ -25,6 +27,9 @@ def create_agent(
     calendar_tool = CalendarTool()
     house_tool = HouseTool()
     preferences_tool = PreferencesTool()
+    email_tool = EmailTool()
+    drive_tool = DriveTool()
+    sheets_tool = SheetsTool()
     async_task_tool = AsyncTaskTool()
 
     # Wrap tools using FunctionTool
@@ -52,6 +57,26 @@ def create_agent(
     # House tools
     list_devices_tool = FunctionTool(func=house_tool.list_devices)
     device_status_tool = FunctionTool(func=house_tool.get_device_status)
+
+    # Email tools
+    read_emails_tool = FunctionTool(func=email_tool.read_emails)
+    add_workflow_tool = FunctionTool(func=email_tool.add_email_workflow)
+    update_workflow_tool = FunctionTool(func=email_tool.update_email_workflow)
+    remove_workflow_tool = FunctionTool(func=email_tool.remove_email_workflow)
+    list_workflows_tool = FunctionTool(func=email_tool.list_email_workflows)
+    email_system_status_tool = FunctionTool(func=email_tool.get_email_system_status)
+
+    # Drive tools
+    save_to_drive_tool = FunctionTool(func=drive_tool.save_file_to_drive)
+    list_drive_files_tool = FunctionTool(func=drive_tool.list_drive_files)
+    drive_status_tool = FunctionTool(func=drive_tool.get_drive_status)
+
+    # Sheets tools
+    append_to_sheet_tool = FunctionTool(func=sheets_tool.append_row_to_sheet)
+    read_sheet_tool = FunctionTool(func=sheets_tool.read_sheet)
+    add_column_tool = FunctionTool(func=sheets_tool.add_sheet_column)
+    update_cell_tool = FunctionTool(func=sheets_tool.update_sheet_cell)
+    sheets_status_tool = FunctionTool(func=sheets_tool.get_sheets_status)
 
     # Preferences tools
     set_timezone_tool = FunctionTool(func=preferences_tool.set_timezone)
@@ -92,6 +117,23 @@ def create_agent(
         calendar_status_tool,
         list_devices_tool,
         device_status_tool,
+        # Email tools
+        read_emails_tool,
+        add_workflow_tool,
+        update_workflow_tool,
+        remove_workflow_tool,
+        list_workflows_tool,
+        email_system_status_tool,
+        # Drive tools
+        save_to_drive_tool,
+        list_drive_files_tool,
+        drive_status_tool,
+        # Sheets tools
+        append_to_sheet_tool,
+        read_sheet_tool,
+        add_column_tool,
+        update_cell_tool,
+        sheets_status_tool,
         set_timezone_tool,
         get_timezone_tool,
         # Async task tools
@@ -208,6 +250,62 @@ def create_agent(
         "Note: This requires a separate authorization. If not connected, the tool will provide an authorization link "
         "specifically for Smart Home access. This is separate from Calendar access.\n\n"
 
+        "**Email:**\n"
+        "- read_emails(query, max_results): Read emails from the shared inbox. Only shows emails "
+        "from senders the user has a workflow for. Call this when users ask to check their emails.\n"
+        "- add_email_workflow(sender_email, processing_prompt, drive_folder_id, sheet_id): Register a "
+        "sender with a custom workflow. When an email arrives from that sender it is automatically "
+        "routed to this user and the agent executes processing_prompt. Also checks Drive/Sheets auth.\n"
+        "  When user says 'set up email from X', call this and ask them to describe what they want "
+        "done with those emails if they haven't already specified.\n"
+        "- update_email_workflow(sender_email, processing_prompt, drive_folder_id, sheet_id): "
+        "Update an existing workflow (patch-style — only provided fields are changed). "
+        "Use when the user says 'change what happens with emails from X'.\n"
+        "- remove_email_workflow(sender_email): Remove a workflow. Subsequent emails from that sender "
+        "will be discarded.\n"
+        "- list_email_workflows(): Show all workflows with sender, prompt preview, and IDs.\n"
+        "- get_email_system_status(): Check if the system Gmail account is connected and ready.\n"
+        "Use for:\n"
+        "  • Checking emails: 'read my emails', 'any new messages from boss@company.com'\n"
+        "  • Adding workflows: 'start routing emails from boss@company.com to me'\n"
+        "  • Updating workflows: 'change what happens with emails from john@example.com'\n"
+        "  • Managing workflows: 'show my email workflows', 'remove workflow for john@example.com'\n"
+        "Note: Each workflow runs the user's custom instructions automatically when a matching email arrives.\n\n"
+
+        "**Google Drive:**\n"
+        "- save_file_to_drive(filename, content, folder_id): Save text content to the user's Google Drive.\n"
+        "- list_drive_files(folder_id, query, max_results): List files in a Drive folder. "
+        "Use to check if a file already exists before saving a duplicate.\n"
+        "- get_drive_status(): Check if Google Workspace (Drive + Sheets) is connected for this user.\n"
+        "Use for:\n"
+        "  • Saving documents, notes, or email content to Drive\n"
+        "  • Checking whether a file already exists before creating a duplicate\n"
+        "  • Checking Workspace connection status\n"
+        "Note: Drive and Sheets share one authorization (google-workspace). "
+        "If not connected, the tool returns a single auth link that covers both.\n\n"
+
+        "**Google Sheets:**\n"
+        "- read_sheet(sheet_id, sheet_tab, max_rows): Read current data and headers from a sheet.\n"
+        "- append_row_to_sheet(values, sheet_id, sheet_tab): Append a row to a Google Sheet.\n"
+        "- add_sheet_column(sheet_id, column_header, sheet_tab): Append a new column header to row 1.\n"
+        "- update_sheet_cell(sheet_id, row, column, value, sheet_tab): Update a specific cell by 1-indexed row/column.\n"
+        "- get_sheets_status(): Check if Google Workspace (Drive + Sheets) is connected for this user.\n"
+        "Use for:\n"
+        "  • Logging data rows (email summaries, task lists, tracking info)\n"
+        "  • Reading the current schema before appending to verify columns are correct\n"
+        "  • Adding a new column when the data has a field not yet in the sheet\n"
+        "  • Updating individual cells (e.g., marking a row as processed)\n"
+        "Workflow: Before appending a row, call read_sheet to verify the column layout is sufficient. "
+        "If a new data field has no column yet, call add_sheet_column first, then append_row_to_sheet.\n"
+        "Note: Drive and Sheets share one authorization. If not connected, the tool returns a single auth link.\n\n"
+
+        "**INCOMING_EMAIL_PROCESSING trigger:**\n"
+        "When a message starts with 'INCOMING_EMAIL_PROCESSING':\n"
+        "1. Parse From, Subject, Date from the header fields provided.\n"
+        "2. Execute the workflow instructions included in the message exactly as written.\n"
+        "3. Confirm silently in your internal monologue — do NOT send any SMS or Slack message. "
+        "This is a background task triggered automatically by the system.\n\n"
+
         "Note: Regular conversation is automatically saved. Only use explicit tools when needed.\n\n"
 
         "## When to Use Memories vs. Structured Notes vs. Search\n"
@@ -237,6 +335,23 @@ def create_agent(
         "  - Example: 'What is the temperature in the living room?'\n"
         "  - Example: 'Is the front door locked?'\n"
         "  - If not connected, provide the specific House authorization link.\n\n"
+
+        "**Email**: reading and managing email workflows from the shared inbox\n"
+        "  - Example: 'Read my emails'\n"
+        "  - Example: 'Set up a workflow for emails from boss@company.com'\n"
+        "  - Example: 'Show my email workflows'\n"
+        "  - System must have gmail_system token configured; users need Drive + Sheets for auto-processing.\n\n"
+
+        "**Drive**: saving and listing files in the user's Google Drive\n"
+        "  - Example: 'Save this note to my Drive'\n"
+        "  - Example: 'Check if a file called invoice.txt already exists'\n"
+        "  - Used automatically when processing incoming emails per each workflow's instructions.\n\n"
+
+        "**Sheets**: reading, appending, and editing rows in a Google Sheet\n"
+        "  - Example: 'Log this info to my sheet'\n"
+        "  - Example: 'Add a Rating column to my sheet'\n"
+        "  - Example: 'Update row 5 column 3 to Processed'\n"
+        "  - Used automatically when processing incoming emails per each workflow's instructions.\n\n"
 
         "**Multiple tools**: Some requests benefit from combining tools - search for current info, save important "
         "findings to memory, track structured data in BigQuery, and schedule events on the calendar.\n\n"
