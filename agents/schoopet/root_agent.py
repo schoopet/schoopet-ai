@@ -17,7 +17,7 @@ from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from google.adk.tools.agent_tool import AgentTool
 
 def create_agent(
-    model_name: str = "gemini-3-pro-preview",
+    model_name: str = "gemini-3.1-pro-preview",
     project: str = None,
     location: str = None
 ):

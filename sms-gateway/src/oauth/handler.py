@@ -1,6 +1,5 @@
 """OAuth HTTP handler for Google OAuth flow."""
 import logging
-import re
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -18,9 +17,6 @@ _session_manager = None
 # Google OAuth authorization endpoint
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 
-# Phone number validation pattern (E.164 format)
-PHONE_PATTERN = re.compile(r"^\+[1-9]\d{1,14}$")
-
 router = APIRouter(prefix="/oauth", tags=["oauth"])
 
 
@@ -34,11 +30,6 @@ def init_oauth_services(oauth_manager, session_manager=None):
     global _oauth_manager, _session_manager
     _oauth_manager = oauth_manager
     _session_manager = session_manager
-
-
-def _validate_phone(phone: str) -> bool:
-    """Validate phone number format (E.164)."""
-    return bool(PHONE_PATTERN.match(phone))
 
 
 def _success_html(email: str, service_name: str = "Google Calendar") -> str:
@@ -173,7 +164,7 @@ async def initiate_oauth(
 
     Args:
         request: FastAPI request (for accessing app state).
-        token: HMAC-signed initiation token containing phone number.
+        token: HMAC-signed initiation token containing user ID.
         feature: Feature to authorize.
 
     Returns:
@@ -188,35 +179,28 @@ async def initiate_oauth(
         logger.error("HMAC secret not loaded")
         raise HTTPException(status_code=503, detail="OAuth service not properly configured")
 
-    # Validate HMAC token and extract phone number
-    phone = validate_oauth_init_token(token, hmac_secret)
-    if not phone:
+    # Validate HMAC token and extract user ID
+    user_id = validate_oauth_init_token(token, hmac_secret)
+    if not user_id:
         raise HTTPException(
             status_code=400,
             detail="Invalid or expired authorization link. Please request a new one from the assistant.",
         )
 
-    # Allow the system email key to bypass E.164 phone validation and opt-in check
-    is_system_key = phone == "email_system"
-
-    # Validate phone number format (should always pass if token is valid)
-    if not is_system_key and not _validate_phone(phone):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid phone number in token",
-        )
+    # Allow the system email key to bypass opt-in check
+    is_system_key = user_id == "email_system"
 
     # Optionally verify user is opted in (skip for system keys)
     if not is_system_key and _session_manager:
-        session = await _session_manager.get_session(phone)
+        session = await _session_manager.get_session(user_id)
         if not session or not session.opted_in:
             raise HTTPException(
                 status_code=403,
-                detail="Phone number not registered. Please opt-in via SMS first.",
+                detail="User not registered. Please send a message first.",
             )
 
     settings = get_settings()
-    
+
     # Get scopes for feature
     scopes = settings.OAUTH_SCOPES.get(feature)
     if not scopes:
@@ -225,7 +209,7 @@ async def initiate_oauth(
         raise HTTPException(status_code=400, detail=f"Unknown feature: {feature}")
 
     # Generate state for CSRF protection
-    state = await _oauth_manager.generate_state(phone, feature)
+    state = await _oauth_manager.generate_state(user_id, feature)
 
     # Build OAuth authorization URL
     params = {
@@ -239,7 +223,7 @@ async def initiate_oauth(
     }
 
     auth_url = f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
-    logger.info(f"Initiating OAuth for phone {phone[:4]}****, feature: {feature}")
+    logger.info(f"Initiating OAuth for user {user_id[:4]}****, feature: {feature}")
 
     return RedirectResponse(url=auth_url)
 
@@ -275,8 +259,8 @@ async def oauth_callback(
         return HTMLResponse(_error_html("Missing authorization code or state"), status_code=400)
 
     # Validate state (CSRF protection)
-    phone_number, feature = await _oauth_manager.validate_state(state)
-    if not phone_number:
+    user_id, feature = await _oauth_manager.validate_state(state)
+    if not user_id:
         return HTMLResponse(
             _error_html("Invalid or expired authorization. Please request a new link."),
             status_code=400,
@@ -295,14 +279,14 @@ async def oauth_callback(
 
     # Store tokens securely
     success = await _oauth_manager.store_tokens(
-        phone_number, email, access_token, refresh_token, expires_in, feature
+        user_id, email, access_token, refresh_token, expires_in, feature
     )
 
     if not success:
         return HTMLResponse(_error_html("Failed to save authorization"), status_code=500)
 
-    logger.info(f"OAuth completed for phone {phone_number[:4]}****, feature: {feature}, email: {email}")
-    
+    logger.info(f"OAuth completed for user {user_id[:4]}****, feature: {feature}, email: {email}")
+
     # Custom message based on feature
     service_name = "Smart Home" if feature == "house" else "Google Calendar"
     return HTMLResponse(_success_html(email, service_name))
@@ -311,14 +295,14 @@ async def oauth_callback(
 @router.get("/status")
 async def oauth_status(
     request: Request,
-    token: str = Query(..., description="HMAC-signed token containing phone number"),
+    token: str = Query(..., description="HMAC-signed token containing user ID"),
     feature: str = "calendar",
 ):
-    """Check OAuth status for a phone number and feature.
+    """Check OAuth status for a user and feature.
 
     Args:
         request: FastAPI request (for accessing app state).
-        token: HMAC-signed token containing phone number.
+        token: HMAC-signed token containing user ID.
         feature: Feature to check (calendar, house).
 
     Returns:
@@ -332,18 +316,15 @@ async def oauth_status(
     if not hmac_secret:
         raise HTTPException(status_code=503, detail="OAuth service not properly configured")
 
-    # Validate HMAC token and extract phone number
-    phone = validate_oauth_init_token(token, hmac_secret)
-    if not phone:
+    # Validate HMAC token and extract user ID
+    user_id = validate_oauth_init_token(token, hmac_secret)
+    if not user_id:
         raise HTTPException(
             status_code=401,
             detail="Invalid or expired token",
         )
 
-    if not _validate_phone(phone):
-        raise HTTPException(status_code=400, detail="Invalid phone number in token")
-
-    token_info = await _oauth_manager.get_token_info(phone, feature)
+    token_info = await _oauth_manager.get_token_info(user_id, feature)
 
     if not token_info:
         return {
@@ -364,14 +345,14 @@ async def oauth_status(
 @router.delete("/revoke")
 async def revoke_oauth(
     request: Request,
-    token: str = Query(..., description="HMAC-signed token containing phone number"),
+    token: str = Query(..., description="HMAC-signed token containing user ID"),
     feature: str = "calendar",
 ):
-    """Revoke OAuth tokens for a phone number and feature.
+    """Revoke OAuth tokens for a user and feature.
 
     Args:
         request: FastAPI request (for accessing app state).
-        token: HMAC-signed token containing phone number.
+        token: HMAC-signed token containing user ID.
         feature: Feature to revoke.
 
     Returns:
@@ -385,21 +366,18 @@ async def revoke_oauth(
     if not hmac_secret:
         raise HTTPException(status_code=503, detail="OAuth service not properly configured")
 
-    # Validate HMAC token and extract phone number
-    phone = validate_oauth_init_token(token, hmac_secret)
-    if not phone:
+    # Validate HMAC token and extract user ID
+    user_id = validate_oauth_init_token(token, hmac_secret)
+    if not user_id:
         raise HTTPException(
             status_code=401,
             detail="Invalid or expired token",
         )
 
-    if not _validate_phone(phone):
-        raise HTTPException(status_code=400, detail="Invalid phone number in token")
-
-    success = await _oauth_manager.revoke_tokens(phone, feature)
+    success = await _oauth_manager.revoke_tokens(user_id, feature)
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to revoke tokens")
 
-    logger.info(f"OAuth revoked for phone {phone[:4]}****, feature: {feature}")
+    logger.info(f"OAuth revoked for user {user_id[:4]}****, feature: {feature}")
     return {"revoked": True, "feature": feature}

@@ -35,7 +35,7 @@ The agent is built using Google's Agent Development Kit (ADK) with a native mult
 - **search_agent.py**: Defines the Search subagent
   - Performs real-time Google searches using GoogleSearchTool
   - Wrapped as an `AgentTool` to be used by both the Main Agent and Structured Notes Agent.
-  - Uses `gemini-2.0-flash-exp` to support mixed tool usage (Search + Functions).
+  - Uses `gemini-3.1-pro-preview` to support mixed tool usage (Search + Functions).
 - **deploy.py**: Deploys agent to Vertex AI Agent Engine (creates or updates remote reasoning engine)
 - **agent-engine-cli**: Interactive chat client for deployed remote agent (available on GitHub: [google/agent-engine-cli](https://github.com/google/agent-engine-cli))
 - **main.py**: Local development CLI that initializes/updates Agent Engine and runs agent locally
@@ -174,7 +174,7 @@ Direct memory management tools for explicit fact storage:
 The system uses a main agent with one native subagent and one shared tool agent:
 
 **Main Agent (Schoopet)**:
-- Model: `gemini-3-pro-preview`
+- Model: `gemini-3.1-pro-preview`
 - Conversational memory for social interactions and relationships
 - Automatic memory bank persistence
 - Direct memory tools (save/retrieve)
@@ -182,7 +182,7 @@ The system uses a main agent with one native subagent and one shared tool agent:
 - Uses `tools=[..., search_tool]` to access search capabilities.
 
 **Subagent 1: Structured Notes**:
-- Model: `gemini-3-pro-preview`
+- Model: `gemini-3.1-pro-preview`
 - Manages structured, queryable data via BigQuery tables
 - Full BigQuery MCP integration (5 tools: list datasets/tables, get info, execute SQL)
 - Uses `tools=[..., search_tool]` to enrich structured data with real-time info.
@@ -190,7 +190,7 @@ The system uses a main agent with one native subagent and one shared tool agent:
 - Authentication: Google Cloud credentials (automatic via ADK)
 
 **Tool Agent: Search**:
-- Model: `gemini-2.0-flash-exp` (Required for mixed tool support)
+- Model: `gemini-3.1-pro-preview` (Required for mixed tool support)
 - Wrapped as an `AgentTool` for use by other agents.
 - Performs real-time Google searches via GoogleSearchTool
 - Provides current information, factual lookups, and research.

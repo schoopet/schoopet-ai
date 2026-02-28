@@ -15,9 +15,9 @@
 ### 2. AI Agents (`agents/`)
 A sophisticated multi-agent system using Google's Agent Development Kit (ADK):
 
-*   **Main Agent (Schoopet):** Handles conversational memory, social interactions, and relationship building. Uses `gemini-3-pro-preview`.
-*   **Structured Notes Subagent:** Manages queryable lists (e.g., shopping lists, book logs) via **BigQuery MCP** integration.
-*   **Search Subagent:** Performs real-time Google searches using `gemini-2.0-flash-exp` (wrapped as an `AgentTool`).
+*   **Main Agent (Schoopet):** Handles conversational memory, social interactions, and relationship building. Uses `gemini-3.1-pro-preview`.
+*   **Structured Notes Subagent:** Manages queryable lists (e.g., shopping lists, book logs) via **BigQuery MCP** integration. Uses `gemini-3.1-pro-preview`.
+*   **Search Subagent:** Performs real-time Google searches using `gemini-3.1-pro-preview` (wrapped as an `AgentTool`).
 *   **Memory System:** Uses Vertex AI Native Memory Bank with automatic persistence.
     *   **Custom Topic:** `SOCIAL_MEMORIES` (tracks people, events, and commitments).
     *   **Managed Topics:** `USER_PERSONAL_INFO`, `USER_PREFERENCES`, etc.

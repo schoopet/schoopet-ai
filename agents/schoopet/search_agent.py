@@ -5,7 +5,7 @@ from google.adk.tools.google_search_tool import GoogleSearchTool
 
 
 def create_search_agent(
-    model_name: str = "gemini-3-pro-preview",
+    model_name: str = "gemini-3.1-pro-preview",
     project: str = None,
     location: str = None
 ):

@@ -11,7 +11,7 @@ class OAuthState(BaseModel):
     """
 
     state_id: str = Field(..., description="UUID for state parameter")
-    phone_number: str = Field(..., description="E.164 format phone number")
+    user_id: str = Field(..., description="User identifier (phone number, Slack ID, etc.)")
     feature: str = Field(default="calendar", description="Feature being authorized (e.g., calendar, house)")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = Field(..., description="State expiration time")
@@ -21,7 +21,7 @@ class OAuthState(BaseModel):
         """Convert to Firestore-compatible dictionary."""
         return {
             "state_id": self.state_id,
-            "phone_number": self.phone_number,
+            "user_id": self.user_id,
             "feature": self.feature,
             "created_at": self.created_at,
             "expires_at": self.expires_at,
@@ -33,7 +33,7 @@ class OAuthState(BaseModel):
         """Create instance from Firestore document data."""
         return cls(
             state_id=data["state_id"],
-            phone_number=data["phone_number"],
+            user_id=data["user_id"],
             feature=data.get("feature", "calendar"),
             created_at=data["created_at"],
             expires_at=data["expires_at"],
@@ -52,11 +52,11 @@ class OAuthState(BaseModel):
 class OAuthToken(BaseModel):
     """Firestore document model for OAuth tokens.
 
-    Document ID in Firestore is: {normalized_phone}_{feature}
+    Document ID in Firestore is: {normalized_user_id}_{feature}
     Note: Refresh tokens are stored in Secret Manager, not here.
     """
 
-    phone_number: str = Field(..., description="E.164 format phone number")
+    user_id: str = Field(..., description="User identifier (phone number, Slack ID, etc.)")
     feature: str = Field(default="calendar", description="Feature authorized (e.g., calendar, house)")
     email: str = Field(..., description="Google account email")
     access_token: str = Field(..., description="OAuth access token")
@@ -68,7 +68,7 @@ class OAuthToken(BaseModel):
     def to_firestore(self) -> dict:
         """Convert to Firestore-compatible dictionary."""
         return {
-            "phone_number": self.phone_number,
+            "user_id": self.user_id,
             "feature": self.feature,
             "email": self.email,
             "access_token": self.access_token,
@@ -82,7 +82,7 @@ class OAuthToken(BaseModel):
     def from_firestore(cls, data: dict) -> "OAuthToken":
         """Create instance from Firestore document data."""
         return cls(
-            phone_number=data["phone_number"],
+            user_id=data["user_id"],
             feature=data.get("feature", "calendar"),
             email=data["email"],
             access_token=data["access_token"],

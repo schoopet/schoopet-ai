@@ -85,11 +85,11 @@ class OAuthClient:
         self._hmac_secret = self._get_secret("oauth-hmac-secret")
         return self._hmac_secret
 
-    def _normalize_phone(self, phone_number: str) -> str:
-        """Normalize phone number for consistent document IDs."""
-        return phone_number.lstrip("+").replace("-", "").replace(" ", "")
+    def _normalize_user_id(self, user_id: str) -> str:
+        """Normalize user ID for consistent Firestore document IDs."""
+        return user_id.lstrip("+").replace("-", "").replace(" ", "")
 
-    def get_oauth_link(self, phone_number: str, feature: str) -> str:
+    def get_oauth_link(self, user_id: str, feature: str) -> str:
         """Generate secure HMAC-signed OAuth authorization link."""
         self._ensure_initialized()
 
@@ -104,14 +104,9 @@ class OAuthClient:
         import hashlib
         import base64
         import time
-        import re
-
-        clean_phone = re.sub(r"[^0-9+]", "", phone_number)
-        if not clean_phone.startswith("+"):
-            clean_phone = "+" + clean_phone
 
         expires = int(time.time()) + 600  # 10 minutes
-        message = f"{clean_phone}:{expires}"
+        message = f"{user_id}:{expires}"
 
         signature = hmac_lib.new(
             secret.encode(),
@@ -123,13 +118,13 @@ class OAuthClient:
 
         return f"{self._oauth_base_url}/oauth/google/initiate?token={token}&feature={feature}"
 
-    def get_token_data(self, phone_number: str, feature: str) -> Optional[Dict[str, Any]]:
+    def get_token_data(self, user_id: str, feature: str) -> Optional[Dict[str, Any]]:
         """Get OAuth token data from Firestore."""
         firestore_client = self._get_firestore_client()
         if not firestore_client:
             return None
 
-        normalized = self._normalize_phone(phone_number)
+        normalized = self._normalize_user_id(user_id)
         doc_id = f"{normalized}_{feature}"
         doc_ref = firestore_client.collection(TOKENS_COLLECTION).document(doc_id)
         doc = doc_ref.get()
@@ -151,7 +146,7 @@ class OAuthClient:
 
         return now >= (expires_at - timedelta(seconds=60))
 
-    def _get_refresh_token(self, phone_number: str, feature: str) -> Optional[str]:
+    def _get_refresh_token(self, user_id: str, feature: str) -> Optional[str]:
         """Get refresh token from Secret Manager."""
         self._ensure_initialized()
         secret_client = self._get_secret_client()
@@ -159,7 +154,7 @@ class OAuthClient:
             return None
 
         try:
-            normalized = self._normalize_phone(phone_number)
+            normalized = self._normalize_user_id(user_id)
             secret_key = f"{normalized}-{feature}"
             secret_name = f"projects/{self._project_id}/secrets/oauth-refresh-{secret_key}/versions/latest"
             response = secret_client.access_secret_version(request={"name": secret_name})
@@ -170,7 +165,7 @@ class OAuthClient:
             print(f"Error getting refresh token: {e}")
             return None
 
-    def _refresh_access_token(self, phone_number: str, refresh_token: str, feature: str) -> Optional[str]:
+    def _refresh_access_token(self, user_id: str, refresh_token: str, feature: str) -> Optional[str]:
         """Refresh an expired access token."""
         self._ensure_initialized()
         if not self._client_id or not self._client_secret:
@@ -199,12 +194,12 @@ class OAuthClient:
                     # Update token in Firestore
                     firestore_client = self._get_firestore_client()
                     if firestore_client:
-                        normalized = self._normalize_phone(phone_number)
+                        normalized = self._normalize_user_id(user_id)
                         doc_id = f"{normalized}_{feature}"
                         doc_ref = firestore_client.collection(TOKENS_COLLECTION).document(doc_id)
                         now = datetime.now(timezone.utc)
                         doc_ref.set({
-                            "phone_number": phone_number,
+                            "user_id": user_id,
                             "feature": feature,
                             "access_token": access_token,
                             "expires_at": now + timedelta(seconds=expires_in),
@@ -219,17 +214,17 @@ class OAuthClient:
             print(f"Error refreshing token: {e}")
             return None
 
-    def get_valid_access_token(self, phone_number: str, feature: str) -> Optional[str]:
+    def get_valid_access_token(self, user_id: str, feature: str) -> Optional[str]:
         """Get a valid access token, refreshing if necessary."""
-        token_data = self.get_token_data(phone_number, feature)
+        token_data = self.get_token_data(user_id, feature)
         if not token_data:
             return None
 
         access_token = token_data.get("access_token")
 
         if self.is_token_expired(token_data):
-            refresh_token = self._get_refresh_token(phone_number, feature)
+            refresh_token = self._get_refresh_token(user_id, feature)
             if refresh_token:
-                access_token = self._refresh_access_token(phone_number, refresh_token, feature)
+                access_token = self._refresh_access_token(user_id, refresh_token, feature)
 
         return access_token

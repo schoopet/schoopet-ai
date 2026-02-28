@@ -58,7 +58,7 @@ async def test_execute_success(mock_adk, mock_vertex):
 
     # Verify Gemini creation
     mock_adk["Gemini"].assert_called_with(
-        model_name="gemini-2.0-flash-001",
+        model_name="gemini-3-flash-preview",
         vertexai=True,
         project=PROJECT_ID,
         location=LOCATION

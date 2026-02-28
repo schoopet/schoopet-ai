@@ -60,15 +60,15 @@ class OAuthManager:
         self._states_collection = self._db.collection(STATES_COLLECTION)
         self._tokens_collection = self._db.collection(TOKENS_COLLECTION)
 
-    def _normalize_phone(self, phone_number: str) -> str:
-        """Normalize phone number for consistent document IDs."""
-        return phone_number.lstrip("+").replace("-", "").replace(" ", "")
+    def _normalize_user_id(self, user_id: str) -> str:
+        """Normalize user ID for consistent Firestore document IDs."""
+        return user_id.lstrip("+").replace("-", "").replace(" ", "")
 
-    async def generate_state(self, phone_number: str, feature: str = "calendar") -> str:
+    async def generate_state(self, user_id: str, feature: str = "calendar") -> str:
         """Generate a new OAuth state parameter for CSRF protection.
 
         Args:
-            phone_number: User's phone number in E.164 format.
+            user_id: User identifier (phone number, Slack ID, etc.).
             feature: Feature being authorized (calendar, house).
 
         Returns:
@@ -80,7 +80,7 @@ class OAuthManager:
 
         state = OAuthState(
             state_id=state_id,
-            phone_number=phone_number,
+            user_id=user_id,
             feature=feature,
             created_at=now,
             expires_at=expires_at,
@@ -91,7 +91,7 @@ class OAuthManager:
         doc_ref = self._states_collection.document(state_id)
         await doc_ref.set(state.to_firestore())
 
-        logger.info(f"Generated OAuth state for phone {phone_number[:4]}****, feature: {feature}")
+        logger.info(f"Generated OAuth state for user {user_id[:4]}****, feature: {feature}")
         return state_id
 
     async def validate_state(self, state_id: str) -> Tuple[Optional[str], str]:
@@ -101,7 +101,7 @@ class OAuthManager:
             state_id: State ID from OAuth callback.
 
         Returns:
-            Tuple of (phone_number, feature). Both None/empty if invalid.
+            Tuple of (user_id, feature). Both None/empty if invalid.
         """
         doc_ref = self._states_collection.document(state_id)
         doc = await doc_ref.get()
@@ -120,7 +120,7 @@ class OAuthManager:
         await doc_ref.update({"used": True})
         logger.info(f"Validated and consumed OAuth state: {state_id[:8]}...")
 
-        return state.phone_number, state.feature
+        return state.user_id, state.feature
 
     async def exchange_code_for_tokens(
         self, code: str, scopes: list[str]
@@ -179,7 +179,7 @@ class OAuthManager:
 
     async def store_tokens(
         self,
-        phone_number: str,
+        user_id: str,
         email: str,
         access_token: str,
         refresh_token: Optional[str],
@@ -191,7 +191,7 @@ class OAuthManager:
         Access token goes to Firestore, refresh token to Secret Manager.
 
         Args:
-            phone_number: User's phone number in E.164 format.
+            user_id: User identifier (phone number, Slack ID, etc.).
             email: Google account email.
             access_token: OAuth access token.
             refresh_token: OAuth refresh token (may be None on refresh).
@@ -202,16 +202,16 @@ class OAuthManager:
             True if successful, False otherwise.
         """
         # Document ID includes feature to allow multiple tokens per user
-        normalized_phone = self._normalize_phone(phone_number)
-        doc_id = f"{normalized_phone}_{feature}"
-        
+        normalized = self._normalize_user_id(user_id)
+        doc_id = f"{normalized}_{feature}"
+
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=expires_in)
 
         try:
             # Store access token in Firestore
             token = OAuthToken(
-                phone_number=phone_number,
+                user_id=user_id,
                 feature=feature,
                 email=email,
                 access_token=access_token,
@@ -224,38 +224,38 @@ class OAuthManager:
             await doc_ref.set(token.to_firestore())
 
             # Store refresh token in Secret Manager (if provided)
-            # Key format must match what agent expects: {normalized_phone}-{feature}
+            # Key format must match what agent expects: {normalized}-{feature}
             if refresh_token:
-                secret_key = f"{normalized_phone}-{feature}"
+                secret_key = f"{normalized}-{feature}"
                 await self._secret_manager.store_refresh_token(secret_key, refresh_token)
 
-            logger.info(f"Stored tokens for phone {phone_number[:4]}****, feature: {feature}, email: {email}")
+            logger.info(f"Stored tokens for user {user_id[:4]}****, feature: {feature}, email: {email}")
             return True
 
         except Exception as e:
             logger.error(f"Failed to store tokens: {e}")
             return False
 
-    async def get_access_token(self, phone_number: str, feature: str = "calendar") -> Optional[str]:
-        """Get a valid access token for a phone number and feature.
+    async def get_access_token(self, user_id: str, feature: str = "calendar") -> Optional[str]:
+        """Get a valid access token for a user and feature.
 
         If the token is expired, attempts to refresh it using the stored
         refresh token.
 
         Args:
-            phone_number: User's phone number in E.164 format.
+            user_id: User identifier (phone number, Slack ID, etc.).
             feature: Feature to get token for (calendar, house).
 
         Returns:
             Valid access token if available, None otherwise.
         """
-        normalized_phone = self._normalize_phone(phone_number)
-        doc_id = f"{normalized_phone}_{feature}"
+        normalized = self._normalize_user_id(user_id)
+        doc_id = f"{normalized}_{feature}"
         doc_ref = self._tokens_collection.document(doc_id)
         doc = await doc_ref.get()
 
         if not doc.exists:
-            logger.debug(f"No OAuth token found for phone {phone_number[:4]}****, feature: {feature}")
+            logger.debug(f"No OAuth token found for user {user_id[:4]}****, feature: {feature}")
             return None
 
         token = OAuthToken.from_firestore(doc.to_dict())
@@ -265,22 +265,22 @@ class OAuthManager:
             return token.access_token
 
         # Token is expired, try to refresh
-        logger.info(f"Access token expired for {phone_number[:4]}**** ({feature}), attempting refresh")
-        refreshed_token = await self._refresh_access_token(phone_number, token.email, feature)
+        logger.info(f"Access token expired for {user_id[:4]}**** ({feature}), attempting refresh")
+        refreshed_token = await self._refresh_access_token(user_id, token.email, feature)
 
         if refreshed_token:
             return refreshed_token
 
-        logger.warning(f"Failed to refresh token for {phone_number[:4]}**** ({feature})")
+        logger.warning(f"Failed to refresh token for {user_id[:4]}**** ({feature})")
         return None
 
     async def _refresh_access_token(
-        self, phone_number: str, email: str, feature: str = "calendar"
+        self, user_id: str, email: str, feature: str = "calendar"
     ) -> Optional[str]:
         """Refresh an expired access token using the refresh token.
 
         Args:
-            phone_number: User's phone number in E.164 format.
+            user_id: User identifier (phone number, Slack ID, etc.).
             email: Google account email (for updating token record).
             feature: Feature to refresh token for.
 
@@ -288,13 +288,13 @@ class OAuthManager:
             New access token if successful, None otherwise.
         """
         # Get refresh token from Secret Manager
-        # Key format: {normalized_phone}-{feature}
-        normalized_phone = self._normalize_phone(phone_number)
-        secret_key = f"{normalized_phone}-{feature}"
+        # Key format: {normalized}-{feature}
+        normalized = self._normalize_user_id(user_id)
+        secret_key = f"{normalized}-{feature}"
         refresh_token = await self._secret_manager.get_refresh_token(secret_key)
-        
+
         if not refresh_token:
-            logger.error(f"No refresh token found for {phone_number[:4]}**** ({feature})")
+            logger.error(f"No refresh token found for {user_id[:4]}**** ({feature})")
             return None
 
         async with httpx.AsyncClient() as client:
@@ -318,9 +318,9 @@ class OAuthManager:
 
                 if access_token:
                     await self.store_tokens(
-                        phone_number, email, access_token, new_refresh_token, expires_in, feature
+                        user_id, email, access_token, new_refresh_token, expires_in, feature
                     )
-                    logger.info(f"Refreshed access token for {phone_number[:4]}**** ({feature})")
+                    logger.info(f"Refreshed access token for {user_id[:4]}**** ({feature})")
                     return access_token
 
                 return None
@@ -329,24 +329,24 @@ class OAuthManager:
                 logger.error(f"Token refresh failed: {e.response.status_code}")
                 # If refresh fails (e.g., token revoked), clean up
                 if e.response.status_code in (400, 401):
-                    await self.revoke_tokens(phone_number, feature)
+                    await self.revoke_tokens(user_id, feature)
                 return None
             except Exception as e:
                 logger.error(f"Token refresh error: {e}")
                 return None
 
-    async def get_token_info(self, phone_number: str, feature: str = "calendar") -> Optional[OAuthToken]:
-        """Get token information for a phone number.
+    async def get_token_info(self, user_id: str, feature: str = "calendar") -> Optional[OAuthToken]:
+        """Get token information for a user.
 
         Args:
-            phone_number: User's phone number in E.164 format.
+            user_id: User identifier (phone number, Slack ID, etc.).
             feature: Feature to get info for.
 
         Returns:
             OAuthToken if found, None otherwise.
         """
-        normalized_phone = self._normalize_phone(phone_number)
-        doc_id = f"{normalized_phone}_{feature}"
+        normalized = self._normalize_user_id(user_id)
+        doc_id = f"{normalized}_{feature}"
         doc_ref = self._tokens_collection.document(doc_id)
         doc = await doc_ref.get()
 
@@ -355,31 +355,31 @@ class OAuthManager:
 
         return OAuthToken.from_firestore(doc.to_dict())
 
-    async def has_valid_token(self, phone_number: str, feature: str = "calendar") -> bool:
-        """Check if a phone number has a valid (or refreshable) OAuth token.
+    async def has_valid_token(self, user_id: str, feature: str = "calendar") -> bool:
+        """Check if a user has a valid (or refreshable) OAuth token.
 
         Args:
-            phone_number: User's phone number in E.164 format.
+            user_id: User identifier (phone number, Slack ID, etc.).
             feature: Feature to check.
 
         Returns:
             True if valid token exists or can be refreshed, False otherwise.
         """
-        token = await self.get_access_token(phone_number, feature)
+        token = await self.get_access_token(user_id, feature)
         return token is not None
 
-    async def revoke_tokens(self, phone_number: str, feature: str = "calendar") -> bool:
-        """Revoke and delete all tokens for a phone number and feature.
+    async def revoke_tokens(self, user_id: str, feature: str = "calendar") -> bool:
+        """Revoke and delete all tokens for a user and feature.
 
         Args:
-            phone_number: User's phone number in E.164 format.
+            user_id: User identifier (phone number, Slack ID, etc.).
             feature: Feature to revoke.
 
         Returns:
             True if successful, False otherwise.
         """
-        normalized_phone = self._normalize_phone(phone_number)
-        doc_id = f"{normalized_phone}_{feature}"
+        normalized = self._normalize_user_id(user_id)
+        doc_id = f"{normalized}_{feature}"
 
         try:
             # Delete from Firestore
@@ -387,11 +387,11 @@ class OAuthManager:
             await doc_ref.delete()
 
             # Delete from Secret Manager
-            # Key format: {normalized_phone}-{feature}
-            secret_key = f"{normalized_phone}-{feature}"
+            # Key format: {normalized}-{feature}
+            secret_key = f"{normalized}-{feature}"
             await self._secret_manager.delete_refresh_token(secret_key)
-            
-            logger.info(f"Revoked tokens for phone {phone_number[:4]}****, feature: {feature}")
+
+            logger.info(f"Revoked tokens for user {user_id[:4]}****, feature: {feature}")
             return True
 
         except Exception as e:

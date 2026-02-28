@@ -16,7 +16,7 @@ from google.adk.code_executors import BuiltInCodeExecutor
 
 
 def create_code_executor_agent(
-    model_name: str = "gemini-3-pro-preview",
+    model_name: str = "gemini-3.1-pro-preview",
     project: str = None,
     location: str = None
 ):

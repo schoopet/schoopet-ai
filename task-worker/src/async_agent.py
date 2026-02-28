@@ -63,7 +63,7 @@ class AsyncAgent:
 
         # Initialize Model (Gemini on Vertex AI)
         model = Gemini(
-            model_name="gemini-2.0-flash-001",
+            model_name="gemini-3-flash-preview",
             vertexai=True,
             project=self.project,
             location=self.location
