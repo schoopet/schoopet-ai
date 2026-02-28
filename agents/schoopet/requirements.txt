@@ -1,4 +1,5 @@
-google-adk[eval]>=1.25.0
+google-adk[eval]==1.25.0
+google-genai==1.63.0
 google-cloud-aiplatform>=1.111.0
 google-cloud-firestore>=2.14.0
 google-cloud-secret-manager>=2.16.0
