@@ -7,7 +7,7 @@
 # Prerequisites:
 #   - gcloud CLI installed and authenticated
 #   - Secrets created in Secret Manager (run setup_secrets.sh first)
-#   - GOOGLE_CLOUD_PROJECT and AGENT_ENGINE_ID environment variables set
+#   - GOOGLE_CLOUD_PROJECT and AGENT_ENGINE_ID (or GOOGLE_CLOUD_AGENT_ENGINE_ID) set
 
 set -e
 
@@ -15,11 +15,11 @@ set -e
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-mmontan-ml}"
 REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 SERVICE_NAME="shoopet-sms-gateway"
-AGENT_ENGINE_ID="${AGENT_ENGINE_ID}"
+AGENT_ENGINE_ID="${AGENT_ENGINE_ID:-${GOOGLE_CLOUD_AGENT_ENGINE_ID}}"
 
 # Validate required variables
 if [ -z "$AGENT_ENGINE_ID" ]; then
-    echo "Error: AGENT_ENGINE_ID environment variable is required"
+    echo "Error: AGENT_ENGINE_ID or GOOGLE_CLOUD_AGENT_ENGINE_ID environment variable is required"
     echo "Set it with: export AGENT_ENGINE_ID=<your-agent-engine-id>"
     exit 1
 fi
