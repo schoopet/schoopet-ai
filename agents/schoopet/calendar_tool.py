@@ -488,7 +488,14 @@ class CalendarTool:
         user_token_data = self._oauth_client.get_token_data(phone_number, "calendar")
         if user_token_data:
             email = user_token_data.get("email", "Unknown")
-            lines.append(f"Personal account ({email}) is authorized.")
+            user_access_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
+            if user_access_token:
+                lines.append(f"Personal account ({email}) is authorized.")
+            else:
+                link = self._oauth_client.get_oauth_link(phone_number, "calendar")
+                lines.append(
+                    f"Personal account ({email}) connection has expired. Re-authorize here:\n{link}"
+                )
         else:
             link = self._oauth_client.get_oauth_link(phone_number, "calendar")
             lines.append(f"Personal account is not connected. Authorize here:\n{link}")

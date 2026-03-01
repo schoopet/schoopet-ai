@@ -73,7 +73,7 @@ class TestCalendarTool:
         
         result = calendar_tool.list_calendar_events(start_date="2024-01-01", tool_context=tool_context)
         
-        assert "Your Google Calendar is not connected yet" in result
+        assert "can't access your calendar" in result
         assert OAUTH_LINK in result
         
         calendar_tool._oauth_client.get_oauth_link.assert_called_with(PHONE_NUMBER, "calendar")
@@ -107,10 +107,10 @@ class TestCalendarTool:
         }
         
         calendar_tool._oauth_client.get_token_data.return_value = mock_token_data
-        calendar_tool._oauth_client.is_token_expired.return_value = False
-        
+        calendar_tool._oauth_client.get_valid_access_token.return_value = ACCESS_TOKEN
+
         result = calendar_tool.get_calendar_status(tool_context=tool_context)
-        assert "Google Calendar is connected to: user@example.com" in result
+        assert "Personal account (user@example.com) is authorized." in result
 
     def test_get_calendar_status_not_connected(self, calendar_tool, tool_context):
         """Should return auth link if not connected."""
@@ -118,7 +118,7 @@ class TestCalendarTool:
         calendar_tool._oauth_client.get_oauth_link.return_value = OAUTH_LINK
         
         result = calendar_tool.get_calendar_status(tool_context=tool_context)
-        assert "Google Calendar is not connected" in result
+        assert "Personal account is not connected" in result
         assert OAUTH_LINK in result
 
     def test_get_calendar_status_expired_refresh_fail(self, calendar_tool, tool_context):
@@ -126,7 +126,6 @@ class TestCalendarTool:
         mock_token_data = {"email": "user@example.com", "expires_at": datetime.now(timezone.utc)}
 
         calendar_tool._oauth_client.get_token_data.return_value = mock_token_data
-        calendar_tool._oauth_client.is_token_expired.return_value = True
         calendar_tool._oauth_client.get_valid_access_token.return_value = None # Refresh failed
         calendar_tool._oauth_client.get_oauth_link.return_value = OAUTH_LINK
 

@@ -62,8 +62,8 @@ class TestOAuthClient:
 
     def test_normalize_phone(self, oauth_client):
         """Should normalize phone numbers correctly."""
-        assert oauth_client._normalize_phone("+1-415-555-1234") == "14155551234"
-        assert oauth_client._normalize_phone("14155551234") == "14155551234"
+        assert oauth_client._normalize_user_id("+1-415-555-1234") == "14155551234"
+        assert oauth_client._normalize_user_id("14155551234") == "14155551234"
 
     def test_get_oauth_link(self, oauth_client):
         """Should generate correct OAuth link with feature."""
