@@ -60,6 +60,7 @@ def create_agent(
 
     # Email tools
     read_emails_tool = FunctionTool(func=email_tool.read_emails)
+    fetch_email_tool = FunctionTool(func=email_tool.fetch_email)
     add_workflow_tool = FunctionTool(func=email_tool.add_email_workflow)
     update_workflow_tool = FunctionTool(func=email_tool.update_email_workflow)
     remove_workflow_tool = FunctionTool(func=email_tool.remove_email_workflow)
@@ -68,6 +69,7 @@ def create_agent(
 
     # Drive tools
     save_to_drive_tool = FunctionTool(func=drive_tool.save_file_to_drive)
+    save_attachment_to_drive_tool = FunctionTool(func=drive_tool.save_attachment_to_drive)
     list_drive_files_tool = FunctionTool(func=drive_tool.list_drive_files)
     drive_status_tool = FunctionTool(func=drive_tool.get_drive_status)
 
@@ -119,6 +121,7 @@ def create_agent(
         device_status_tool,
         # Email tools
         read_emails_tool,
+        fetch_email_tool,
         add_workflow_tool,
         update_workflow_tool,
         remove_workflow_tool,
@@ -126,6 +129,7 @@ def create_agent(
         email_system_status_tool,
         # Drive tools
         save_to_drive_tool,
+        save_attachment_to_drive_tool,
         list_drive_files_tool,
         drive_status_tool,
         # Sheets tools
@@ -263,11 +267,16 @@ def create_agent(
 
         "**Google Drive:**\n"
         "- save_file_to_drive(filename, content, folder_id): Save text content to the user's Google Drive.\n"
+        "- save_attachment_to_drive(artifact_filename, drive_filename, folder_id): Save a binary email "
+        "attachment (PDF, image, etc.) from the artifact registry to Google Drive, preserving the original "
+        "file format. Use this for attachments listed under 'Stored attachments' in the email prompt — it "
+        "uploads the actual binary file rather than extracted text.\n"
         "- list_drive_files(folder_id, query, max_results): List files in a Drive folder. "
         "Use to check if a file already exists before saving a duplicate.\n"
         "- get_drive_status(): Check if Google Workspace (Drive + Sheets) is connected for this user.\n"
         "Use for:\n"
         "  • Saving documents, notes, or email content to Drive\n"
+        "  • Saving original binary attachments (PDFs, images) from emails to Drive\n"
         "  • Checking whether a file already exists before creating a duplicate\n"
         "  • Checking Workspace connection status\n"
         "Note: Drive and Sheets share one authorization (google-workspace). "
@@ -291,8 +300,11 @@ def create_agent(
         "**INCOMING_EMAIL_PROCESSING trigger:**\n"
         "When a message starts with 'INCOMING_EMAIL_PROCESSING':\n"
         "1. Parse From, Subject, Date from the header fields provided.\n"
-        "2. Execute the workflow instructions included in the message exactly as written.\n"
-        "3. Confirm silently in your internal monologue — do NOT send any SMS or Slack message. "
+        "2. If the message includes a 'Stored attachments' section, those artifacts are the original "
+        "binary files (e.g., PDFs). Use save_attachment_to_drive(artifact_filename, drive_filename) to "
+        "upload them to Drive as proper binary files, not save_file_to_drive which only saves text.\n"
+        "3. Execute the workflow instructions included in the message exactly as written.\n"
+        "4. Confirm silently in your internal monologue — do NOT send any SMS or Slack message. "
         "This is a background task triggered automatically by the system.\n\n"
 
         "Note: Regular conversation is automatically saved. Only use explicit tools when needed.\n\n"
@@ -431,7 +443,13 @@ def create_agent(
     return agent
 
 def create_adk_agent() -> AdkApp:
-    return AdkApp(agent=create_agent())
+    from google.adk.artifacts.gcs_artifact_service import GcsArtifactService
+    return AdkApp(
+        agent=create_agent(),
+        artifact_service_builder=lambda: GcsArtifactService(
+            bucket_name="mmontan-ml-agent-artifacts"
+        ),
+    )
 
 root_agent = create_agent()
 agent = root_agent
