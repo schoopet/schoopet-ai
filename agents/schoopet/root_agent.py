@@ -6,6 +6,7 @@ from .house_tool import HouseTool
 from .preferences_tool import PreferencesTool
 from .email_tool import EmailTool
 from .drive_sheets_tool import DriveTool, SheetsTool
+from .model_callbacks import before_model_modifier
 from .tools.async_task_tool import AsyncTaskTool
 from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
@@ -61,6 +62,8 @@ def create_agent(
     # Email tools
     read_emails_tool = FunctionTool(func=email_tool.read_emails)
     fetch_email_tool = FunctionTool(func=email_tool.fetch_email)
+    list_artifacts_tool = FunctionTool(func=email_tool.list_artifacts)
+    read_artifact_tool = FunctionTool(func=email_tool.read_artifact)
     add_workflow_tool = FunctionTool(func=email_tool.add_email_workflow)
     update_workflow_tool = FunctionTool(func=email_tool.update_email_workflow)
     remove_workflow_tool = FunctionTool(func=email_tool.remove_email_workflow)
@@ -122,6 +125,8 @@ def create_agent(
         # Email tools
         read_emails_tool,
         fetch_email_tool,
+        list_artifacts_tool,
+        read_artifact_tool,
         add_workflow_tool,
         update_workflow_tool,
         remove_workflow_tool,
@@ -246,6 +251,16 @@ def create_agent(
         "**Email:**\n"
         "- read_emails(query, max_results): Read emails from the shared inbox. Only shows emails "
         "from senders the user has a workflow for. Call this when users ask to check their emails.\n"
+        "- fetch_email(message_id): Fetch the full email body and store supported attachments as artifacts. "
+        "After calling this, you MUST call read_artifact for every artifact listed in the response "
+        "before attempting to process or summarize the email — the artifact bytes are not in context "
+        "until read_artifact loads them.\n"
+        "- list_artifacts(): List all files stored in the current session's artifact registry. "
+        "Use after fetch_email to confirm which artifacts are available.\n"
+        "- read_artifact(artifact_key): Load an artifact and inject its bytes into the model context. "
+        "REQUIRED before processing any attachment — without this call, the file contents are not visible. "
+        "For PDFs, images, and other binary files, Gemini reads the actual bytes directly after this call. "
+        "Call read_artifact for each artifact key returned by fetch_email before executing workflow instructions.\n"
         "- add_email_workflow(sender_email, processing_prompt, drive_folder_id, sheet_id): Register a "
         "sender with a custom workflow. When an email arrives from that sender it is automatically "
         "routed to this user and the agent executes processing_prompt. Also checks Drive/Sheets auth.\n"
@@ -300,10 +315,13 @@ def create_agent(
         "**INCOMING_EMAIL_PROCESSING trigger:**\n"
         "When a message starts with 'INCOMING_EMAIL_PROCESSING':\n"
         "1. Parse From, Subject, Date from the header fields provided.\n"
-        "2. If the message includes a 'Stored attachments' section, those artifacts are the original "
-        "binary files (e.g., PDFs). Use save_attachment_to_drive(artifact_filename, drive_filename) to "
-        "upload them to Drive as proper binary files, not save_file_to_drive which only saves text.\n"
-        "3. Execute the workflow instructions included in the message exactly as written.\n"
+        "2. If the message includes a 'Stored attachments' section, call read_artifact for EVERY "
+        "artifact key listed before doing anything else. This loads the file bytes into context so "
+        "you can read and process the actual content (e.g., extract fields from a PDF resume or invoice). "
+        "Do not skip this step — the file contents are not available until read_artifact is called.\n"
+        "3. After loading all artifacts, execute the workflow instructions included in the message exactly as written. "
+        "To save an attachment as a binary file to Drive, use save_attachment_to_drive(artifact_filename, drive_filename) "
+        "rather than save_file_to_drive, which only saves text.\n"
         "4. Confirm silently in your internal monologue — do NOT send any SMS or Slack message. "
         "This is a background task triggered automatically by the system.\n\n"
 
@@ -439,6 +457,7 @@ def create_agent(
         tools=tools,
         sub_agents=[structured_notes_agent],
         instruction=prompt,
+        before_model_callback=before_model_modifier,
     )
     return agent
 

@@ -1,13 +1,15 @@
 """Email tool for the Schoopet agent.
 
-Provides on-demand email reading and sender authorization management.
+Provides on-demand email reading, full email fetching with attachment handling,
+and sender authorization management.
+
 Uses the system workspace_system token (phone="email_system", feature="workspace_system")
 to read the shared inbox, filtered per-user by the email_authorizations Firestore
 collection.
 """
+import base64
 import logging
 import os
-import base64
 from typing import Optional
 
 from google.adk.tools import ToolContext
@@ -20,6 +22,37 @@ SYSTEM_FEATURE = "workspace_system"
 
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 AUTHORIZATIONS_COLLECTION = "email_workflows"
+
+# MIME types natively understood by Gemini as inline_data
+GEMINI_SUPPORTED_MIME_TYPES: frozenset[str] = frozenset({
+    # Documents
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
+    # Images
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/tiff",
+    # Audio
+    "audio/wav",
+    "audio/mp3",
+    "audio/mpeg",
+    "audio/aiff",
+    "audio/aac",
+    "audio/ogg",
+    "audio/flac",
+    # Video
+    "video/mp4",
+    "video/mpeg",
+    "video/mov",
+    "video/avi",
+    "video/x-flv",
+    "video/mpg",
+    "video/webm",
+    "video/wmv",
+    "video/3gpp",
+})
 
 
 class EmailTool:
@@ -97,6 +130,7 @@ class EmailTool:
             return resp.json().get("messages", [])
 
     def _gmail_fetch(self, message_id: str, token: str) -> Optional[dict]:
+        """Fetch a single message with full body and attachment parts."""
         import httpx
         with httpx.Client() as client:
             resp = client.get(
@@ -106,6 +140,42 @@ class EmailTool:
             )
             resp.raise_for_status()
             return resp.json()
+
+    def _gmail_fetch_metadata(self, message_id: str, token: str) -> Optional[dict]:
+        """Fetch a single message with metadata headers only (lighter)."""
+        import httpx
+        with httpx.Client() as client:
+            resp = client.get(
+                f"{GMAIL_API_BASE}/messages/{message_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    @staticmethod
+    def _decode_body(part: dict) -> str:
+        """Decode base64url-encoded message body."""
+        data = part.get("body", {}).get("data", "")
+        if not data:
+            return ""
+        try:
+            return base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    @classmethod
+    def _extract_text(cls, payload: dict) -> str:
+        """Recursively extract text/plain body from MIME payload."""
+        mime_type = payload.get("mimeType", "")
+        if mime_type == "text/plain":
+            return cls._decode_body(payload)
+        if mime_type.startswith("multipart/"):
+            for part in payload.get("parts", []):
+                text = cls._extract_text(part)
+                if text:
+                    return text
+        return ""
 
     def _parse_message(self, msg: dict) -> dict:
         payload = msg.get("payload", {})
@@ -117,34 +187,100 @@ class EmailTool:
                     return h.get("value", "")
             return ""
 
-        def decode_body(part):
-            data = part.get("body", {}).get("data", "")
-            if not data:
-                return ""
-            try:
-                return base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
-            except Exception:
-                return ""
-
-        def extract_text(p):
-            mime = p.get("mimeType", "")
-            if mime == "text/plain":
-                return decode_body(p)
-            if mime.startswith("multipart/"):
-                for part in p.get("parts", []):
-                    text = extract_text(part)
-                    if text:
-                        return text
-            return ""
-
         return {
             "id": msg.get("id", ""),
             "from": get_header("From"),
             "subject": get_header("Subject"),
             "date": get_header("Date"),
-            "body": extract_text(payload),
+            "body": self._extract_text(payload),
             "snippet": msg.get("snippet", ""),
         }
+
+    def _collect_attachments(
+        self, payload: dict, message_id: str, token: str
+    ) -> list[dict]:
+        """Recursively walk the MIME tree and collect attachment data.
+
+        For each attachment part:
+        - If the MIME type is in GEMINI_SUPPORTED_MIME_TYPES: fetch bytes and
+          return {"filename", "mime_type", "bytes": bytes}.
+        - Otherwise: return {"filename", "mime_type", "bytes": None} so the caller
+          can emit a text note about the unsupported attachment.
+
+        text/plain parts are skipped (handled as the email body).
+        """
+        import httpx
+        results: list[dict] = []
+        with httpx.Client() as client:
+            self._walk_parts(payload, message_id, token, client, results)
+        return results
+
+    def _walk_parts(
+        self, part: dict, message_id: str, token: str, client, results: list
+    ) -> None:
+        mime_type = part.get("mimeType", "")
+
+        # Skip inline text body parts (plain, html, calendar, etc.) — no filename means body content
+        if mime_type.startswith("text/") and not part.get("filename", ""):
+            return
+
+        # Recurse into multipart containers
+        if mime_type.startswith("multipart/"):
+            for sub in part.get("parts", []):
+                self._walk_parts(sub, message_id, token, client, results)
+            return
+
+        # Skip text/html and other inline text variants without a filename
+        filename = part.get("filename", "")
+        body = part.get("body", {})
+        if not filename and not body.get("attachmentId") and not body.get("data"):
+            return
+
+        # Determine bytes for supported types; None for unsupported
+        attachment_bytes: Optional[bytes] = None
+        if mime_type in GEMINI_SUPPORTED_MIME_TYPES:
+            attachment_bytes = self._fetch_attachment_bytes(part, message_id, token, client)
+
+        results.append(
+            {
+                "filename": filename or "(unnamed)",
+                "mime_type": mime_type,
+                "bytes": attachment_bytes,
+            }
+        )
+
+    def _fetch_attachment_bytes(
+        self, part: dict, message_id: str, token: str, client
+    ) -> Optional[bytes]:
+        """Decode or download attachment bytes for a single MIME part."""
+        body = part.get("body", {})
+
+        # Small/inline attachment: data is embedded in the payload
+        if body.get("data"):
+            try:
+                return base64.urlsafe_b64decode(body["data"] + "==")
+            except Exception as e:
+                logger.warning(f"Failed to decode inline attachment data: {e}")
+                return None
+
+        # Large attachment: fetch via attachments.get
+        attachment_id = body.get("attachmentId")
+        if not attachment_id:
+            return None
+
+        try:
+            resp = client.get(
+                f"{GMAIL_API_BASE}/messages/{message_id}/attachments/{attachment_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data", "")
+            if data:
+                return base64.urlsafe_b64decode(data + "==")
+        except Exception as e:
+            logger.warning(f"Failed to fetch attachment {attachment_id}: {e}")
+
+        return None
 
     # ── Public tool methods ────────────────────────────────────────────────
 
@@ -157,12 +293,16 @@ class EmailTool:
         """
         Read emails from the shared inbox filtered to authorized senders only.
 
+        Returns a list with message IDs, sender, subject, and a preview snippet.
+        Call fetch_email(message_id) to get the full content and attachments for
+        a specific message.
+
         Args:
             query: Additional Gmail search query (e.g., "is:unread").
             max_results: Maximum number of emails to return (default: 10).
 
         Returns:
-            Formatted email list, or a message if no emails found.
+            Formatted email list with IDs, or a message if no emails found.
 
         Note:
             Requires user_id from tool_context (phone number).
@@ -202,19 +342,115 @@ class EmailTool:
         results = []
         for m in messages:
             try:
-                raw = self._gmail_fetch(m["id"], token)
-                parsed = self._parse_message(raw)
-                body_preview = (parsed["body"] or parsed["snippet"])[:200].replace("\n", " ")
+                raw = self._gmail_fetch_metadata(m["id"], token)
+                if not raw:
+                    continue
+                headers_list = raw.get("payload", {}).get("headers", [])
+
+                def gh(name):
+                    for h in headers_list:
+                        if h.get("name", "").lower() == name.lower():
+                            return h.get("value", "")
+                    return ""
+
+                snippet = raw.get("snippet", "")[:200].replace("\n", " ")
                 results.append(
-                    f"From: {parsed['from']}\n"
-                    f"Subject: {parsed['subject']}\n"
-                    f"Date: {parsed['date']}\n"
-                    f"Preview: {body_preview}"
+                    f"ID: {m['id']}\n"
+                    f"From: {gh('From')}\n"
+                    f"Subject: {gh('Subject')}\n"
+                    f"Date: {gh('Date')}\n"
+                    f"Preview: {snippet}"
                 )
             except Exception as e:
                 results.append(f"[Error fetching message {m['id']}: {e}]")
 
-        return f"Found {len(results)} email(s):\n\n" + "\n\n---\n\n".join(results)
+        return (
+            f"Found {len(results)} email(s):\n\n"
+            + "\n\n---\n\n".join(results)
+            + "\n\nCall fetch_email(message_id) for full content and attachments."
+        )
+
+    async def fetch_email(
+        self,
+        message_id: str,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """
+        Fetch a single email by message ID, store any supported attachments
+        in the artifact registry, and return the full formatted content.
+
+        Use this after read_emails identifies a message to process. The returned
+        text includes an 'Attachments' section listing artifact keys you can pass
+        to save_attachment_to_drive.
+
+        Attachments in supported formats (PDF, DOCX, images, audio, video) are
+        stored as artifacts and can be accessed by Gemini for content extraction.
+
+        Args:
+            message_id: Gmail message ID (from read_emails output).
+
+        Returns:
+            Formatted email with body and attachment artifact keys,
+            or an error message.
+        """
+        token = self._get_system_token()
+        if not token:
+            return (
+                "The email system is not connected yet. "
+                "Please ask an admin to set up the system Gmail authorization."
+            )
+
+        try:
+            raw = self._gmail_fetch(message_id, token)
+        except Exception as e:
+            return f"Error fetching email {message_id}: {e}"
+
+        parsed = self._parse_message(raw)
+        payload = raw.get("payload", {})
+        attachments = self._collect_attachments(payload, message_id, token)
+
+        artifact_keys: list[tuple[str, str]] = []
+        unsupported_files: list[str] = []
+
+        for a in attachments:
+            artifact_key = f"{message_id}_{a['filename']}"
+            if a.get("bytes") is not None:
+                if tool_context is not None:
+                    try:
+                        from google.genai import types
+                        await tool_context.save_artifact(
+                            artifact_key,
+                            types.Part(
+                                inline_data=types.Blob(
+                                    mime_type=a["mime_type"],
+                                    data=a["bytes"],
+                                )
+                            ),
+                        )
+                        artifact_keys.append((artifact_key, a["mime_type"]))
+                    except Exception as e:
+                        logger.warning(f"Failed to save artifact {artifact_key}: {e}")
+            else:
+                unsupported_files.append(a["filename"])
+
+        body = parsed.get("body") or parsed.get("snippet", "")
+        lines = [
+            f"From: {parsed['from']}",
+            f"Subject: {parsed['subject']}",
+            f"Date: {parsed['date']}",
+            "",
+            body,
+        ]
+
+        if artifact_keys or unsupported_files:
+            lines.append("")
+            lines.append("Attachments (use save_attachment_to_drive to save binary to Drive):")
+            for key, mime in artifact_keys:
+                lines.append(f'  artifact: "{key}" ({mime})')
+            for fname in unsupported_files:
+                lines.append(f"  [{fname} — type not supported, binary not available]")
+
+        return "\n".join(lines)
 
     def add_email_workflow(
         self,
@@ -423,6 +659,86 @@ class EmailTool:
             else:
                 lines.append(f"  - {sender}")
         return "\n".join(lines)
+
+    async def list_artifacts(
+        self,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """
+        List all artifacts stored in the current session's artifact registry.
+
+        Artifacts are saved automatically by fetch_email for each supported attachment
+        (PDF, DOCX, images, etc.). Each key has the format "<message_id>_<filename>".
+        Pass a key to read_artifact to load and analyze the file.
+
+        Returns:
+            Formatted list of artifact keys with MIME type and size,
+            or a message if none are stored.
+        """
+        if tool_context is None:
+            return "ERROR: No tool_context available."
+        try:
+            keys = await tool_context.list_artifacts()
+        except Exception as e:
+            return f"Error listing artifacts: {e}"
+        if not keys:
+            return "No artifacts stored in this session."
+        lines = [f"Stored artifacts ({len(keys)}):"]
+        for key in keys:
+            try:
+                part = await tool_context.load_artifact(key)
+                mime = part.inline_data.mime_type if part and part.inline_data else "unknown"
+                size = len(part.inline_data.data) if part and part.inline_data else 0
+                lines.append(f'  "{key}"  ({mime}, {size:,} bytes)')
+            except Exception:
+                lines.append(f'  "{key}"  (metadata unavailable)')
+        return "\n".join(lines)
+
+    async def read_artifact(
+        self,
+        artifact_key: str,
+        tool_context: ToolContext = None,
+    ) -> dict:
+        """
+        Load an artifact from the session registry and make it available to the model.
+
+        The artifact bytes (PDF, image, etc.) are injected directly into the model's
+        context as inline_data by the agent's before_model_callback, so the model can
+        perform native multimodal analysis (e.g., extract text from a PDF, describe an image).
+
+        For plain text artifacts the decoded content is also returned in this response.
+
+        Args:
+            artifact_key: Artifact key from list_artifacts or fetch_email output
+                          (format: "<message_id>_<filename>").
+
+        Returns:
+            Dict with status, artifact metadata, and tool_response_artifact_id so the
+            before_model_callback knows which artifact to inject.
+        """
+        if tool_context is None:
+            return {"status": "error", "message": "No tool_context available.",
+                    "tool_response_artifact_id": ""}
+        try:
+            part = await tool_context.load_artifact(artifact_key)
+        except Exception as e:
+            return {"status": "error", "message": str(e), "tool_response_artifact_id": ""}
+        if part is None or part.inline_data is None:
+            return {"status": "error",
+                    "message": f"Artifact '{artifact_key}' not found.",
+                    "tool_response_artifact_id": ""}
+        mime = part.inline_data.mime_type
+        size = len(part.inline_data.data)
+        result = {
+            "status": "success",
+            "artifact_key": artifact_key,
+            "mime_type": mime,
+            "size_bytes": size,
+            "tool_response_artifact_id": artifact_key,
+        }
+        if mime.startswith("text/"):
+            result["content"] = part.inline_data.data.decode("utf-8", errors="replace")
+        return result
 
     def get_email_system_status(
         self,
