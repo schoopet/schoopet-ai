@@ -29,14 +29,9 @@ except ImportError:
 
 # Configure Environment for Vertex AI
 os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
-os.environ["GOOGLE_CLOUD_PROJECT"] = "mmontan-ml"
-os.environ["GOOGLE_CLOUD_LOCATION"] = "us-central1"
 
 # Enable verbose HTTP logging to see request/response bodies
 os.environ["HTTPX_LOG_LEVEL"] = "trace"
-# GOOGLE_CLOUD_AGENT_ENGINE_ID may be updated by the update command
-if "GOOGLE_CLOUD_AGENT_ENGINE_ID" not in os.environ:
-    os.environ["GOOGLE_CLOUD_AGENT_ENGINE_ID"] = "172357243746910208"
 
 from .memory_config import get_memory_service, get_memory_bank_config, save_session_to_memory
 

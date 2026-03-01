@@ -1,6 +1,7 @@
 """Configuration settings for SMS Gateway."""
 import os
 from functools import lru_cache
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -20,7 +21,7 @@ class Settings(BaseSettings):
 
     # Service Configuration
     SESSION_TIMEOUT_MINUTES: int = 10
-    AGENT_TIMEOUT_SECONDS: int = 30
+    AGENT_TIMEOUT_SECONDS: int = 300
 
     # Feature Flags
     ENABLE_SIGNATURE_VALIDATION: bool = True
@@ -46,6 +47,9 @@ class Settings(BaseSettings):
     EMAIL_PUBSUB_TOPIC: str = ""  # Full Pub/Sub topic name for Gmail watch
     EMAIL_DRIVE_FOLDER_ID: str = ""  # Default Drive folder for email attachments
     EMAIL_SHEET_ID: str = ""  # Default Sheets ID for email logging
+
+    # Artifact registry
+    ARTIFACT_BUCKET_NAME: str = ""  # GCS bucket for email attachment binaries; computed from project if unset
 
     # Scopes per feature
     OAUTH_SCOPES: dict[str, list[str]] = {
@@ -74,6 +78,12 @@ class Settings(BaseSettings):
             "openid",
         ],
     }
+
+    @model_validator(mode="after")
+    def compute_defaults(self) -> "Settings":
+        if not self.ARTIFACT_BUCKET_NAME:
+            self.ARTIFACT_BUCKET_NAME = f"{self.GOOGLE_CLOUD_PROJECT}-agent-artifacts"
+        return self
 
     class Config:
         env_file = ".env"

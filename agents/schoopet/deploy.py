@@ -37,7 +37,7 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
     # Note: Empty values cause deployment errors, so we filter them out
     env_vars_raw = {
         "GOOGLE_GENAI_USE_VERTEXAI": "true",
-        "OAUTH_BASE_URL": "https://api.schoopet.com",
+        "OAUTH_BASE_URL": os.getenv("OAUTH_BASE_URL", "https://api.schoopet.com"),
         "GOOGLE_SDM_PROJECT_ID": os.getenv("GOOGLE_SDM_PROJECT_ID", "431c3f26-5b55-42da-bcb5-7ccfa19aa9b9"),
         # Async Task Configuration
         "ASYNC_TASKS_QUEUE": os.getenv("ASYNC_TASKS_QUEUE", "async-agent-tasks"),

@@ -33,12 +33,10 @@ User SMS → Twilio → Cloud Run (this service) → Agent Engine
 
 ## Quick Start
 
-### 1. Set Environment Variables
+### 1. Configure environment
 
-```bash
-export GOOGLE_CLOUD_PROJECT=your-project-id
-export AGENT_ENGINE_ID=your-agent-engine-id
-```
+Copy or create `environments/<name>.env` at the repo root (see `environments/wib-boss-finder.env` as reference).
+Secrets go in `sms-gateway/.env` (gitignored).
 
 ### 2. Set Up Secrets
 
@@ -58,8 +56,11 @@ python setup_firestore.py
 ### 4. Deploy to Cloud Run
 
 ```bash
-./scripts/deploy.sh
+# From repo root:
+./sms-gateway/scripts/deploy.sh --env=wib-boss-finder   # or --env=dev, --env=prod
 ```
+
+The script loads `environments/<name>.env` (project settings) then `sms-gateway/.env` (secrets).
 
 ### 5. Configure Twilio
 
@@ -80,11 +81,18 @@ pip install -r requirements.txt
 
 ### Set Environment Variables
 
-Create a `.env` file (see `.env.example`):
+Project-level settings come from `environments/<name>.env` at the repo root.
+Create a `sms-gateway/.env` for local secrets (see `.env.example`):
 
 ```bash
 cp .env.example .env
-# Edit .env with your values
+# Edit .env with your secret values (Twilio, OAuth client, Slack, etc.)
+```
+
+Then source the environment before running locally:
+
+```bash
+set -a && source ../environments/wib-boss-finder.env && set +a
 ```
 
 ### Run Locally
@@ -144,9 +152,9 @@ The SMS gateway is accessible at `api.schoopet.com`. To set up a custom domain f
 ```bash
 gcloud beta run domain-mappings create \
   --service schoopet-sms-gateway \
-  --domain api.schoopet.com \
-  --region us-central1 \
-  --project mmontan-ml
+  --domain <your-domain> \
+  --region <GOOGLE_CLOUD_LOCATION> \
+  --project <GOOGLE_CLOUD_PROJECT>
 ```
 
 ### 2. Configure DNS
@@ -163,9 +171,9 @@ Check the status of the domain mapping:
 
 ```bash
 gcloud beta run domain-mappings describe \
-  --domain api.schoopet.com \
-  --region us-central1 \
-  --project mmontan-ml
+  --domain <your-domain> \
+  --region <GOOGLE_CLOUD_LOCATION> \
+  --project <GOOGLE_CLOUD_PROJECT>
 ```
 
 SSL certificates are provisioned automatically by Google once DNS is configured correctly.

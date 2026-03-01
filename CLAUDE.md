@@ -54,14 +54,31 @@ The agent is built using Google's Agent Development Kit (ADK) with a native mult
 
 ### Environment Configuration
 
-Environment variables can be set in `.env` file (agents/schoopet/.env):
-- `GOOGLE_GENAI_USE_VERTEXAI="true"` - Enable Vertex AI backend
-- `GOOGLE_CLOUD_PROJECT` - GCP project ID (e.g., "mmontan-ml")
+The project uses a two-layer environment system:
+
+**Layer 1 — `environments/<name>.env`** (project-level, checked into git, no secrets):
+```
+environments/
+  dev.env             ← GOOGLE_CLOUD_PROJECT=schoopet-dev
+  prod.env            ← GOOGLE_CLOUD_PROJECT=schoopet-prod
+  wib-boss-finder.env ← GOOGLE_CLOUD_PROJECT=mmontan-ml (current production)
+```
+
+Each file contains:
+- `GOOGLE_CLOUD_PROJECT` - GCP project ID
 - `GOOGLE_CLOUD_LOCATION` - Region (default: us-central1)
-- `AGENT_ENGINE_ID` - Reasoning engine ID (from Vertex AI)
-- `OAUTH_BASE_URL` - SMS Gateway URL for OAuth links (e.g., "https://sms-gateway-xxx.run.app")
-- `GOOGLE_SDM_PROJECT_ID` - Google SDM project ID for smart home access (optional)
-- `SLACK_ALLOWED_TEAM_ID` - Slack workspace team_id that is allowed to use system OAuth tokens (find in Slack Admin > About). If unset, system tokens are never used.
+- `GOOGLE_CLOUD_AGENT_ENGINE_ID` - Reasoning engine ID (filled after first deploy)
+- `ARTIFACT_BUCKET_NAME` - GCS bucket for artifacts
+- `OAUTH_BASE_URL` / `SMS_GATEWAY_URL` - Service URLs
+- `TASK_WORKER_URL` / `TASK_WORKER_SA` - Task worker config
+- `EMAIL_PUBSUB_TOPIC` - Full Pub/Sub topic name
+
+**Layer 2 — `agents/schoopet/.env`** (secrets + local overrides, gitignored):
+- `GOOGLE_SDM_PROJECT_ID` - Google SDM project ID for smart home access
+- `SLACK_ALLOWED_TEAM_ID` - Slack workspace team_id allowed to use system OAuth tokens
+- Any local overrides of layer 1 values
+
+Layer 2 is loaded second and can override layer 1. The deploy scripts handle both layers automatically.
 
 BigQuery MCP is enabled automatically when GOOGLE_CLOUD_PROJECT is set and BigQuery MCP service is enabled:
 ```bash
@@ -89,11 +106,19 @@ python -m venv schoopet/.venv
 source schoopet/.venv/bin/activate  # On Windows: schoopet\.venv\Scripts\activate
 pip install -r schoopet/requirements.txt
 
-# Deploy agent to Vertex AI Agent Engine (remote)
-python -m schoopet.deploy
-# First run creates new Agent Engine and outputs ID
-# Add ID to .env as AGENT_ENGINE_ID for subsequent updates
-# Subsequent runs update the existing Agent Engine
+# Deploy agent to Vertex AI Agent Engine
+./deploy.sh                          # defaults to --env=dev
+./deploy.sh --env=wib-boss-finder    # deploy to production (mmontan-ml)
+./deploy.sh --env=prod               # deploy to schoopet-prod
+./deploy.sh --new                    # create a brand-new Agent Engine
+# First deploy to a new env: no GOOGLE_CLOUD_AGENT_ENGINE_ID → creates new engine
+# Copy the printed ID into environments/<name>.env as GOOGLE_CLOUD_AGENT_ENGINE_ID
+
+# Deploy SMS Gateway
+./sms-gateway/scripts/deploy.sh --env=wib-boss-finder
+
+# Deploy Task Worker
+./task-worker/deploy.sh --env=wib-boss-finder
 
 # Chat with deployed remote agent (recommended)
 # Use the agent-engine-cli (e.g., npx agent-engine-cli chat)
@@ -101,16 +126,16 @@ python -m schoopet.deploy
 # Type 'quit' or 'exit' to save session and terminate
 
 # Run agent locally with CLI (for development/testing)
-python -m schoopet.main
-# Runs agent locally but still creates/updates Agent Engine
-# Type 'quit' or 'exit' to save session to memory and terminate
+# Source the env file first so GOOGLE_CLOUD_PROJECT etc. are set
+set -a && source environments/wib-boss-finder.env && set +a
+cd agents && python -m schoopet.main
 
 # Run ADK web interface for testing
 adk web
 
 # Set up BigQuery MCP (required for structured notes)
 # 1. Enable BigQuery MCP service:
-gcloud beta services mcp enable bigquery.googleapis.com --project=mmontan-ml
+gcloud beta services mcp enable bigquery.googleapis.com --project=PROJECT_ID
 # 2. Ensure you have required IAM roles:
 #    - MCP Tool User
 #    - BigQuery Job User
@@ -120,9 +145,9 @@ gcloud beta services mcp enable bigquery.googleapis.com --project=mmontan-ml
 **Important**: Always use `python -m schoopet.<module>` (not `python <module>.py`) to run agent commands. This maintains the proper Python package context and ensures relative imports work correctly.
 
 **Recommended workflow**:
-1. Deploy agent once: `python -m schoopet.deploy`
+1. Deploy agent: `./agents/deploy.sh --env=<name>`
 2. Chat with deployed agent: Use `agent-engine-cli` (GitHub)
-3. Update deployment after code changes: `python -m schoopet.deploy` (uses existing AGENT_ENGINE_ID)
+3. Update deployment after code changes: `./agents/deploy.sh --env=<name>` (uses GOOGLE_CLOUD_AGENT_ENGINE_ID from env file)
 
 ### System Token (workspace_system)
 
@@ -184,10 +209,12 @@ The agent uses Vertex AI Native Memory Bank with automatic persistence:
 
 ### Agent Engine Management
 
-- Agent Engine ID is stored in environment variable and embedded in main.py
-- `initialize_agent_engine()` handles both creation and updates
-- Updates modify memory bank configuration on existing engine
+- Agent Engine ID is stored in `environments/<name>.env` as `GOOGLE_CLOUD_AGENT_ENGINE_ID`
+- `deploy.sh --env=<name>` reads it automatically; if unset, creates a new engine
+- After first deploy to a new environment, copy the printed ID into the env file
+- Updates modify the agent code and memory bank config on the existing engine
 - Resource naming: `projects/{project}/locations/{location}/reasoningEngines/{id}`
+- `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and `GOOGLE_CLOUD_AGENT_ENGINE_ID` are auto-injected by Agent Engine at runtime — no need to include them in `deploy.py` `env_vars`
 
 ### Memory Tools
 
