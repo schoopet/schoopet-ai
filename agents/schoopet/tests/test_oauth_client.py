@@ -60,10 +60,11 @@ class TestOAuthClient:
         assert oauth_client._client_id == CLIENT_ID
         assert oauth_client._client_secret == CLIENT_SECRET
 
-    def test_normalize_phone(self, oauth_client):
+    def test_normalize_user_id(self):
         """Should normalize phone numbers correctly."""
-        assert oauth_client._normalize_user_id("+1-415-555-1234") == "14155551234"
-        assert oauth_client._normalize_user_id("14155551234") == "14155551234"
+        from agents.schoopet.utils import normalize_user_id
+        assert normalize_user_id("+1-415-555-1234") == "14155551234"
+        assert normalize_user_id("14155551234") == "14155551234"
 
     def test_get_oauth_link(self, oauth_client):
         """Should generate correct OAuth link with feature."""

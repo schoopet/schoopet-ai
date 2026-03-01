@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
 from ..channel import MessageChannel
 from ..config import get_settings
+from ..messages import RATE_LIMIT_MSG_SMS as RATE_LIMIT_MSG
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +38,6 @@ HELP_MSG = (
 NOT_OPTED_IN_MSG = (
     "Please reply YES to opt in and start using this service. "
     "Reply HELP for more info."
-)
-RATE_LIMIT_MSG = (
-    "You've reached your daily message limit. "
-    "Please try again tomorrow. Reply HELP for assistance."
 )
 
 # Global references to services (initialized by main.py)

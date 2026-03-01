@@ -2,7 +2,6 @@ from vertexai.agent_engines.templates.adk import AdkApp
 import os
 from .memory_tool import MemoryTool
 from .calendar_tool import CalendarTool
-from .house_tool import HouseTool
 from .preferences_tool import PreferencesTool
 from .email_tool import EmailTool
 from .drive_sheets_tool import DriveTool, SheetsTool
@@ -26,7 +25,6 @@ def create_agent(
     # Initialize Tools
     memory_tool = MemoryTool()
     calendar_tool = CalendarTool()
-    house_tool = HouseTool()
     preferences_tool = PreferencesTool()
     email_tool = EmailTool()
     drive_tool = DriveTool()
@@ -54,10 +52,6 @@ def create_agent(
     create_event_tool = FunctionTool(func=calendar_tool.create_calendar_event)
     update_event_tool = FunctionTool(func=calendar_tool.update_calendar_event)
     calendar_status_tool = FunctionTool(func=calendar_tool.get_calendar_status)
-
-    # House tools
-    list_devices_tool = FunctionTool(func=house_tool.list_devices)
-    device_status_tool = FunctionTool(func=house_tool.get_device_status)
 
     # Email tools
     read_emails_tool = FunctionTool(func=email_tool.read_emails)
@@ -120,8 +114,6 @@ def create_agent(
         create_event_tool,
         update_event_tool,
         calendar_status_tool,
-        list_devices_tool,
-        device_status_tool,
         # Email tools
         read_emails_tool,
         fetch_email_tool,
@@ -239,14 +231,6 @@ def create_agent(
         "If the user's calendar is not connected, these tools will return an authorization link.\n"
         "The user must click the link to grant access before calendar features work.\n\n"
         
-        "**Smart Home (Google Home):**\n"
-        "- list_devices(): List all connected smart home devices\n"
-        "- get_device_status(device_name): Get status of a specific device\n"
-        "Use for:\n"
-        "  • Checking device status (e.g., 'is the thermostat on?', 'what's the temperature?')\n"
-        "  • Listing available devices in the home\n"
-        "Note: This requires a separate authorization. If not connected, the tool will provide an authorization link "
-        "specifically for Smart Home access. This is separate from Calendar access.\n\n"
 
         "**Email:**\n"
         "- read_emails(query, max_results): Read emails from the shared inbox. Only shows emails "

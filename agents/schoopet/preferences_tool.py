@@ -4,6 +4,8 @@ from typing import Optional, Dict, Any
 from zoneinfo import ZoneInfo
 from google.adk.tools import ToolContext
 
+from .utils import normalize_user_id, require_user_id
+
 # Firestore collection for user preferences
 PREFERENCES_COLLECTION = "user_preferences"
 
@@ -38,17 +40,13 @@ class PreferencesTool:
                 self._firestore_client = firestore.Client(project=self._project_id)
         return self._firestore_client
 
-    def _normalize_phone(self, phone_number: str) -> str:
-        """Normalize phone number for consistent document IDs."""
-        return phone_number.lstrip("+").replace("-", "").replace(" ", "")
-
     def _get_preferences(self, phone_number: str) -> Optional[Dict[str, Any]]:
         """Get all preferences for a user from Firestore."""
         firestore_client = self._get_firestore_client()
         if not firestore_client:
             return None
 
-        normalized = self._normalize_phone(phone_number)
+        normalized = normalize_user_id(phone_number)
         doc_ref = firestore_client.collection(PREFERENCES_COLLECTION).document(normalized)
         doc = doc_ref.get()
 
@@ -62,7 +60,7 @@ class PreferencesTool:
         if not firestore_client:
             return False
 
-        normalized = self._normalize_phone(phone_number)
+        normalized = normalize_user_id(phone_number)
         doc_ref = firestore_client.collection(PREFERENCES_COLLECTION).document(normalized)
 
         from datetime import datetime, timezone
@@ -102,11 +100,9 @@ class PreferencesTool:
             - Japan: "Asia/Tokyo"
             - Australia Eastern: "Australia/Sydney"
         """
-        # Validate tool_context
-        if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
-            return "ERROR: Cannot save preference - no user_id in tool_context."
-
-        phone_number = tool_context.user_id
+        phone_number, err = require_user_id(tool_context, "preferences")
+        if err:
+            return err
 
         # Validate timezone
         try:
@@ -137,11 +133,9 @@ class PreferencesTool:
 
         Note: Requires user_id from tool_context (phone number).
         """
-        # Validate tool_context
-        if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
-            return "ERROR: Cannot get preference - no user_id in tool_context."
-
-        phone_number = tool_context.user_id
+        phone_number, err = require_user_id(tool_context, "preferences")
+        if err:
+            return err
 
         preferences = self._get_preferences(phone_number)
         if preferences and "timezone" in preferences:

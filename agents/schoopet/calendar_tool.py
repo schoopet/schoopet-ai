@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any
 from zoneinfo import ZoneInfo
 from google.adk.tools import ToolContext
 from .oauth_client import OAuthClient
+from .utils import require_user_id
 
 # Google Calendar API endpoints
 CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
@@ -228,10 +229,9 @@ class CalendarTool:
             - When the user expresses a time range (e.g., "today", "tomorrow"), the agent
               should determine their timezone and pass it here.
         """
-        if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
-            return "ERROR: Cannot access calendar - no user_id in tool_context."
-
-        phone_number = tool_context.user_id
+        phone_number, err = require_user_id(tool_context, "calendar")
+        if err:
+            return err
 
         try:
             user_tz = ZoneInfo(user_timezone)
@@ -311,10 +311,9 @@ class CalendarTool:
 
         Note: Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
-            return "ERROR: Cannot access calendar - no user_id in tool_context."
-
-        phone_number = tool_context.user_id
+        phone_number, err = require_user_id(tool_context, "calendar")
+        if err:
+            return err
 
         # Build event payload
         event = {"summary": title}
@@ -393,10 +392,9 @@ class CalendarTool:
 
         Note: Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
-            return "ERROR: Cannot access calendar - no user_id in tool_context."
-
-        phone_number = tool_context.user_id
+        phone_number, err = require_user_id(tool_context, "calendar")
+        if err:
+            return err
 
         # Try to fetch the existing event with a working token, then update it
         try:
@@ -471,10 +469,9 @@ class CalendarTool:
 
         Note: Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
-            return "ERROR: Cannot check calendar status - no user_id in tool_context."
-
-        phone_number = tool_context.user_id
+        phone_number, err = require_user_id(tool_context, "calendar")
+        if err:
+            return err
         lines = []
 
         sys_token = self._oauth_client.get_valid_access_token(

@@ -45,13 +45,16 @@ async def save_session_to_memory(session_service, memory_service, app_name, user
     except Exception as e:
         print(f"Failed to save memory: {e}")
 
-def get_memory_bank_config(project_id, location):
+def get_memory_bank_config(project_id: str = None, location: str = None):
     """
     Returns the Native Memory Bank configuration dictionary.
     Includes memory topics for user preferences, personal info, and facts.
     """
 
-    # Return a dictionary configuration. 
+    project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT")
+    location = location or os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+    # Return a dictionary configuration.
     # Use the structure expected by the API (usually dicts are accepted).
     memory_bank_config = {
         "generation_config": {

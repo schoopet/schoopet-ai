@@ -9,14 +9,13 @@ from src.ratelimit.limiter import RateLimiter
 class TestRateLimiter:
     """Tests for RateLimiter class."""
 
-    def test_normalize_phone(self):
-        """Test phone number normalization."""
-        mock_client = MagicMock()
-        limiter = RateLimiter(mock_client, daily_limit=100)
+    def test_normalize_user_id(self):
+        """Test user ID normalization."""
+        from src.utils import normalize_user_id
 
-        assert limiter._normalize_phone("+19494136310") == "19494136310"
-        assert limiter._normalize_phone("1-949-413-6310") == "19494136310"
-        assert limiter._normalize_phone("+1 949 413 6310") == "19494136310"
+        assert normalize_user_id("+19494136310") == "19494136310"
+        assert normalize_user_id("1-949-413-6310") == "19494136310"
+        assert normalize_user_id("+1 949 413 6310") == "19494136310"
 
     def test_is_excluded_exact_match(self):
         """Test exclusion with exact phone number match."""

@@ -7,3 +7,4 @@
 __pycache__/
 **/__pycache__/
 *.pyc
+agents/schoopet/tests/out/

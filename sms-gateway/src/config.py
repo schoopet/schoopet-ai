@@ -58,11 +58,6 @@ class Settings(BaseSettings):
             "https://www.googleapis.com/auth/userinfo.email",
             "openid",
         ],
-        "house": [
-            "https://www.googleapis.com/auth/sdm.service",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "openid",
-        ],
         "google-workspace": [
             "https://www.googleapis.com/auth/drive.file",
             "https://www.googleapis.com/auth/spreadsheets",

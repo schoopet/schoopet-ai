@@ -5,7 +5,6 @@ Routes:
   GET  /internal/email/renew-watch  - Renew Gmail watch (called by Cloud Scheduler)
   GET  /internal/email/setup-watch  - One-time watch setup
 """
-import asyncio
 import base64
 import json
 import logging

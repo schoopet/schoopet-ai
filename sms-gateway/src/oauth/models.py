@@ -12,7 +12,7 @@ class OAuthState(BaseModel):
 
     state_id: str = Field(..., description="UUID for state parameter")
     user_id: str = Field(..., description="User identifier (phone number, Slack ID, etc.)")
-    feature: str = Field(default="calendar", description="Feature being authorized (e.g., calendar, house)")
+    feature: str = Field(default="calendar", description="Feature being authorized (e.g., calendar, workspace_system)")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = Field(..., description="State expiration time")
     used: bool = Field(default=False, description="Whether state has been consumed")
@@ -57,7 +57,7 @@ class OAuthToken(BaseModel):
     """
 
     user_id: str = Field(..., description="User identifier (phone number, Slack ID, etc.)")
-    feature: str = Field(default="calendar", description="Feature authorized (e.g., calendar, house)")
+    feature: str = Field(default="calendar", description="Feature authorized (e.g., calendar, workspace_system)")
     email: str = Field(..., description="Google account email")
     access_token: str = Field(..., description="OAuth access token")
     token_type: str = Field(default="Bearer", description="Token type")

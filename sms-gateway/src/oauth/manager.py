@@ -9,6 +9,7 @@ from google.cloud import firestore
 
 from .models import OAuthState, OAuthToken
 from .secret_manager import SecretManagerClient
+from ..utils import normalize_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +61,12 @@ class OAuthManager:
         self._states_collection = self._db.collection(STATES_COLLECTION)
         self._tokens_collection = self._db.collection(TOKENS_COLLECTION)
 
-    def _normalize_user_id(self, user_id: str) -> str:
-        """Normalize user ID for consistent Firestore document IDs."""
-        return user_id.lstrip("+").replace("-", "").replace(" ", "")
-
     async def generate_state(self, user_id: str, feature: str = "calendar") -> str:
         """Generate a new OAuth state parameter for CSRF protection.
 
         Args:
             user_id: User identifier (phone number, Slack ID, etc.).
-            feature: Feature being authorized (calendar, house).
+            feature: Feature being authorized (calendar, workspace_system).
 
         Returns:
             State ID (UUID) to include in OAuth URL.
@@ -196,13 +193,13 @@ class OAuthManager:
             access_token: OAuth access token.
             refresh_token: OAuth refresh token (may be None on refresh).
             expires_in: Token expiration time in seconds.
-            feature: Feature associated with token (calendar, house).
+            feature: Feature associated with token (calendar, workspace_system).
 
         Returns:
             True if successful, False otherwise.
         """
         # Document ID includes feature to allow multiple tokens per user
-        normalized = self._normalize_user_id(user_id)
+        normalized = normalize_user_id(user_id)
         doc_id = f"{normalized}_{feature}"
 
         now = datetime.now(timezone.utc)
@@ -244,12 +241,12 @@ class OAuthManager:
 
         Args:
             user_id: User identifier (phone number, Slack ID, etc.).
-            feature: Feature to get token for (calendar, house).
+            feature: Feature to get token for (calendar, workspace_system).
 
         Returns:
             Valid access token if available, None otherwise.
         """
-        normalized = self._normalize_user_id(user_id)
+        normalized = normalize_user_id(user_id)
         doc_id = f"{normalized}_{feature}"
         doc_ref = self._tokens_collection.document(doc_id)
         doc = await doc_ref.get()
@@ -289,7 +286,7 @@ class OAuthManager:
         """
         # Get refresh token from Secret Manager
         # Key format: {normalized}-{feature}
-        normalized = self._normalize_user_id(user_id)
+        normalized = normalize_user_id(user_id)
         secret_key = f"{normalized}-{feature}"
         refresh_token = await self._secret_manager.get_refresh_token(secret_key)
 
@@ -345,7 +342,7 @@ class OAuthManager:
         Returns:
             OAuthToken if found, None otherwise.
         """
-        normalized = self._normalize_user_id(user_id)
+        normalized = normalize_user_id(user_id)
         doc_id = f"{normalized}_{feature}"
         doc_ref = self._tokens_collection.document(doc_id)
         doc = await doc_ref.get()
@@ -378,7 +375,7 @@ class OAuthManager:
         Returns:
             True if successful, False otherwise.
         """
-        normalized = self._normalize_user_id(user_id)
+        normalized = normalize_user_id(user_id)
         doc_id = f"{normalized}_{feature}"
 
         try:

@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 import logging
 
+from .utils import normalize_user_id
+
 # Firestore collection for OAuth tokens (shared with SMS gateway)
 TOKENS_COLLECTION = "oauth_tokens"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -85,10 +87,6 @@ class OAuthClient:
         self._hmac_secret = self._get_secret("oauth-hmac-secret")
         return self._hmac_secret
 
-    def _normalize_user_id(self, user_id: str) -> str:
-        """Normalize user ID for consistent Firestore document IDs."""
-        return user_id.lstrip("+").replace("-", "").replace(" ", "")
-
     def get_oauth_link(self, user_id: str, feature: str) -> str:
         """Generate secure HMAC-signed OAuth authorization link."""
         self._ensure_initialized()
@@ -124,7 +122,7 @@ class OAuthClient:
         if not firestore_client:
             return None
 
-        normalized = self._normalize_user_id(user_id)
+        normalized = normalize_user_id(user_id)
         doc_id = f"{normalized}_{feature}"
         doc_ref = firestore_client.collection(TOKENS_COLLECTION).document(doc_id)
         doc = doc_ref.get()
@@ -154,7 +152,7 @@ class OAuthClient:
             return None
 
         try:
-            normalized = self._normalize_user_id(user_id)
+            normalized = normalize_user_id(user_id)
             secret_key = f"{normalized}-{feature}"
             secret_name = f"projects/{self._project_id}/secrets/oauth-refresh-{secret_key}/versions/latest"
             response = secret_client.access_secret_version(request={"name": secret_name})
@@ -194,7 +192,7 @@ class OAuthClient:
                     # Update token in Firestore
                     firestore_client = self._get_firestore_client()
                     if firestore_client:
-                        normalized = self._normalize_user_id(user_id)
+                        normalized = normalize_user_id(user_id)
                         doc_id = f"{normalized}_{feature}"
                         doc_ref = firestore_client.collection(TOKENS_COLLECTION).document(doc_id)
                         now = datetime.now(timezone.utc)
@@ -234,7 +232,7 @@ class OAuthClient:
         firestore_client = self._get_firestore_client()
         if not firestore_client:
             return None
-        normalized = self._normalize_user_id(user_id)
+        normalized = normalize_user_id(user_id)
         doc = firestore_client.collection("sms_sessions").document(normalized).get()
         if doc.exists:
             return doc.to_dict().get("slack_team_id")

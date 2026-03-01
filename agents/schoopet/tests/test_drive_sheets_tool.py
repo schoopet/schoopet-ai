@@ -171,7 +171,7 @@ async def test_save_attachment_no_user_id(drive_tool):
     )
 
     assert "ERROR" in result
-    assert "Cannot save attachment" in result
+    assert "user_id" in result
 
 
 @pytest.mark.asyncio

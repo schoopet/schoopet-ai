@@ -35,12 +35,13 @@ def preferences_tool():
 class TestPreferencesTool:
     """Tests for PreferencesTool class."""
 
-    def test_normalize_phone(self, preferences_tool):
+    def test_normalize_user_id(self):
         """Should normalize phone numbers consistently."""
-        assert preferences_tool._normalize_phone("+14155551234") == "14155551234"
-        assert preferences_tool._normalize_phone("1-415-555-1234") == "14155551234"
-        assert preferences_tool._normalize_phone("14155551234") == "14155551234"
-        assert preferences_tool._normalize_phone("+1 415 555 1234") == "14155551234"
+        from agents.schoopet.utils import normalize_user_id
+        assert normalize_user_id("+14155551234") == "14155551234"
+        assert normalize_user_id("1-415-555-1234") == "14155551234"
+        assert normalize_user_id("14155551234") == "14155551234"
+        assert normalize_user_id("+1 415 555 1234") == "14155551234"
 
     def test_set_timezone_no_context(self, preferences_tool):
         """Should return error when no tool_context provided."""

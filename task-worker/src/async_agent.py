@@ -64,6 +64,7 @@ class AsyncAgent:
         from google.adk.models.google_llm import Gemini as _BaseGemini
         from google.genai import types
 
+        # Mirrors agents/schoopet/global_gemini.py — keep in sync
         class GlobalGemini(_BaseGemini):
             @cached_property
             def api_client(self):

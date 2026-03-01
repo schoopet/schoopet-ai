@@ -12,6 +12,7 @@ from typing import Optional
 
 from google.adk.tools import ToolContext
 from .oauth_client import OAuthClient
+from .utils import require_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -221,10 +222,9 @@ class DriveTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot save to Drive — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "drive")
+        if err:
+            return err
 
         try:
             sys_token = self._oauth_client.get_valid_access_token(
@@ -271,10 +271,9 @@ class DriveTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot save attachment to Drive — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "drive")
+        if err:
+            return err
 
         artifact = await tool_context.load_artifact(artifact_filename)
         if not artifact or not artifact.inline_data:
@@ -329,10 +328,9 @@ class DriveTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot list Drive files — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "drive")
+        if err:
+            return err
 
         try:
             sys_token = self._oauth_client.get_valid_access_token(
@@ -366,10 +364,9 @@ class DriveTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot check Drive status — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "drive")
+        if err:
+            return err
         lines = []
 
         sys_token = self._oauth_client.get_valid_access_token(
@@ -566,10 +563,9 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot append to Sheets — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
 
         try:
             sys_token = self._oauth_client.get_valid_access_token(
@@ -614,10 +610,9 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot read sheet — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
 
         try:
             sys_token = self._oauth_client.get_valid_access_token(
@@ -662,10 +657,9 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot add column — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
 
         try:
             sys_token = self._oauth_client.get_valid_access_token(
@@ -711,10 +705,9 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot update cell — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
 
         try:
             sys_token = self._oauth_client.get_valid_access_token(
@@ -752,10 +745,9 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot check Sheets status — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
         lines = []
 
         sys_token = self._oauth_client.get_valid_access_token(

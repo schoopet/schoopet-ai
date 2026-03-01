@@ -83,11 +83,13 @@ class TestSessionManager:
             timeout_minutes=10,
         )
 
-    def test_normalize_phone(self, session_manager):
-        """Should normalize phone numbers for document IDs."""
-        assert session_manager._normalize_user_id("+14155551234") == "14155551234"
-        assert session_manager._normalize_user_id("+1-415-555-1234") == "14155551234"
-        assert session_manager._normalize_user_id("14155551234") == "14155551234"
+    def test_normalize_user_id(self):
+        """Should normalize user IDs for document IDs."""
+        from src.utils import normalize_user_id
+
+        assert normalize_user_id("+14155551234") == "14155551234"
+        assert normalize_user_id("+1-415-555-1234") == "14155551234"
+        assert normalize_user_id("14155551234") == "14155551234"
 
     @pytest.mark.asyncio
     async def test_new_user_creates_session(

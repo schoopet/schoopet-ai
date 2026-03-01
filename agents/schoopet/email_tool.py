@@ -14,6 +14,8 @@ from typing import Optional
 
 from google.adk.tools import ToolContext
 
+from .utils import require_user_id
+
 logger = logging.getLogger(__name__)
 
 # System Gmail account identifiers (mirror of gmail_client.py constants)
@@ -308,10 +310,9 @@ class EmailTool:
             Requires user_id from tool_context (phone number).
             Only returns emails from senders the user has explicitly authorized.
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot read emails — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "email")
+        if err:
+            return err
         token = self._get_system_token()
         if not token:
             return (
@@ -479,10 +480,9 @@ class EmailTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot add workflow — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "email workflow")
+        if err:
+            return err
         db = self._get_firestore()
         if not db:
             return "ERROR: Database not available."
@@ -544,10 +544,9 @@ class EmailTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot update workflow — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "email workflow")
+        if err:
+            return err
         db = self._get_firestore()
         if not db:
             return "ERROR: Database not available."
@@ -598,10 +597,9 @@ class EmailTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot remove workflow — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "email workflow")
+        if err:
+            return err
         db = self._get_firestore()
         if not db:
             return "ERROR: Database not available."
@@ -634,10 +632,9 @@ class EmailTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        if not tool_context or not getattr(tool_context, "user_id", None):
-            return "ERROR: Cannot list workflows — no user_id in tool_context."
-
-        phone = tool_context.user_id
+        phone, err = require_user_id(tool_context, "email workflow")
+        if err:
+            return err
         senders = self._get_authorized_senders(phone)
         if not senders:
             return "No email workflows configured yet. Use add_email_workflow() to create one."

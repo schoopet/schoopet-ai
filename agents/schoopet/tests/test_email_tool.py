@@ -234,4 +234,4 @@ async def test_fetch_email_no_system_token():
 
     result = await tool.fetch_email(message_id=MSG_ID, tool_context=None)
 
-    assert "not connected" in result.lower() or "not connected" in result
+    assert "not connected" in result.lower()

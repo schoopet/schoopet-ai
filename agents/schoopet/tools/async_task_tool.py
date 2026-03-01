@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from google.adk.tools import ToolContext
 
+from ..utils import normalize_user_id
 from ..async_tasks.models import (
     AsyncTaskDocument,
     MemoryIsolation,
@@ -61,10 +62,6 @@ class AsyncTaskTool:
 
                 self._firestore_client = firestore.Client(project=self._project_id)
         return self._firestore_client
-
-    def _normalize_phone(self, phone_number: str) -> str:
-        """Normalize phone number for consistent document IDs."""
-        return phone_number.lstrip("+").replace("-", "").replace(" ", "")
 
     def _get_user_id(self, tool_context: Optional[ToolContext]) -> Optional[str]:
         """Extract user_id from tool context safely."""

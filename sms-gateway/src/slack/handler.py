@@ -6,17 +6,11 @@ import time
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
 from ..config import get_settings
+from ..messages import RATE_LIMIT_MSG, WELCOME_MSG
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-WELCOME_MSG = (
-    "Welcome to Schoopet! Send me a message and I'll help you out."
-)
-RATE_LIMIT_MSG = (
-    "You've reached your daily message limit. Please try again tomorrow."
-)
 
 # Global references to services (initialized by main.py)
 _validator = None

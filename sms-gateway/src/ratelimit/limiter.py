@@ -5,6 +5,8 @@ from typing import Set
 
 from google.cloud import firestore
 
+from ..utils import normalize_user_id
+
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "sms_rate_limits"
@@ -35,17 +37,13 @@ class RateLimiter:
         self._excluded_phones: Set[str] = set(excluded_phones or [])
         self._collection = self._db.collection(COLLECTION_NAME)
 
-    def _normalize_phone(self, phone_number: str) -> str:
-        """Normalize phone number for consistent document IDs."""
-        return phone_number.lstrip("+").replace("-", "").replace(" ", "")
-
     def _get_date_key(self) -> str:
         """Get current date as string key (UTC)."""
         return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     def _get_doc_id(self, phone_number: str) -> str:
         """Generate document ID from phone number and date."""
-        normalized = self._normalize_phone(phone_number)
+        normalized = normalize_user_id(phone_number)
         date_key = self._get_date_key()
         return f"{normalized}_{date_key}"
 
@@ -59,7 +57,7 @@ class RateLimiter:
             True if excluded from rate limiting.
         """
         # Check both with and without + prefix
-        normalized = self._normalize_phone(phone_number)
+        normalized = normalize_user_id(phone_number)
         return (
             phone_number in self._excluded_phones
             or f"+{normalized}" in self._excluded_phones

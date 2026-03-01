@@ -26,13 +26,13 @@ COLLECTION_NAME = "sms_sessions"
 def get_db():
     return firestore.Client()
 
-def normalize_phone(phone_number: str) -> str:
+def normalize_user_id(phone_number: str) -> str:
     """Normalize phone number for consistent document IDs."""
     return phone_number.lstrip("+").replace("-", "").replace(" ", "")
 
 def get_user(phone_number):
     db = get_db()
-    doc_id = normalize_phone(phone_number)
+    doc_id = normalize_user_id(phone_number)
     doc_ref = db.collection(COLLECTION_NAME).document(doc_id)
     doc = doc_ref.get()
     if doc.exists:
@@ -52,7 +52,7 @@ def get_user(phone_number):
 
 def register_user(phone_number):
     db = get_db()
-    doc_id = normalize_phone(phone_number)
+    doc_id = normalize_user_id(phone_number)
     doc_ref = db.collection(COLLECTION_NAME).document(doc_id)
     
     if doc_ref.get().exists:
@@ -76,7 +76,7 @@ def register_user(phone_number):
 
 def opt_in_user(phone_number, session_id=None):
     db = get_db()
-    doc_id = normalize_phone(phone_number)
+    doc_id = normalize_user_id(phone_number)
     doc_ref = db.collection(COLLECTION_NAME).document(doc_id)
     
     doc = doc_ref.get()
@@ -107,7 +107,7 @@ def opt_in_user(phone_number, session_id=None):
 
 def opt_out_user(phone_number):
     db = get_db()
-    doc_id = normalize_phone(phone_number)
+    doc_id = normalize_user_id(phone_number)
     doc_ref = db.collection(COLLECTION_NAME).document(doc_id)
     
     if not doc_ref.get().exists:
@@ -124,7 +124,7 @@ def opt_out_user(phone_number):
 
 def delete_user(phone_number):
     db = get_db()
-    doc_id = normalize_phone(phone_number)
+    doc_id = normalize_user_id(phone_number)
     doc_ref = db.collection(COLLECTION_NAME).document(doc_id)
     
     if not doc_ref.get().exists:

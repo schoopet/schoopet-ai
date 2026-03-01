@@ -6,6 +6,7 @@ from typing import Optional
 from google.cloud import firestore
 
 from .models import SessionDocument, SessionInfo, SupervisorSessionDocument
+from ..utils import normalize_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +39,6 @@ class SessionManager:
         self._timeout = timedelta(minutes=timeout_minutes)
         self._collection = self._db.collection(COLLECTION_NAME)
 
-    def _normalize_user_id(self, user_id: str) -> str:
-        """Normalize user ID for consistent Firestore document IDs."""
-        return user_id.lstrip("+").replace("-", "").replace(" ", "")
-
     async def get_or_create_user(self, phone_number: str) -> SessionInfo:
         """Get existing user or create a new user record.
 
@@ -54,7 +51,7 @@ class SessionManager:
         Returns:
             SessionInfo with user status (opted_in, is_new_user).
         """
-        doc_id = self._normalize_user_id(phone_number)
+        doc_id = normalize_user_id(phone_number)
         doc_ref = self._collection.document(doc_id)
 
         doc = await doc_ref.get()
@@ -100,7 +97,7 @@ class SessionManager:
         Returns:
             SessionInfo with new session details.
         """
-        doc_id = self._normalize_user_id(phone_number)
+        doc_id = normalize_user_id(phone_number)
         doc_ref = self._collection.document(doc_id)
 
         # Create Agent Engine session
@@ -128,7 +125,7 @@ class SessionManager:
         Args:
             phone_number: User's phone number in E.164 format.
         """
-        doc_id = self._normalize_user_id(phone_number)
+        doc_id = normalize_user_id(phone_number)
         doc_ref = self._collection.document(doc_id)
 
         logger.info(f"User {phone_number} opted out")
@@ -151,7 +148,7 @@ class SessionManager:
         Returns:
             SessionInfo with session details.
         """
-        doc_id = self._normalize_user_id(phone_number)
+        doc_id = normalize_user_id(phone_number)
         doc_ref = self._collection.document(doc_id)
 
         doc = await doc_ref.get()
@@ -232,7 +229,7 @@ class SessionManager:
             channel: The channel used for this message (sms or whatsapp).
             slack_team_id: Slack workspace team_id (optional, only stored when non-empty).
         """
-        doc_id = self._normalize_user_id(phone_number)
+        doc_id = normalize_user_id(phone_number)
         doc_ref = self._collection.document(doc_id)
 
         update_data = {
@@ -253,7 +250,7 @@ class SessionManager:
         Returns:
             SessionDocument if exists, None otherwise.
         """
-        doc_id = self._normalize_user_id(phone_number)
+        doc_id = normalize_user_id(phone_number)
         doc_ref = self._collection.document(doc_id)
 
         doc = await doc_ref.get()
@@ -281,7 +278,7 @@ class SessionManager:
         Returns:
             SessionInfo with supervisor session details.
         """
-        normalized = self._normalize_user_id(phone_number)
+        normalized = normalize_user_id(phone_number)
         doc_id = f"{normalized}_supervisor_{task_id}"
         doc_ref = self._db.collection(SUPERVISOR_COLLECTION_NAME).document(doc_id)
 
@@ -339,7 +336,7 @@ class SessionManager:
             phone_number: User's phone number in E.164 format.
             task_id: The async task ID.
         """
-        normalized = self._normalize_user_id(phone_number)
+        normalized = normalize_user_id(phone_number)
         doc_id = f"{normalized}_supervisor_{task_id}"
         doc_ref = self._db.collection(SUPERVISOR_COLLECTION_NAME).document(doc_id)
 

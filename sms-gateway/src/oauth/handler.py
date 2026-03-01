@@ -158,7 +158,7 @@ def _error_html(message: str) -> str:
 async def initiate_oauth(
     request: Request,
     token: str = Query(..., description="HMAC-signed initiation token"),
-    feature: str = Query("calendar", description="Feature to authorize (calendar, house)"),
+    feature: str = Query("calendar", description="Feature to authorize (e.g., calendar, workspace_system)"),
 ):
     """Initiate Google OAuth flow using HMAC-signed token.
 
@@ -287,8 +287,7 @@ async def oauth_callback(
 
     logger.info(f"OAuth completed for user {user_id[:4]}****, feature: {feature}, email: {email}")
 
-    # Custom message based on feature
-    service_name = "Smart Home" if feature == "house" else "Google Calendar"
+    service_name = "Google Calendar"
     return HTMLResponse(_success_html(email, service_name))
 
 
@@ -303,7 +302,7 @@ async def oauth_status(
     Args:
         request: FastAPI request (for accessing app state).
         token: HMAC-signed token containing user ID.
-        feature: Feature to check (calendar, house).
+        feature: Feature to check (e.g., calendar, workspace_system).
 
     Returns:
         JSON with OAuth status.
