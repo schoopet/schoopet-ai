@@ -3,7 +3,6 @@
 Uses the system workspace_system OAuth token (stored under phone key "email_system",
 feature "workspace_system") to read the dedicated inbox.
 """
-import base64
 import logging
 from typing import Optional
 
@@ -16,37 +15,6 @@ GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 # Fixed identifiers for the system Gmail account
 SYSTEM_PHONE = "email_system"
 SYSTEM_FEATURE = "workspace_system"
-
-# MIME types natively understood by Gemini as inline_data
-GEMINI_SUPPORTED_MIME_TYPES = {
-    # Documents
-    "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
-    # Images
-    "image/jpeg",
-    "image/png",
-    "image/gif",
-    "image/webp",
-    "image/tiff",
-    # Audio
-    "audio/wav",
-    "audio/mp3",
-    "audio/mpeg",
-    "audio/aiff",
-    "audio/aac",
-    "audio/ogg",
-    "audio/flac",
-    # Video
-    "video/mp4",
-    "video/mpeg",
-    "video/mov",
-    "video/avi",
-    "video/x-flv",
-    "video/mpg",
-    "video/webm",
-    "video/wmv",
-    "video/3gpp",
-}
 
 
 class GmailClient:
@@ -64,16 +32,30 @@ class GmailClient:
         """Return a valid system access token, or None."""
         return await self._oauth_manager.get_access_token(SYSTEM_PHONE, SYSTEM_FEATURE)
 
-    async def get_new_messages(self, history_id: str) -> list[dict]:
-        """Fetch new messages using Gmail history.list since history_id.
+    async def get_new_messages(
+        self, start_history_id: str, new_history_id: str = ""
+    ) -> list[dict]:
+        """Fetch new messages using Gmail history.list since start_history_id.
 
-        Returns a list of parsed email dicts:
-            {id, thread_id, from, to, subject, date, body, snippet}
+        Args:
+            start_history_id: Previously stored baseline historyId used as
+                              ``startHistoryId`` in the API call. Gmail returns
+                              records *strictly after* this value, so passing
+                              the notification's own historyId would always
+                              yield nothing.
+            new_history_id: The historyId from the Pub/Sub notification.
+                            Used for logging only.
+
+        Returns a list of metadata dicts:
+            {id, from, subject, snippet}
         """
         token = await self._get_token()
         if not token:
             logger.error("No workspace_system token available — cannot fetch messages")
             return []
+
+        log_suffix = f" (notification historyId={new_history_id})" if new_history_id else ""
+        logger.debug(f"history.list startHistoryId={start_history_id}{log_suffix}")
 
         async with httpx.AsyncClient() as client:
             try:
@@ -81,7 +63,7 @@ class GmailClient:
                     f"{GMAIL_API_BASE}/history",
                     headers={"Authorization": f"Bearer {token}"},
                     params={
-                        "startHistoryId": history_id,
+                        "startHistoryId": start_history_id,
                         "historyTypes": "messageAdded",
                     },
                 )
@@ -105,15 +87,15 @@ class GmailClient:
 
             emails = []
             for msg_id in message_ids:
-                parsed = await self.fetch_message(msg_id, token=token, client=client)
-                if parsed:
-                    emails.append(parsed)
+                metadata = await self._fetch_metadata(msg_id, token=token, client=client)
+                if metadata:
+                    emails.append(metadata)
             return emails
 
     async def _get_recent_messages(
         self, token: str, client: httpx.AsyncClient, max_results: int = 10
     ) -> list[dict]:
-        """Fallback: list recent messages from INBOX."""
+        """Fallback: list recent messages from INBOX (metadata only)."""
         try:
             resp = await client.get(
                 f"{GMAIL_API_BASE}/messages",
@@ -128,50 +110,39 @@ class GmailClient:
 
         emails = []
         for msg in messages:
-            parsed = await self.fetch_message(msg["id"], token=token, client=client)
-            if parsed:
-                emails.append(parsed)
+            metadata = await self._fetch_metadata(msg["id"], token=token, client=client)
+            if metadata:
+                emails.append(metadata)
         return emails
 
-    async def fetch_message(
+    async def _fetch_metadata(
         self,
         message_id: str,
-        token: str = None,
-        client: httpx.AsyncClient = None,
+        token: str,
+        client: httpx.AsyncClient,
     ) -> Optional[dict]:
-        """Fetch and parse a single Gmail message.
-
-        Returns a dict with keys: id, thread_id, from, to, subject, date, body,
-        snippet, attachments. Each attachment is a dict with filename, mime_type,
-        and bytes (bytes or None for unsupported types).
-        """
-        own_client = client is None
-        if token is None:
-            token = await self._get_token()
-            if not token:
-                return None
-
+        """Fetch metadata (From, Subject, snippet) for a single message."""
         try:
-            async with (httpx.AsyncClient() if own_client else _noop_ctx(client)) as c:
-                c = client if client else c
-                resp = await c.get(
-                    f"{GMAIL_API_BASE}/messages/{message_id}",
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={"format": "full"},
-                )
-                resp.raise_for_status()
-                msg = resp.json()
-                payload = msg.get("payload", {})
-                attachments = await _collect_attachments(
-                    payload, c, token, message_id
-                )
+            resp = await client.get(
+                f"{GMAIL_API_BASE}/messages/{message_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                params={
+                    "format": "metadata",
+                    "metadataHeaders": ["From", "Subject", "Date"],
+                },
+            )
+            resp.raise_for_status()
+            msg = resp.json()
+            headers = msg.get("payload", {}).get("headers", [])
+            return {
+                "id": msg.get("id", ""),
+                "from": _get_header(headers, "From"),
+                "subject": _get_header(headers, "Subject"),
+                "snippet": msg.get("snippet", ""),
+            }
         except Exception as e:
-            logger.error(f"messages.get({message_id}) failed: {e}")
+            logger.error(f"messages.get({message_id}) metadata failed: {e}")
             return None
-
-        result = _parse_message(msg)
-        result["attachments"] = attachments
-        return result
 
     async def setup_watch(self, topic_name: str) -> Optional[str]:
         """Set up Gmail push notifications to a Pub/Sub topic.
@@ -218,164 +189,8 @@ class GmailClient:
 # ──────────────────────────── helpers ────────────────────────────
 
 
-class _noop_ctx:
-    """Context manager that wraps an already-open httpx.AsyncClient."""
-
-    def __init__(self, client: httpx.AsyncClient):
-        self._client = client
-
-    async def __aenter__(self):
-        return self._client
-
-    async def __aexit__(self, *args):
-        pass
-
-
 def _get_header(headers: list[dict], name: str) -> str:
     for h in headers:
         if h.get("name", "").lower() == name.lower():
             return h.get("value", "")
     return ""
-
-
-def _decode_body(part: dict) -> str:
-    """Decode base64url-encoded message body."""
-    data = part.get("body", {}).get("data", "")
-    if not data:
-        return ""
-    try:
-        return base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
-    except Exception:
-        return ""
-
-
-def _extract_text(payload: dict) -> str:
-    """Recursively extract text/plain body from MIME payload."""
-    mime_type = payload.get("mimeType", "")
-
-    if mime_type == "text/plain":
-        return _decode_body(payload)
-
-    if mime_type.startswith("multipart/"):
-        for part in payload.get("parts", []):
-            text = _extract_text(part)
-            if text:
-                return text
-
-    return ""
-
-
-async def _collect_attachments(
-    payload: dict,
-    client: httpx.AsyncClient,
-    token: str,
-    message_id: str,
-) -> list[dict]:
-    """Recursively walk the MIME tree and collect non-text-body attachment data.
-
-    For each attachment part:
-    - If the MIME type is in GEMINI_SUPPORTED_MIME_TYPES: fetch bytes (inline or via
-      the Gmail attachments API) and return {"filename", "mime_type", "bytes": bytes}.
-    - Otherwise: return {"filename", "mime_type", "bytes": None} so the caller can
-      emit a text note about the unsupported attachment.
-
-    text/plain parts are skipped (they are handled as the email body by _extract_text).
-    """
-    results: list[dict] = []
-    await _walk_parts(payload, client, token, message_id, results)
-    return results
-
-
-async def _walk_parts(
-    part: dict,
-    client: httpx.AsyncClient,
-    token: str,
-    message_id: str,
-    results: list[dict],
-) -> None:
-    mime_type = part.get("mimeType", "")
-
-    # Skip the plain-text body — _extract_text already handles it
-    if mime_type == "text/plain":
-        return
-
-    # Recurse into multipart containers
-    if mime_type.startswith("multipart/"):
-        for sub in part.get("parts", []):
-            await _walk_parts(sub, client, token, message_id, results)
-        return
-
-    # Skip text/html and other inline text variants without a filename
-    filename = part.get("filename", "")
-    body = part.get("body", {})
-    if not filename and not body.get("attachmentId") and not body.get("data"):
-        return
-
-    # Determine bytes for supported types; None for unsupported
-    attachment_bytes: Optional[bytes] = None
-    if mime_type in GEMINI_SUPPORTED_MIME_TYPES:
-        attachment_bytes = await _fetch_attachment_bytes(
-            part, client, token, message_id
-        )
-
-    results.append(
-        {
-            "filename": filename or "(unnamed)",
-            "mime_type": mime_type,
-            "bytes": attachment_bytes,
-        }
-    )
-
-
-async def _fetch_attachment_bytes(
-    part: dict,
-    client: httpx.AsyncClient,
-    token: str,
-    message_id: str,
-) -> Optional[bytes]:
-    """Decode or download attachment bytes for a single MIME part."""
-    body = part.get("body", {})
-
-    # Small/inline attachment: data is embedded in the payload
-    if body.get("data"):
-        try:
-            return base64.urlsafe_b64decode(body["data"] + "==")
-        except Exception as e:
-            logger.warning(f"Failed to decode inline attachment data: {e}")
-            return None
-
-    # Large attachment: fetch via attachments.get
-    attachment_id = body.get("attachmentId")
-    if not attachment_id:
-        return None
-
-    try:
-        resp = await client.get(
-            f"{GMAIL_API_BASE}/messages/{message_id}/attachments/{attachment_id}",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        resp.raise_for_status()
-        data = resp.json().get("data", "")
-        if data:
-            return base64.urlsafe_b64decode(data + "==")
-    except Exception as e:
-        logger.warning(f"Failed to fetch attachment {attachment_id}: {e}")
-
-    return None
-
-
-def _parse_message(msg: dict) -> dict:
-    """Convert raw Gmail API message to a simple dict."""
-    payload = msg.get("payload", {})
-    headers = payload.get("headers", [])
-
-    return {
-        "id": msg.get("id", ""),
-        "thread_id": msg.get("threadId", ""),
-        "from": _get_header(headers, "From"),
-        "to": _get_header(headers, "To"),
-        "subject": _get_header(headers, "Subject"),
-        "date": _get_header(headers, "Date"),
-        "body": _extract_text(payload),
-        "snippet": msg.get("snippet", ""),
-    }

@@ -81,7 +81,7 @@ class AsyncAgent:
         model = GlobalGemini(model="gemini-3-pro-preview")
 
         agent = LlmAgent(
-            name=f"async-{self.task_type}-agent",
+            name=f"async_{self.task_type.replace('-', '_')}_agent",
             model=model,
             tools=[],  # No tools for now
             instruction=instruction,
@@ -143,29 +143,36 @@ class AsyncAgent:
             The task result as a string
         """
         try:
-            # Create agent with system instruction
+            from google.adk.runners import Runner
+            from google.adk.sessions import InMemorySessionService
+            from google.genai import types
+
             system_instruction = self._get_system_instruction()
             agent = self._create_agent(system_instruction)
-
-            # Build user message with context
             user_message = self._build_user_message(prompt, context)
 
-            # Execute agent (using to_thread for blocking call)
-            response = await asyncio.to_thread(agent.query, user_message)
+            session_service = InMemorySessionService()
+            session = session_service.create_session(
+                app_name=agent.name, user_id="task_user"
+            )
+            runner = Runner(
+                agent=agent, app_name=agent.name, session_service=session_service
+            )
 
-            result = ""
-            if hasattr(response, "text"):
-                result = response.text
-            elif hasattr(response, "content"):
-                 # Handle response.content if it's an object with parts
-                 if hasattr(response.content, "parts"):
-                     for part in response.content.parts:
-                         if hasattr(part, "text"):
-                             result += part.text
-                 else:
-                     result = str(response.content)
-            else:
-                result = str(response)
+            result_parts = []
+            async for event in runner.run_async(
+                user_id="task_user",
+                session_id=session.id,
+                new_message=types.Content(
+                    role="user", parts=[types.Part(text=user_message)]
+                ),
+            ):
+                if event.is_final_response() and event.content:
+                    for part in event.content.parts:
+                        if hasattr(part, "text") and part.text:
+                            result_parts.append(part.text)
+
+            result = "".join(result_parts)
 
             # Collect memories if enabled
             if self.collect_memories:

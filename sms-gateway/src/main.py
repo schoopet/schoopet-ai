@@ -185,6 +185,7 @@ async def lifespan(app: FastAPI):
             authorizations=authorizations,
             agent_client=agent_client,
             session_manager=session_manager,
+            slack_sender=slack_sender,
         )
         logger.info("Email services initialized")
     else:

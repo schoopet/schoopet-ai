@@ -9,5 +9,6 @@ pydantic
 cloudpickle
 pytest
 pytest-asyncio
+pypdf
 python-dotenv
 pyOpenSSL

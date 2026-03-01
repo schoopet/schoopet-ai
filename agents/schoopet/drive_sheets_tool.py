@@ -105,6 +105,56 @@ class DriveTool:
         file_link = f"https://drive.google.com/file/d/{file_id}/view" if file_id else ""
         return f"Saved '{filename}' to Drive.{' Link: ' + file_link if file_link else ''}"
 
+    def _save_binary_with_token(
+        self,
+        token: str,
+        filename: str,
+        raw_bytes: bytes,
+        mime_type: str,
+        folder_id: str,
+    ) -> Optional[str]:
+        """Attempt to save a binary file using the given token. Returns None on 401/403."""
+        import httpx
+        import json
+
+        metadata: dict = {
+            "name": filename,
+            "mimeType": mime_type,
+        }
+        if folder_id:
+            metadata["parents"] = [folder_id]
+
+        boundary = b"schoopet_boundary"
+        body = (
+            b"--" + boundary + b"\r\n"
+            b"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+            + json.dumps(metadata).encode("utf-8")
+            + b"\r\n--" + boundary + b"\r\n"
+            b"Content-Type: " + mime_type.encode("utf-8") + b"\r\n\r\n"
+            + raw_bytes
+            + b"\r\n--" + boundary + b"--"
+        )
+
+        boundary_str = boundary.decode("utf-8")
+        with httpx.Client() as client:
+            resp = client.post(
+                f"{DRIVE_UPLOAD_BASE}/files?uploadType=multipart",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": f"multipart/related; boundary={boundary_str}",
+                },
+                content=body,
+            )
+
+        if resp.status_code in (401, 403):
+            return None
+
+        resp.raise_for_status()
+        data = resp.json()
+        file_id = data.get("id", "")
+        file_link = f"https://drive.google.com/file/d/{file_id}/view" if file_id else ""
+        return f"Saved '{filename}' to Drive.{' Link: ' + file_link if file_link else ''}"
+
     def _list_files_with_token(
         self,
         token: str,
@@ -192,6 +242,67 @@ class DriveTool:
                     return result
         except Exception as e:
             return f"Error saving to Drive: {e}"
+
+        return _no_workspace_access(phone, self._oauth_client, "Drive folder")
+
+    async def save_attachment_to_drive(
+        self,
+        artifact_filename: str,
+        drive_filename: str,
+        folder_id: str = "",
+        tool_context: ToolContext = None,
+    ) -> str:
+        """
+        Save a binary email attachment (PDF, image, etc.) from the artifact
+        registry to Google Drive, preserving the original file format.
+
+        Use this for attachments listed in the email prompt under 'Stored attachments'.
+        This uploads the original binary rather than the text-extracted version.
+
+        Args:
+            artifact_filename: The artifact key exactly as listed in the email prompt
+                (e.g., "abc123_resume.pdf").
+            drive_filename: Desired filename in Drive (e.g., "resume_john.pdf").
+            folder_id: Optional Drive folder ID. If empty, saves to root.
+
+        Returns:
+            Confirmation with file link, or error/instructions if not accessible.
+
+        Note:
+            Requires user_id from tool_context (phone number).
+        """
+        if not tool_context or not getattr(tool_context, "user_id", None):
+            return "ERROR: Cannot save attachment to Drive — no user_id in tool_context."
+
+        phone = tool_context.user_id
+
+        artifact = await tool_context.load_artifact(artifact_filename)
+        if not artifact or not artifact.inline_data:
+            return f"ERROR: Artifact '{artifact_filename}' not found or has no binary data."
+
+        raw_bytes = artifact.inline_data.data
+        mime_type = artifact.inline_data.mime_type or "application/octet-stream"
+
+        try:
+            sys_token = self._oauth_client.get_valid_access_token(
+                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
+            )
+            if sys_token and _is_allowed_slack_user(phone, self._oauth_client):
+                result = self._save_binary_with_token(
+                    sys_token, drive_filename, raw_bytes, mime_type, folder_id
+                )
+                if result is not None:
+                    return result
+
+            user_token = self._oauth_client.get_valid_access_token(phone, WORKSPACE_FEATURE)
+            if user_token:
+                result = self._save_binary_with_token(
+                    user_token, drive_filename, raw_bytes, mime_type, folder_id
+                )
+                if result is not None:
+                    return result
+        except Exception as e:
+            return f"Error saving attachment to Drive: {e}"
 
         return _no_workspace_access(phone, self._oauth_client, "Drive folder")
 
