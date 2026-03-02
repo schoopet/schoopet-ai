@@ -6,10 +6,13 @@ A multi-component AI assistant system built on Google Vertex AI Agent Engine.
 
 | Component | Path | Description |
 |-----------|------|-------------|
-| Python Agent | `agents/schoopet/` | Google ADK multi-agent with memory, calendar, smart home, Drive/Sheets |
-| SMS Gateway | `sms-gateway/` | FastAPI Cloud Run service bridging Twilio/Slack/Telegram to the agent |
+| Personal Agent | `agents/schoopet/` | Google ADK agent for SMS/WhatsApp/Telegram — uses user's personal OAuth tokens |
+| Team Agent | `agents/schoopet/` | Same codebase, `access_mode="team"` — for Slack/Email, uses system workspace token + BigQuery/email tools |
+| SMS Gateway | `sms-gateway/` | FastAPI Cloud Run service routing each channel to the correct agent |
 | Task Worker | `task-worker/` | Async task executor for long-running agent operations |
 | Website | `web/` | Static Vite landing page |
+
+Both agents are built from `agents/schoopet/root_agent.py` via `create_agent(access_mode)` and deployed as separate Vertex AI reasoning engines.
 
 ## Environments
 
@@ -28,8 +31,11 @@ Secrets and local overrides go in component-level `.env` files (gitignored):
 ## Deploying
 
 ```bash
-# Agent (defaults to --env=dev)
-./agents/deploy.sh --env=wib-boss-finder
+# Team agent (Slack/Email) — --agent-type is required
+./agents/deploy.sh --agent-type=team --env=wib-boss-finder
+
+# Personal agent (SMS/WhatsApp/Telegram)
+./agents/deploy.sh --agent-type=personal --env=wib-boss-finder
 
 # SMS Gateway
 ./sms-gateway/scripts/deploy.sh --env=wib-boss-finder
@@ -47,13 +53,17 @@ Pass `--new` to `agents/deploy.sh` to create a fresh Agent Engine instead of upd
 
 Create `environments/<name>.env` with at minimum `GOOGLE_CLOUD_PROJECT` set. Use `environments/wib-boss-finder.env` as a reference.
 
-### 2. Deploy the agent
+### 2. Deploy the agents
+
+Deploy the team agent first (it serves Slack/Email), then the personal agent:
 
 ```bash
-./agents/deploy.sh --env=<name> --new
-```
+./agents/deploy.sh --agent-type=team --env=<name> --new
+# Copy printed engine ID → environments/<name>.env as TEAM_AGENT_ENGINE_ID
 
-Copy the printed `GOOGLE_CLOUD_AGENT_ENGINE_ID` into `environments/<name>.env`.
+./agents/deploy.sh --agent-type=personal --env=<name> --new
+# Copy printed engine ID → environments/<name>.env as PERSONAL_AGENT_ENGINE_ID
+```
 
 ### 3. Domain and networking setup
 

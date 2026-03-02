@@ -5,15 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 Schoopet is a multi-component project:
-1. **Python Agent** (`agents/schoopet/`) - A Google ADK-based multi-agent system with:
-   - Main agent: Conversational memory for social interactions
-   - Structured Notes subagent: Structured notes management via BigQuery tables
-   - Search subagent: Real-time Google Search integration
+1. **Python Agent** (`agents/schoopet/`) - A Google ADK-based multi-agent system with two purpose-built agents:
+   - **Personal Agent** (SMS/WhatsApp/Telegram): conversational memory, calendar, Drive/Sheets via personal OAuth tokens
+   - **Team Agent** (Slack/Email): same tools but via system `workspace_system` token + email tools + BigQuery/Structured Notes subagent
+   - Search subagent: Real-time Google Search integration (both agents)
    - Persistent memory via Vertex AI Memory Bank
-   - External API tools: Calendar and Smart Home integration via OAuth
-2. **SMS Gateway** (`sms-gateway/`) - FastAPI service that bridges SMS (Twilio) to the agent:
-   - Receives SMS messages and routes to Vertex AI Agent Engine
-   - Handles OAuth flow for Google APIs (Calendar, Smart Home)
+2. **SMS Gateway** (`sms-gateway/`) - FastAPI service that bridges SMS/Slack/Telegram/Email to the agents:
+   - Routes each channel to the correct agent (personal or team)
+   - Handles OAuth flow for Google APIs (Calendar, Drive/Sheets)
    - Stores tokens in Firestore (access) and Secret Manager (refresh)
    - Feature-based token separation for independent scope authorization
 3. **Marketing Website** (`website/`) - A static Vite-based landing page
@@ -24,25 +23,20 @@ Schoopet is a multi-component project:
 
 The agent is built using Google's Agent Development Kit (ADK) with a native multi-agent architecture:
 
-- **agent.py**: Defines the main agent (Schoopet) with Gemini LLM and memory tools
-  - Handles conversational memory, social interactions, and relationships
-  - Delegates to the **Structured Notes** subagent natively via `sub_agents`.
-  - Uses the **Search** agent as a tool (via `AgentTool`) for real-time information.
-- **structured_notes_agent.py**: Defines the Structured Notes subagent
-  - Manages queryable lists and collections via BigQuery tables
-  - Full BigQuery MCP integration for SQL operations
-  - Has access to the **Search** agent as a tool for data enrichment.
-- **search_agent.py**: Defines the Search subagent
-  - Performs real-time Google searches using GoogleSearchTool
-  - Wrapped as an `AgentTool` to be used by both the Main Agent and Structured Notes Agent.
-  - Uses `gemini-3.1-pro-preview` to support mixed tool usage (Search + Functions).
-- **deploy.py**: Deploys agent to Vertex AI Agent Engine (creates or updates remote reasoning engine)
+- **root_agent.py**: Defines both agents via `create_agent(access_mode: "personal"|"team")`.
+  - `create_adk_agent_personal()` / `create_adk_agent_team()` — deploy factory functions.
+  - Module-level `root_agent = create_agent("personal")` for ADK web dev UI.
+- **team_agent.py**: Thin module exposing `root_agent = create_agent("team")` for team evals.
+- **structured_notes_agent.py**: Structured Notes subagent — BigQuery/MCP. **Team agent only** (shared dataset accessed via agent identity).
+- **search_agent.py**: Search subagent — real-time Google Search. Both agents.
+- **deploy.py**: Deploys an agent to Vertex AI Agent Engine. Requires `--agent-type=personal|team`.
 - **agent-engine-cli**: Interactive chat client for deployed remote agent (available on GitHub: [google/agent-engine-cli](https://github.com/google/agent-engine-cli))
 - **main.py**: Local development CLI that initializes/updates Agent Engine and runs agent locally
 - **memory_config.py**: Configures Vertex AI Memory Bank with custom social_memories topic and managed topics
 - **tools/memory_tool.py**: Direct memory management tools for saving and retrieving facts with user-scoped security
-- **calendar_tool.py**: Google Calendar integration using OAuth tokens (list/create/update events)
-- **house_tool.py**: Google Smart Device Management (SDM) integration for smart home devices
+- **calendar_tool.py**: Google Calendar integration — `CalendarTool(access_mode)`, one token path per mode
+- **drive_sheets_tool.py**: Drive/Sheets tools — `DriveTool(access_mode)`, `SheetsTool(access_mode)`
+- **email_tool.py**: Email tools (fetch, list) — **Team agent only**
 - **oauth_client.py**: Shared OAuth client for agent tools (token retrieval, refresh, authorization link generation)
 
 ### Agent Flow
@@ -67,15 +61,17 @@ environments/
 Each file contains:
 - `GOOGLE_CLOUD_PROJECT` - GCP project ID
 - `GOOGLE_CLOUD_LOCATION` - Region (default: us-central1)
-- `GOOGLE_CLOUD_AGENT_ENGINE_ID` - Reasoning engine ID (filled after first deploy)
+- `PERSONAL_AGENT_ENGINE_ID` - Personal agent reasoning engine ID (SMS/WhatsApp/Telegram)
+- `TEAM_AGENT_ENGINE_ID` - Team agent reasoning engine ID (Slack/Email)
 - `ARTIFACT_BUCKET_NAME` - GCS bucket for artifacts
 - `OAUTH_BASE_URL` / `SMS_GATEWAY_URL` - Service URLs
 - `TASK_WORKER_URL` / `TASK_WORKER_SA` - Task worker config
 - `EMAIL_PUBSUB_TOPIC` - Full Pub/Sub topic name
 
+**wib-boss-finder**: `TEAM_AGENT_ENGINE_ID=2114234416376053760` (existing engine). `PERSONAL_AGENT_ENGINE_ID` is empty until first personal deploy.
+
 **Layer 2 — `agents/schoopet/.env`** (secrets + local overrides, gitignored):
 - `GOOGLE_SDM_PROJECT_ID` - Google SDM project ID for smart home access
-- `SLACK_ALLOWED_TEAM_ID` - Slack workspace team_id allowed to use system OAuth tokens
 - Any local overrides of layer 1 values
 
 Layer 2 is loaded second and can override layer 1. The deploy scripts handle both layers automatically.
@@ -106,13 +102,12 @@ python -m venv schoopet/.venv
 source schoopet/.venv/bin/activate  # On Windows: schoopet\.venv\Scripts\activate
 pip install -r schoopet/requirements.txt
 
-# Deploy agent to Vertex AI Agent Engine
-./deploy.sh                          # defaults to --env=dev
-./deploy.sh --env=wib-boss-finder    # deploy to production (mmontan-ml)
-./deploy.sh --env=prod               # deploy to schoopet-prod
-./deploy.sh --new                    # create a brand-new Agent Engine
-# First deploy to a new env: no GOOGLE_CLOUD_AGENT_ENGINE_ID → creates new engine
-# Copy the printed ID into environments/<name>.env as GOOGLE_CLOUD_AGENT_ENGINE_ID
+# Deploy agent to Vertex AI Agent Engine (--agent-type is required)
+./deploy.sh --agent-type=team --env=wib-boss-finder     # team agent (Slack/Email)
+./deploy.sh --agent-type=personal --env=wib-boss-finder # personal agent (SMS/WhatsApp/Telegram)
+./deploy.sh --agent-type=personal --new                  # create a brand-new personal agent engine
+# After --new: copy the printed engine ID into environments/<name>.env
+#   as PERSONAL_AGENT_ENGINE_ID or TEAM_AGENT_ENGINE_ID
 
 # Deploy SMS Gateway
 ./sms-gateway/scripts/deploy.sh --env=wib-boss-finder
@@ -145,9 +140,9 @@ gcloud beta services mcp enable bigquery.googleapis.com --project=PROJECT_ID
 **Important**: Always use `python -m schoopet.<module>` (not `python <module>.py`) to run agent commands. This maintains the proper Python package context and ensures relative imports work correctly.
 
 **Recommended workflow**:
-1. Deploy agent: `./agents/deploy.sh --env=<name>`
+1. Deploy agent: `./agents/deploy.sh --agent-type=personal|team --env=<name>`
 2. Chat with deployed agent: Use `agent-engine-cli` (GitHub)
-3. Update deployment after code changes: `./agents/deploy.sh --env=<name>` (uses GOOGLE_CLOUD_AGENT_ENGINE_ID from env file)
+3. Update deployment after code changes: `./agents/deploy.sh --agent-type=personal|team --env=<name>`
 
 ### System Token (workspace_system)
 
@@ -170,11 +165,15 @@ Open the printed link in a browser signed in as `schoopet.agent@gmail.com`.
 ### Evals
 
 ```bash
-# Run from agents/ directory (NOT agents/schoopet/)
-cd agents && python -m pytest schoopet/evals/test_eval.py -v
+# Run from repo root
+agents/schoopet/.venv/bin/python -m pytest agents/schoopet/evals/test_eval.py -v       # personal agent
+agents/schoopet/.venv/bin/python -m pytest agents/schoopet/evals/test_eval_team.py -v  # team agent
+agents/schoopet/.venv/bin/python -m pytest agents/schoopet/evals/ -v                   # both
 
 # Eval data files must use .test.json extension
-# Located in agents/schoopet/evals/data/
+# Personal evals: agents/schoopet/evals/data/personal/  (save_data, async_tasks, search)
+# Team evals:     agents/schoopet/evals/data/team/      (email_workflow, conversation/BigQuery)
+# Each subdirectory needs its own test_config.json
 ```
 
 ### Website Development
@@ -209,12 +208,12 @@ The agent uses Vertex AI Native Memory Bank with automatic persistence:
 
 ### Agent Engine Management
 
-- Agent Engine ID is stored in `environments/<name>.env` as `GOOGLE_CLOUD_AGENT_ENGINE_ID`
-- `deploy.sh --env=<name>` reads it automatically; if unset, creates a new engine
-- After first deploy to a new environment, copy the printed ID into the env file
+- Two engine IDs per environment: `PERSONAL_AGENT_ENGINE_ID` and `TEAM_AGENT_ENGINE_ID` in `environments/<name>.env`
+- `deploy.sh --agent-type=personal|team --env=<name>` reads the right ID automatically; if unset, creates a new engine
+- After first deploy with `--new`, copy the printed engine ID into the env file under the correct variable
 - Updates modify the agent code and memory bank config on the existing engine
 - Resource naming: `projects/{project}/locations/{location}/reasoningEngines/{id}`
-- `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and `GOOGLE_CLOUD_AGENT_ENGINE_ID` are auto-injected by Agent Engine at runtime — no need to include them in `deploy.py` `env_vars`
+- `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` are auto-injected by Agent Engine at runtime — no need to include them in `deploy.py` `env_vars`
 
 ### Memory Tools
 
@@ -227,39 +226,40 @@ Direct memory management tools for explicit fact storage:
 
 ### Multi-Agent Architecture
 
-The system uses a main agent with one native subagent and one shared tool agent:
+Two purpose-built agents share a common `create_agent(access_mode)` factory:
 
-**Main Agent (Schoopet)**:
-- Model: `gemini-3-pro-preview` (global endpoint only — see GlobalGemini below)
-- Conversational memory for social interactions and relationships
-- Automatic memory bank persistence
-- Direct memory tools (save/retrieve)
-- Uses `sub_agents=[structured_notes_agent]` for native delegation to BigQuery tasks.
-- Uses `tools=[..., search_tool]` to access search capabilities.
+**Personal Agent** (`access_mode="personal"`, SMS/WhatsApp/Telegram):
+- Model: `gemini-3-pro-preview` (global endpoint — see GlobalGemini below)
+- Conversational memory, calendar, Drive/Sheets via user's personal OAuth tokens
+- Tools: memory, preferences, calendar, drive, sheets, async tasks, search
+- No email tools. No BigQuery subagent.
 
-**Subagent 1: Structured Notes**:
+**Team Agent** (`access_mode="team"`, Slack/Email):
+- Same model and memory tools
+- Calendar, Drive, Sheets via system `workspace_system` token (never user tokens)
+- Additional tools: email fetch/list
+- `sub_agents=[structured_notes_agent]` — BigQuery/Structured Notes subagent
+
+**Subagent: Structured Notes** (team only):
 - Model: `gemini-3-pro-preview`
 - Manages structured, queryable data via BigQuery tables
 - Full BigQuery MCP integration (5 tools: list datasets/tables, get info, execute SQL)
 - Uses `tools=[..., search_tool]` to enrich structured data with real-time info.
 - Connection: Streamable HTTP to https://bigquery.googleapis.com/mcp (MCP protocol, not SSE)
-- Authentication: Google Cloud credentials (automatic via ADK)
+- **Team only** because it accesses a shared dataset using the agent identity.
 
-**Tool Agent: Search**:
-- Model: `gemini-3-pro-preview` (Required for mixed tool support)
-- Wrapped as an `AgentTool` for use by other agents.
+**Tool Agent: Search** (both agents):
+- Model: `gemini-3-pro-preview` (required for mixed tool support)
+- Wrapped as an `AgentTool` for use by both agents.
 - Performs real-time Google searches via GoogleSearchTool
-- Provides current information, factual lookups, and research.
-- Built-in tool that operates internally within Gemini model.
 
 **Delegation Flow**:
-1. User makes a request to the main agent.
-2. Main agent determines the need:
-   - For structured data tracking → delegates natively to **Structured Notes**.
+1. User message arrives on a channel → routed to personal or team agent.
+2. Agent determines the need:
+   - For structured data tracking → delegates to **Structured Notes** (team only).
    - For real-time searches → invokes the **Search Agent** tool.
    - For personal memories → handles directly with memory tools.
-3. Structured Notes agent can also invoke the **Search Agent** tool if it needs external data (e.g., verifying a restaurant address).
-4. Results are returned to the calling agent to be integrated into the response.
+3. Results returned to the calling agent to be integrated into the response.
 
 
 **BigQuery Tools Available** (Structured Notes):
@@ -281,9 +281,10 @@ The system uses feature-based OAuth token separation to manage different Google 
 - Allows users to authorize calendar access independently from smart home access
 
 **Supported Features**:
-- `calendar`: Google Calendar API (`calendar.events` scope)
+- `calendar`: Google Calendar API (`calendar.events` scope) — personal agent
+- `google-workspace`: Drive + Sheets scopes — personal agent
 - `house`: Google Smart Device Management API (`sdm.service` scope)
-- `workspace_system`: System account (`schoopet.agent@gmail.com`) Drive + Sheets + Calendar scopes. Stored under `user_id="email_system"`. Firestore doc: `email_system_workspace_system`. Used by Drive/Sheets/Calendar tools when the requesting user belongs to the allowed Slack workspace (`SLACK_ALLOWED_TEAM_ID`).
+- `workspace_system`: System account (`schoopet.agent@gmail.com`) Drive + Sheets + Calendar scopes. Stored under `user_id="email_system"`. Firestore doc: `email_system_workspace_system`. Used exclusively by the team agent tools.
 
 **OAuth Flow**:
 1. Agent tool detects missing token, generates HMAC-signed authorization link
@@ -313,24 +314,28 @@ OAUTH_SCOPES = {
 
 ### Agent Tools (External APIs)
 
-Tools that access external Google APIs on behalf of users:
+Tools that access external Google APIs. Each tool takes `access_mode` at construction; token path never switches at runtime.
 
 **CalendarTool** (`calendar_tool.py`):
-- `list_calendar_events(start_date, end_date, max_results)`: List events in date range
-- `create_calendar_event(title, start, end, description, location, all_day)`: Create new event
-- `update_calendar_event(event_id, ...)`: Update existing event
-- `get_calendar_status()`: Check if calendar is connected
-- Uses `feature="calendar"` for OAuth tokens
+- `list_calendar_events`, `create_calendar_event`, `update_calendar_event`, `get_calendar_status`
+- Personal: uses `feature="calendar"` token for the user. Team: uses `workspace_system` token.
+
+**DriveTool / SheetsTool** (`drive_sheets_tool.py`):
+- `save_attachment_to_drive`, `append_to_sheet`, etc.
+- Personal: uses `feature="google-workspace"` token. Team: uses `workspace_system` token.
+
+**EmailTool** (`email_tool.py`):
+- `fetch_email`, `list_emails` — team agent only.
+- Always uses `workspace_system` token.
 
 **HouseTool** (`house_tool.py`):
-- `list_devices()`: List all connected smart home devices
-- `get_device_status(device_name)`: Get status of specific device
-- Uses `feature="house"` for OAuth tokens
-- Requires `GOOGLE_SDM_PROJECT_ID` environment variable
+- `list_devices()`, `get_device_status(device_name)` — personal agent only.
+- Uses `feature="house"` for OAuth tokens. Requires `GOOGLE_SDM_PROJECT_ID`.
 
 **Common Behavior**:
 - All tools require `user_id` from `ToolContext` (phone number)
-- If no valid token exists, returns authorization link for user to click
+- Personal mode: returns OAuth authorization link when no token exists
+- Team mode: returns admin error when system token missing
 - Automatic token refresh via `OAuthClient.get_valid_access_token()`
 
 ### Website Structure
@@ -366,6 +371,10 @@ Eval files must use `.test.json` extension (`AgentEvaluator.evaluate()` only sca
 dotenv.load_dotenv(pathlib.Path(__file__).parent.parent / ".env")
 ```
 
-### Slack Workspace Gating
+### Channel-to-Agent Routing
 
-System tokens are gated to a specific Slack workspace via `SLACK_ALLOWED_TEAM_ID` in `agents/schoopet/.env`. The Slack `team_id` is stored in the `sms_sessions` Firestore document (field `slack_team_id`) when a message is received. `OAuthClient.get_slack_team_id(user_id)` reads it. If `SLACK_ALLOWED_TEAM_ID` is unset, system tokens are never used (safe default).
+The SMS Gateway routes each channel to the correct agent type via `CHANNEL_AGENT_ROUTING` in `config.py`:
+- `slack`, `email` → **team agent** (uses `TEAM_AGENT_ENGINE_ID`)
+- `sms`, `whatsapp`, `telegram` → **personal agent** (uses `PERSONAL_AGENT_ENGINE_ID`)
+
+`agent_type_for_channel(channel)` is the config helper; defaults to `"personal"` for unknown channels. No runtime fallback between token types — each agent has a single fixed token path baked in at construction.

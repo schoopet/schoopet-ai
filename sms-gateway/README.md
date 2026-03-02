@@ -1,77 +1,93 @@
 # Schoopet SMS Gateway
 
-A Cloud Run service that integrates Twilio SMS with the Schoopet agent deployed on Vertex AI Agent Engine.
+A Cloud Run service that bridges multiple messaging channels to the Schoopet agent on Vertex AI Agent Engine.
 
-## Features
+## Supported Channels
 
-- Receives SMS via Twilio webhooks
-- Routes messages to Schoopet agent on Vertex AI
-- Maintains conversation sessions with 10-minute timeout
-- Splits long responses into multiple SMS messages
-- Validates Twilio webhook signatures for security
+| Channel | Endpoint | Agent |
+|---------|----------|-------|
+| SMS | `POST /webhook/sms` | Personal |
+| WhatsApp | `POST /webhook/sms` | Personal |
+| Telegram | `POST /webhook/telegram` | Personal |
+| Slack | `POST /webhook/slack` | Team |
+| Email (Gmail Pub/Sub) | `POST /webhook/email` | Team |
+
+Personal and team agents are separate Vertex AI reasoning engines. The gateway routes each channel to the correct one automatically.
 
 ## Architecture
 
 ```
-User SMS → Twilio → Cloud Run (this service) → Agent Engine
-                         ↓
-                    Firestore (session state)
-                         ↓
-            Agent Engine → Cloud Run → Twilio → User SMS
+SMS/WhatsApp ──┐
+Telegram ──────┤──→ Personal Agent Engine
+               │         ↕
+               │    Firestore (sessions)
+               │         ↕
+Slack ─────────┤──→ Team Agent Engine
+Email ─────────┘
 ```
+
+Session state is stored in Firestore (`sms_sessions` collection) with separate session IDs per agent type per user.
 
 ## Prerequisites
 
-1. **Google Cloud Setup**
-   - Project with Vertex AI Agent Engine deployed
+1. **Google Cloud**
    - Firestore database enabled
    - Secret Manager enabled
+   - Two Vertex AI Agent Engines deployed (`PERSONAL_AGENT_ENGINE_ID` and `TEAM_AGENT_ENGINE_ID`)
 
-2. **Twilio Account**
-   - Account SID and Auth Token
-   - Phone number for sending/receiving SMS
+2. **Twilio** — Account SID, Auth Token, phone number (SMS/WhatsApp)
+
+3. **Telegram** — Bot token from BotFather
+
+4. **Slack** — Bot token and signing secret
 
 ## Quick Start
 
 ### 1. Configure environment
 
-Copy or create `environments/<name>.env` at the repo root (see `environments/wib-boss-finder.env` as reference).
-Secrets go in `sms-gateway/.env` (gitignored).
+Copy `environments/wib-boss-finder.env` as a reference for your environment file. Secrets go in `sms-gateway/.env` (gitignored).
 
-### 2. Set Up Secrets
+Required in `environments/<name>.env`:
+```
+GOOGLE_CLOUD_PROJECT=...
+PERSONAL_AGENT_ENGINE_ID=...   # personal agent (SMS/WhatsApp/Telegram)
+TEAM_AGENT_ENGINE_ID=...       # team agent (Slack/Email)
+```
+
+### 2. Set up secrets
 
 ```bash
 ./scripts/setup_secrets.sh
 ```
 
-This creates secrets in Secret Manager for Twilio credentials.
-
-### 3. Set Up Firestore
-
-```bash
-cd scripts
-python setup_firestore.py
-```
-
-### 4. Deploy to Cloud Run
+### 3. Deploy to Cloud Run
 
 ```bash
 # From repo root:
-./sms-gateway/scripts/deploy.sh --env=wib-boss-finder   # or --env=dev, --env=prod
+./sms-gateway/scripts/deploy.sh --env=wib-boss-finder
 ```
 
-The script loads `environments/<name>.env` (project settings) then `sms-gateway/.env` (secrets).
+The script loads `environments/<name>.env` then `sms-gateway/.env` (secrets/overrides).
 
-### 5. Configure Twilio
+### 4. Configure webhooks
 
-1. Go to [Twilio Console](https://console.twilio.com)
-2. Navigate to your phone number settings
-3. Set the webhook URL: `https://<your-service-url>/webhook/sms`
-4. Set HTTP method to `POST`
+**Twilio** — set SMS webhook to `https://<service-url>/webhook/sms`
+
+**Telegram** — set webhook:
+```bash
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<service-url>/webhook/telegram"
+```
+
+**Slack** — set Request URL in your Slack App to `https://<service-url>/webhook/slack`
+
+**Gmail (Pub/Sub)** — set up watch via:
+```
+GET /internal/email/setup-watch?topic=projects/<project>/topics/<topic>
+```
 
 ## Local Development
 
-### Install Dependencies
+### Install dependencies
 
 ```bash
 python -m venv .venv
@@ -79,29 +95,21 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Set Environment Variables
-
-Project-level settings come from `environments/<name>.env` at the repo root.
-Create a `sms-gateway/.env` for local secrets (see `.env.example`):
-
-```bash
-cp .env.example .env
-# Edit .env with your secret values (Twilio, OAuth client, Slack, etc.)
-```
-
-Then source the environment before running locally:
+### Set environment variables
 
 ```bash
 set -a && source ../environments/wib-boss-finder.env && set +a
+cp .env.example .env
+# Edit .env with your secrets
 ```
 
-### Run Locally
+### Run locally
 
 ```bash
 uvicorn src.main:app --reload --port 8080
 ```
 
-### Run Tests
+### Run tests
 
 ```bash
 pytest tests/ -v
@@ -113,7 +121,16 @@ pytest tests/ -v
 |----------|--------|-------------|
 | `/` | GET | Service info |
 | `/health` | GET | Health check |
-| `/webhook/sms` | POST | Twilio webhook endpoint |
+| `/webhook/sms` | POST | Twilio SMS/WhatsApp webhook |
+| `/webhook/telegram` | POST | Telegram bot webhook |
+| `/webhook/slack` | POST | Slack Events API webhook |
+| `/webhook/email` | POST | Gmail Pub/Sub push notification |
+| `/oauth/google/initiate` | GET | Start Google OAuth flow |
+| `/oauth/google/callback` | GET | Google OAuth callback |
+| `/internal/task-review` | POST | Async task completion (OIDC-auth) |
+| `/internal/user-notify` | POST | Send user notification (OIDC-auth) |
+| `/internal/email/setup-watch` | GET | One-time Gmail watch setup |
+| `/internal/email/renew-watch` | GET | Renew Gmail watch (Scheduler) |
 
 ## Configuration
 
@@ -121,72 +138,41 @@ pytest tests/ -v
 |---------------------|-------------|---------|
 | `GOOGLE_CLOUD_PROJECT` | GCP project ID | Required |
 | `GOOGLE_CLOUD_LOCATION` | GCP region | `us-central1` |
-| `AGENT_ENGINE_ID` | Agent Engine resource ID | Required |
-| `TWILIO_ACCOUNT_SID` | Twilio Account SID | Required |
-| `TWILIO_AUTH_TOKEN` | Twilio Auth Token | Required |
-| `TWILIO_PHONE_NUMBER` | Twilio phone number | Required |
+| `PERSONAL_AGENT_ENGINE_ID` | Personal agent reasoning engine ID | Required for SMS/Telegram |
+| `TEAM_AGENT_ENGINE_ID` | Team agent reasoning engine ID | Required for Slack/Email |
 | `SESSION_TIMEOUT_MINUTES` | Session inactivity timeout | `10` |
-| `MAX_SMS_SEGMENTS` | Max SMS per response | `10` |
+| `MAX_SMS_SEGMENTS` | Max SMS segments per response | `10` |
 | `AGENT_TIMEOUT_SECONDS` | Agent query timeout | `30` |
+
+Secrets (stored in Secret Manager, injected at deploy time):
+`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `TWILIO_WHATSAPP_NUMBER`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`
 
 ## Session Management
 
-- Sessions are stored in Firestore (`sms_sessions` collection)
-- Each phone number gets a unique session
+- Sessions stored in Firestore (`sms_sessions` collection)
+- Each user has separate session IDs for personal and team agents (`personal_agent_session_id`, `team_agent_session_id`)
+- Backward compatible: old `agent_session_id` documents are treated as team sessions on first read
 - Sessions expire after 10 minutes of inactivity
-- New messages after timeout create a new session
 
-## Message Handling
+## Security
 
-- Long responses are split into 160-character SMS segments
-- Multi-part messages get `(1/N)` prefixes
-- 500ms delay between segments ensures delivery order
-- Maximum 10 segments per response (configurable)
+- Twilio webhook signatures validated on every request
+- Slack requests verified via signing secret
+- Internal endpoints (`/internal/*`) require OIDC token or HMAC signature
+- Credentials stored in Secret Manager
+- Personal and team agents use entirely separate token paths — no cross-contamination possible
+- Cloud Run handles HTTPS termination
 
-## Custom Domain Setup
+## Custom Domain
 
-The SMS gateway is accessible at `api.schoopet.com`. To set up a custom domain for Cloud Run:
-
-### 1. Create Domain Mapping
+The gateway is accessible at `api.schoopet.com`. To configure a custom domain:
 
 ```bash
 gcloud beta run domain-mappings create \
   --service schoopet-sms-gateway \
   --domain <your-domain> \
-  --region <GOOGLE_CLOUD_LOCATION> \
-  --project <GOOGLE_CLOUD_PROJECT>
+  --region <REGION> \
+  --project <PROJECT>
 ```
 
-### 2. Configure DNS
-
-Add a CNAME record in your DNS provider:
-
-| Type  | Name | Value                 |
-|-------|------|-----------------------|
-| CNAME | api  | ghs.googlehosted.com. |
-
-### 3. Verify Domain Mapping
-
-Check the status of the domain mapping:
-
-```bash
-gcloud beta run domain-mappings describe \
-  --domain <your-domain> \
-  --region <GOOGLE_CLOUD_LOCATION> \
-  --project <GOOGLE_CLOUD_PROJECT>
-```
-
-SSL certificates are provisioned automatically by Google once DNS is configured correctly.
-
-### 4. Update Twilio Webhook
-
-After the domain is active, update the Twilio webhook URL to:
-```
-https://api.schoopet.com/webhook/sms
-```
-
-## Security
-
-- Twilio webhook signatures are validated
-- Credentials stored in Secret Manager
-- Cloud Run handles HTTPS termination
+Add a CNAME `api → ghs.googlehosted.com.` in your DNS provider. SSL is provisioned automatically.
