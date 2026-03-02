@@ -209,7 +209,7 @@ async def _route_email_to_agent(workflow: dict, email: dict) -> None:
     phone = workflow.get("authorized_user_phone", "")
     instructions = workflow.get("processing_prompt") or _DEFAULT_EMAIL_PROCESSING_PROMPT
     try:
-        session_info = await _session_manager.get_or_create_session(phone)
+        session_info = await _session_manager.get_or_create_session(phone, agent_type="team")
 
         prompt = _NOTIFICATION_WRAPPER.format(
             from_=email.get("from", ""),

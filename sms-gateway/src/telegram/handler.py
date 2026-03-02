@@ -104,7 +104,7 @@ async def process_telegram_message(
         # Handle /start command
         if message == "/start":
             if not session_info.opted_in:
-                await _session_manager.set_opted_in(user_id)
+                await _session_manager.set_opted_in(user_id, agent_type="personal")
             await _telegram_sender.send(chat_id, WELCOME_MSG)
             await _session_manager.update_last_activity(user_id, channel="telegram")
             return
@@ -112,7 +112,7 @@ async def process_telegram_message(
         # Auto opt-in on first message (no explicit consent needed for Telegram)
         if session_info.is_new_user or not session_info.opted_in:
             logger.info(f"Auto opt-in for Telegram user {user_id}")
-            await _session_manager.set_opted_in(user_id)
+            await _session_manager.set_opted_in(user_id, agent_type="personal")
 
         # Check rate limit
         if _rate_limiter:
@@ -123,7 +123,7 @@ async def process_telegram_message(
                 return
 
         # Get or create agent session
-        session_info = await _session_manager.get_or_create_session(user_id)
+        session_info = await _session_manager.get_or_create_session(user_id, agent_type="personal")
 
         logger.info(
             f"Forwarding to agent for Telegram user {user_id}: "

@@ -11,7 +11,17 @@ class Settings(BaseSettings):
     # Google Cloud Configuration
     GOOGLE_CLOUD_PROJECT: str
     GOOGLE_CLOUD_LOCATION: str = "us-central1"
-    AGENT_ENGINE_ID: str
+    PERSONAL_AGENT_ENGINE_ID: str = ""
+    TEAM_AGENT_ENGINE_ID: str = ""
+
+    # Channel-to-agent routing.  New channels default to "personal" (safe default).
+    CHANNEL_AGENT_ROUTING: dict[str, str] = {
+        "slack": "team",
+        "email": "team",
+        "sms": "personal",
+        "whatsapp": "personal",
+        "telegram": "personal",
+    }
 
     # Twilio Configuration
     TWILIO_ACCOUNT_SID: str
@@ -90,3 +100,11 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
+
+
+def agent_type_for_channel(channel: str) -> str:
+    """Return the agent type for a given channel name.
+
+    Reads from CHANNEL_AGENT_ROUTING; defaults to 'personal' for unknown channels.
+    """
+    return get_settings().CHANNEL_AGENT_ROUTING.get(channel, "personal")

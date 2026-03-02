@@ -1,13 +1,13 @@
 """Google Calendar tool for agent using OAuth tokens.
 
-Token resolution order (per operation):
-1. System token (workspace_system) — succeeds if the calendar is shared with the agent account.
-2. User personal token (calendar) — backwards-compatible fallback.
-3. Neither works → two-option message (authorize as you, or share with agent account).
+Access mode determines which token is used at construction time:
+- "personal": user's personal OAuth token (feature="calendar")
+- "team": system token (feature="workspace_system", user="email_system")
+
+No runtime fallback. Each instance uses exactly one token path.
 """
-import os
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Literal
 from zoneinfo import ZoneInfo
 from google.adk.tools import ToolContext
 from .oauth_client import OAuthClient
@@ -19,39 +19,39 @@ CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 # System-level shared agent account constants
 CALENDAR_SYSTEM_USER_ID = "email_system"
 CALENDAR_SYSTEM_FEATURE = "workspace_system"
-AGENT_EMAIL = "schoopet.agent@gmail.com"
-
-SLACK_ALLOWED_TEAM_ID = os.getenv("SLACK_ALLOWED_TEAM_ID", "")
-
-
-def _is_allowed_slack_user(user_id: str, oauth_client: "OAuthClient") -> bool:
-    """Return True only if user belongs to the configured Slack workspace."""
-    if not SLACK_ALLOWED_TEAM_ID:
-        return False
-    return oauth_client.get_slack_team_id(user_id) == SLACK_ALLOWED_TEAM_ID
-
-
-def _no_calendar_access(phone: str, oauth_client: "OAuthClient") -> str:
-    link = oauth_client.get_oauth_link(phone, "calendar")
-    return (
-        f"Schoopet's shared account ({AGENT_EMAIL}) can't access your calendar.\n\n"
-        f"**Option 1 – Authorize me to act as you**:\n{link}\n\n"
-        f"**Option 2 – Share with Schoopet**: Share your Google Calendar with "
-        f"{AGENT_EMAIL} (add as reader/editor in Calendar settings)."
-    )
 
 
 class CalendarTool:
     """Tool for accessing Google Calendar via OAuth tokens.
 
-    Tries the shared agent account first, then falls back to the user's
-    personal "calendar" OAuth token. If neither works, returns a two-option
-    message explaining how to grant access.
+    Access mode is set at construction time and never changes:
+    - "personal": uses the user's personal OAuth token (feature="calendar")
+    - "team": uses the system workspace_system token (email_system account)
     """
 
-    def __init__(self):
-        """Initialize the Calendar Tool."""
+    def __init__(self, access_mode: Literal["personal", "team"] = "personal"):
+        """Initialize the Calendar Tool.
+
+        Args:
+            access_mode: "personal" to use the user's own token,
+                         "team" to use the shared system token.
+        """
         self._oauth_client = OAuthClient()
+        self._access_mode = access_mode
+
+    def _get_token(self, user_id: str):
+        """Return (token, error) using exactly one token path.
+
+        Returns:
+            (token, None) on success, (None, error_string) on failure.
+        """
+        if self._access_mode == "team":
+            token = self._oauth_client.get_valid_access_token(
+                CALENDAR_SYSTEM_USER_ID, CALENDAR_SYSTEM_FEATURE
+            )
+            return token, (None if token else "Team calendar not connected. Contact admin.")
+        token = self._oauth_client.get_valid_access_token(user_id, "calendar")
+        return token, (None if token else self._oauth_client.get_oauth_link(user_id, "calendar"))
 
     def _format_event(self, event: Dict[str, Any]) -> str:
         """Format a calendar event for display."""
@@ -72,7 +72,7 @@ class CalendarTool:
                 start_parsed = datetime.fromisoformat(start_dt.replace("Z", "+00:00"))
                 end_parsed = datetime.fromisoformat(end_dt.replace("Z", "+00:00"))
                 time_str = f"{start_parsed.strftime('%b %d, %I:%M %p')} - {end_parsed.strftime('%I:%M %p')}"
-            except:
+            except Exception:
                 time_str = f"{start_dt} - {end_dt}"
 
         location = event.get("location", "")
@@ -198,7 +198,7 @@ class CalendarTool:
         response.raise_for_status()
         return response.json()
 
-    # ── Public methods with system-first fallback ───────────────────────────────
+    # ── Public methods ──────────────────────────────────────────────────────────
 
     def list_calendar_events(
         self,
@@ -259,28 +259,19 @@ class CalendarTool:
         except ValueError as e:
             return f"Invalid date format. Please use YYYY-MM-DD. Error: {e}"
 
-        try:
-            sys_token = self._oauth_client.get_valid_access_token(
-                CALENDAR_SYSTEM_USER_ID, CALENDAR_SYSTEM_FEATURE
-            )
-            if sys_token and _is_allowed_slack_user(phone_number, self._oauth_client):
-                result = self._list_events_with_token(
-                    sys_token, start_dt, end_dt, max_results, start_date, end_date
-                )
-                if result is not None:
-                    return result
+        token, error = self._get_token(phone_number)
+        if token is None:
+            return error
 
-            user_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
-            if user_token:
-                result = self._list_events_with_token(
-                    user_token, start_dt, end_dt, max_results, start_date, end_date
-                )
-                if result is not None:
-                    return result
+        try:
+            result = self._list_events_with_token(
+                token, start_dt, end_dt, max_results, start_date, end_date
+            )
+            if result is None:
+                return error
+            return result
         except Exception as e:
             return f"Error accessing calendar: {str(e)}"
-
-        return _no_calendar_access(phone_number, self._oauth_client)
 
     def create_calendar_event(
         self,
@@ -344,24 +335,17 @@ class CalendarTool:
         except ValueError as e:
             return f"Invalid datetime format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM. Error: {e}"
 
-        try:
-            sys_token = self._oauth_client.get_valid_access_token(
-                CALENDAR_SYSTEM_USER_ID, CALENDAR_SYSTEM_FEATURE
-            )
-            if sys_token and _is_allowed_slack_user(phone_number, self._oauth_client):
-                result = self._create_event_with_token(sys_token, event, title, start)
-                if result is not None:
-                    return result
+        token, error = self._get_token(phone_number)
+        if token is None:
+            return error
 
-            user_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
-            if user_token:
-                result = self._create_event_with_token(user_token, event, title, start)
-                if result is not None:
-                    return result
+        try:
+            result = self._create_event_with_token(token, event, title, start)
+            if result is None:
+                return error
+            return result
         except Exception as e:
             return f"Error creating event: {str(e)}"
-
-        return _no_calendar_access(phone_number, self._oauth_client)
 
     def update_calendar_event(
         self,
@@ -396,30 +380,16 @@ class CalendarTool:
         if err:
             return err
 
-        # Try to fetch the existing event with a working token, then update it
+        token, error = self._get_token(phone_number)
+        if token is None:
+            return error
+
         try:
-            raw_sys_token = self._oauth_client.get_valid_access_token(
-                CALENDAR_SYSTEM_USER_ID, CALENDAR_SYSTEM_FEATURE
-            )
-            sys_token = raw_sys_token if _is_allowed_slack_user(phone_number, self._oauth_client) else None
-            user_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
-
-            existing_event = None
-            active_token = None
-
-            for token in filter(None, [sys_token, user_token]):
-                try:
-                    fetched = self._fetch_event_with_token(token, event_id)
-                    if fetched is not None:
-                        existing_event = fetched
-                        active_token = token
-                        break
-                except ValueError as e:
-                    return str(e)  # 404 — event not found
-
-            if existing_event is None or active_token is None:
-                return _no_calendar_access(phone_number, self._oauth_client)
-
+            existing_event = self._fetch_event_with_token(token, event_id)
+            if existing_event is None:
+                return error
+        except ValueError as e:
+            return str(e)  # 404 — event not found
         except Exception as e:
             return f"Error fetching event: {str(e)}"
 
@@ -452,49 +422,43 @@ class CalendarTool:
             return f"Invalid datetime format: {e}"
 
         try:
-            result = self._update_event_with_token(active_token, event_id, existing_event)
-            if result is not None:
-                return result
+            result = self._update_event_with_token(token, event_id, existing_event)
+            if result is None:
+                return error
+            return result
         except Exception as e:
             return f"Error updating event: {str(e)}"
 
-        return _no_calendar_access(phone_number, self._oauth_client)
-
     def get_calendar_status(self, tool_context: ToolContext = None) -> str:
         """
-        Check if Google Calendar is connected for the user.
+        Check if Google Calendar is connected.
 
         Returns:
-            Connection status (system account, personal account, or neither).
+            Connection status based on access mode.
 
         Note: Requires user_id from tool_context (phone number).
         """
         phone_number, err = require_user_id(tool_context, "calendar")
         if err:
             return err
-        lines = []
 
-        sys_token = self._oauth_client.get_valid_access_token(
-            CALENDAR_SYSTEM_USER_ID, CALENDAR_SYSTEM_FEATURE
-        )
-        if sys_token and _is_allowed_slack_user(phone_number, self._oauth_client):
-            lines.append(f"System account ({AGENT_EMAIL}) is authorized for calendar access.")
-        else:
-            lines.append(f"System account ({AGENT_EMAIL}) is NOT authorized (or not a Slack workspace user).")
+        if self._access_mode == "team":
+            token = self._oauth_client.get_valid_access_token(
+                CALENDAR_SYSTEM_USER_ID, CALENDAR_SYSTEM_FEATURE
+            )
+            if token:
+                return "Team calendar (system account) is connected and ready."
+            return "Team calendar not connected. Contact admin."
 
+        # Personal mode
         user_token_data = self._oauth_client.get_token_data(phone_number, "calendar")
         if user_token_data:
             email = user_token_data.get("email", "Unknown")
             user_access_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
             if user_access_token:
-                lines.append(f"Personal account ({email}) is authorized.")
-            else:
-                link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-                lines.append(
-                    f"Personal account ({email}) connection has expired. Re-authorize here:\n{link}"
-                )
-        else:
+                return f"Personal calendar ({email}) is connected."
             link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-            lines.append(f"Personal account is not connected. Authorize here:\n{link}")
+            return f"Personal calendar ({email}) connection has expired. Re-authorize:\n{link}"
 
-        return "\n".join(lines)
+        link = self._oauth_client.get_oauth_link(phone_number, "calendar")
+        return f"Personal calendar is not connected. Authorize here:\n{link}"

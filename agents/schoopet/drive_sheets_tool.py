@@ -1,14 +1,13 @@
 """Google Drive and Google Sheets tools for the Schoopet agent.
 
-Token resolution order (per operation):
-1. System token (workspace_system) — succeeds only for users from the configured Slack
-   workspace (SLACK_ALLOWED_TEAM_ID) AND if the resource is shared with the agent account.
-2. User personal token (google-workspace) — backwards-compatible fallback.
-3. Neither works → two-option message (authorize as you, or share with agent account).
+Access mode determines which token is used at construction time:
+- "personal": user's personal OAuth token (feature="google-workspace")
+- "team": system token (feature="workspace_system", user="email_system")
+
+No runtime fallback. Each instance uses exactly one token path.
 """
 import logging
-import os
-from typing import Optional
+from typing import Optional, Literal
 
 from google.adk.tools import ToolContext
 from .oauth_client import OAuthClient
@@ -26,36 +25,29 @@ WORKSPACE_FEATURE = "google-workspace"
 # System-level shared agent account constants
 WORKSPACE_SYSTEM_USER_ID = "email_system"
 WORKSPACE_SYSTEM_FEATURE = "workspace_system"
-AGENT_EMAIL = "schoopet.agent@gmail.com"
-
-SLACK_ALLOWED_TEAM_ID = os.getenv("SLACK_ALLOWED_TEAM_ID", "")
-
-
-def _is_allowed_slack_user(user_id: str, oauth_client: "OAuthClient") -> bool:
-    """Return True only if user belongs to the configured Slack workspace."""
-    if not SLACK_ALLOWED_TEAM_ID:
-        return False
-    return oauth_client.get_slack_team_id(user_id) == SLACK_ALLOWED_TEAM_ID
-
-
-def _no_workspace_access(user_id: str, oauth_client: "OAuthClient", resource: str) -> str:
-    link = oauth_client.get_oauth_link(user_id, WORKSPACE_FEATURE)
-    return (
-        f"Schoopet's shared account ({AGENT_EMAIL}) can't access {resource}.\n\n"
-        f"**Option 1 – Authorize me to act as you**:\n{link}\n\n"
-        f"**Option 2 – Share with Schoopet**: Add {AGENT_EMAIL} as editor on your {resource}."
-    )
 
 
 class DriveTool:
-    """Tool for saving and listing files in the user's Google Drive.
+    """Tool for saving and listing files in Google Drive.
 
-    Tries the shared agent account first, then falls back to the user's
-    personal "google-workspace" OAuth token.
+    Access mode is set at construction time:
+    - "personal": uses the user's personal google-workspace token
+    - "team": uses the shared workspace_system token (system account)
     """
 
-    def __init__(self):
+    def __init__(self, access_mode: Literal["personal", "team"] = "personal"):
         self._oauth_client = OAuthClient()
+        self._access_mode = access_mode
+
+    def _get_token(self, user_id: str):
+        """Return (token, error) using exactly one token path."""
+        if self._access_mode == "team":
+            token = self._oauth_client.get_valid_access_token(
+                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
+            )
+            return token, (None if token else "Team workspace not connected. Contact admin.")
+        token = self._oauth_client.get_valid_access_token(user_id, WORKSPACE_FEATURE)
+        return token, (None if token else self._oauth_client.get_oauth_link(user_id, WORKSPACE_FEATURE))
 
     # ── Private token-specific helpers ─────────────────────────────────────────
 
@@ -199,7 +191,7 @@ class DriveTool:
             lines.append(f"  {f['name']} | ID: {f['id']} | {type_label} | Modified: {modified}")
         return "\n".join(lines)
 
-    # ── Public methods with system-first fallback ───────────────────────────────
+    # ── Public methods ──────────────────────────────────────────────────────────
 
     def save_file_to_drive(
         self,
@@ -209,7 +201,7 @@ class DriveTool:
         tool_context: ToolContext = None,
     ) -> str:
         """
-        Save a text file to the user's Google Drive.
+        Save a text file to Google Drive.
 
         Args:
             filename: Name for the new file (e.g., "2024-01-15_boss_report.txt").
@@ -226,24 +218,17 @@ class DriveTool:
         if err:
             return err
 
-        try:
-            sys_token = self._oauth_client.get_valid_access_token(
-                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-            )
-            if sys_token and _is_allowed_slack_user(phone, self._oauth_client):
-                result = self._save_file_with_token(sys_token, filename, content, folder_id)
-                if result is not None:
-                    return result
+        token, error = self._get_token(phone)
+        if token is None:
+            return error
 
-            user_token = self._oauth_client.get_valid_access_token(phone, WORKSPACE_FEATURE)
-            if user_token:
-                result = self._save_file_with_token(user_token, filename, content, folder_id)
-                if result is not None:
-                    return result
+        try:
+            result = self._save_file_with_token(token, filename, content, folder_id)
+            if result is None:
+                return error
+            return result
         except Exception as e:
             return f"Error saving to Drive: {e}"
-
-        return _no_workspace_access(phone, self._oauth_client, "Drive folder")
 
     async def save_attachment_to_drive(
         self,
@@ -282,28 +267,19 @@ class DriveTool:
         raw_bytes = artifact.inline_data.data
         mime_type = artifact.inline_data.mime_type or "application/octet-stream"
 
-        try:
-            sys_token = self._oauth_client.get_valid_access_token(
-                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-            )
-            if sys_token and _is_allowed_slack_user(phone, self._oauth_client):
-                result = self._save_binary_with_token(
-                    sys_token, drive_filename, raw_bytes, mime_type, folder_id
-                )
-                if result is not None:
-                    return result
+        token, error = self._get_token(phone)
+        if token is None:
+            return error
 
-            user_token = self._oauth_client.get_valid_access_token(phone, WORKSPACE_FEATURE)
-            if user_token:
-                result = self._save_binary_with_token(
-                    user_token, drive_filename, raw_bytes, mime_type, folder_id
-                )
-                if result is not None:
-                    return result
+        try:
+            result = self._save_binary_with_token(
+                token, drive_filename, raw_bytes, mime_type, folder_id
+            )
+            if result is None:
+                return error
+            return result
         except Exception as e:
             return f"Error saving attachment to Drive: {e}"
-
-        return _no_workspace_access(phone, self._oauth_client, "Drive folder")
 
     def list_drive_files(
         self,
@@ -332,34 +308,27 @@ class DriveTool:
         if err:
             return err
 
-        try:
-            sys_token = self._oauth_client.get_valid_access_token(
-                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-            )
-            if sys_token and _is_allowed_slack_user(phone, self._oauth_client):
-                result = self._list_files_with_token(sys_token, folder_id, query, max_results)
-                if result is not None:
-                    return result
+        token, error = self._get_token(phone)
+        if token is None:
+            return error
 
-            user_token = self._oauth_client.get_valid_access_token(phone, WORKSPACE_FEATURE)
-            if user_token:
-                result = self._list_files_with_token(user_token, folder_id, query, max_results)
-                if result is not None:
-                    return result
+        try:
+            result = self._list_files_with_token(token, folder_id, query, max_results)
+            if result is None:
+                return error
+            return result
         except Exception as e:
             return f"Error listing Drive files: {e}"
-
-        return _no_workspace_access(phone, self._oauth_client, "Drive folder")
 
     def get_drive_status(
         self,
         tool_context: ToolContext = None,
     ) -> str:
         """
-        Check if Google Drive (and Sheets) is connected for this user.
+        Check if Google Drive (and Sheets) is connected.
 
         Returns:
-            Connection status (system account, personal account, or neither).
+            Connection status based on access mode.
 
         Note:
             Requires user_id from tool_context (phone number).
@@ -367,36 +336,45 @@ class DriveTool:
         phone, err = require_user_id(tool_context, "drive")
         if err:
             return err
-        lines = []
 
-        sys_token = self._oauth_client.get_valid_access_token(
-            WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-        )
-        if sys_token and _is_allowed_slack_user(phone, self._oauth_client):
-            lines.append(f"System account ({AGENT_EMAIL}) is authorized for workspace access.")
-        else:
-            lines.append(f"System account ({AGENT_EMAIL}) is NOT authorized (or not a Slack workspace user).")
+        if self._access_mode == "team":
+            token = self._oauth_client.get_valid_access_token(
+                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
+            )
+            if token:
+                return "Team workspace (system account) is connected."
+            return "Team workspace not connected. Contact admin."
 
+        # Personal mode
         user_token_data = self._oauth_client.get_token_data(phone, WORKSPACE_FEATURE)
         if user_token_data:
             email = user_token_data.get("email", "Unknown")
-            lines.append(f"Personal account ({email}) is authorized.")
-        else:
-            link = self._oauth_client.get_oauth_link(phone, WORKSPACE_FEATURE)
-            lines.append(f"Personal account is not connected. Authorize here:\n{link}")
-
-        return "\n".join(lines)
+            return f"Personal workspace ({email}) is connected."
+        link = self._oauth_client.get_oauth_link(phone, WORKSPACE_FEATURE)
+        return f"Personal workspace not connected. Authorize here:\n{link}"
 
 
 class SheetsTool:
-    """Tool for reading and writing to the user's Google Sheets.
+    """Tool for reading and writing to Google Sheets.
 
-    Tries the shared agent account first, then falls back to the user's
-    personal "google-workspace" OAuth token.
+    Access mode is set at construction time:
+    - "personal": uses the user's personal google-workspace token
+    - "team": uses the shared workspace_system token (system account)
     """
 
-    def __init__(self):
+    def __init__(self, access_mode: Literal["personal", "team"] = "personal"):
         self._oauth_client = OAuthClient()
+        self._access_mode = access_mode
+
+    def _get_token(self, user_id: str):
+        """Return (token, error) using exactly one token path."""
+        if self._access_mode == "team":
+            token = self._oauth_client.get_valid_access_token(
+                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
+            )
+            return token, (None if token else "Team workspace not connected. Contact admin.")
+        token = self._oauth_client.get_valid_access_token(user_id, WORKSPACE_FEATURE)
+        return token, (None if token else self._oauth_client.get_oauth_link(user_id, WORKSPACE_FEATURE))
 
     # ── Private token-specific helpers ─────────────────────────────────────────
 
@@ -540,7 +518,7 @@ class SheetsTool:
         resp.raise_for_status()
         return f"Cell {cell_range} updated to '{value}'."
 
-    # ── Public methods with system-first fallback ───────────────────────────────
+    # ── Public methods ──────────────────────────────────────────────────────────
 
     def append_row_to_sheet(
         self,
@@ -567,24 +545,17 @@ class SheetsTool:
         if err:
             return err
 
-        try:
-            sys_token = self._oauth_client.get_valid_access_token(
-                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-            )
-            if sys_token and _is_allowed_slack_user(phone, self._oauth_client):
-                result = self._append_row_with_token(sys_token, values, sheet_id, sheet_tab)
-                if result is not None:
-                    return result
+        token, error = self._get_token(phone)
+        if token is None:
+            return error
 
-            user_token = self._oauth_client.get_valid_access_token(phone, WORKSPACE_FEATURE)
-            if user_token:
-                result = self._append_row_with_token(user_token, values, sheet_id, sheet_tab)
-                if result is not None:
-                    return result
+        try:
+            result = self._append_row_with_token(token, values, sheet_id, sheet_tab)
+            if result is None:
+                return error
+            return result
         except Exception as e:
             return f"Error appending to Sheets: {e}"
-
-        return _no_workspace_access(phone, self._oauth_client, "Google Sheet")
 
     def read_sheet(
         self,
@@ -614,24 +585,17 @@ class SheetsTool:
         if err:
             return err
 
-        try:
-            sys_token = self._oauth_client.get_valid_access_token(
-                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-            )
-            if sys_token and _is_allowed_slack_user(phone, self._oauth_client):
-                result = self._read_sheet_with_token(sys_token, sheet_id, sheet_tab, max_rows)
-                if result is not None:
-                    return result
+        token, error = self._get_token(phone)
+        if token is None:
+            return error
 
-            user_token = self._oauth_client.get_valid_access_token(phone, WORKSPACE_FEATURE)
-            if user_token:
-                result = self._read_sheet_with_token(user_token, sheet_id, sheet_tab, max_rows)
-                if result is not None:
-                    return result
+        try:
+            result = self._read_sheet_with_token(token, sheet_id, sheet_tab, max_rows)
+            if result is None:
+                return error
+            return result
         except Exception as e:
             return f"Error reading sheet: {e}"
-
-        return _no_workspace_access(phone, self._oauth_client, "Google Sheet")
 
     def add_sheet_column(
         self,
@@ -661,24 +625,17 @@ class SheetsTool:
         if err:
             return err
 
-        try:
-            sys_token = self._oauth_client.get_valid_access_token(
-                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-            )
-            if sys_token and _is_allowed_slack_user(phone, self._oauth_client):
-                result = self._add_column_with_token(sys_token, sheet_id, column_header, sheet_tab)
-                if result is not None:
-                    return result
+        token, error = self._get_token(phone)
+        if token is None:
+            return error
 
-            user_token = self._oauth_client.get_valid_access_token(phone, WORKSPACE_FEATURE)
-            if user_token:
-                result = self._add_column_with_token(user_token, sheet_id, column_header, sheet_tab)
-                if result is not None:
-                    return result
+        try:
+            result = self._add_column_with_token(token, sheet_id, column_header, sheet_tab)
+            if result is None:
+                return error
+            return result
         except Exception as e:
             return f"Error adding column: {e}"
-
-        return _no_workspace_access(phone, self._oauth_client, "Google Sheet")
 
     def update_sheet_cell(
         self,
@@ -709,38 +666,29 @@ class SheetsTool:
         if err:
             return err
 
-        try:
-            sys_token = self._oauth_client.get_valid_access_token(
-                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-            )
-            if sys_token and _is_allowed_slack_user(phone, self._oauth_client):
-                result = self._update_cell_with_token(
-                    sys_token, sheet_id, row, column, value, sheet_tab
-                )
-                if result is not None:
-                    return result
+        token, error = self._get_token(phone)
+        if token is None:
+            return error
 
-            user_token = self._oauth_client.get_valid_access_token(phone, WORKSPACE_FEATURE)
-            if user_token:
-                result = self._update_cell_with_token(
-                    user_token, sheet_id, row, column, value, sheet_tab
-                )
-                if result is not None:
-                    return result
+        try:
+            result = self._update_cell_with_token(
+                token, sheet_id, row, column, value, sheet_tab
+            )
+            if result is None:
+                return error
+            return result
         except Exception as e:
             return f"Error updating cell: {e}"
-
-        return _no_workspace_access(phone, self._oauth_client, "Google Sheet")
 
     def get_sheets_status(
         self,
         tool_context: ToolContext = None,
     ) -> str:
         """
-        Check if Google Sheets (and Drive) is connected for this user.
+        Check if Google Sheets (and Drive) is connected.
 
         Returns:
-            Connection status (system account, personal account, or neither).
+            Connection status based on access mode.
 
         Note:
             Requires user_id from tool_context (phone number).
@@ -748,25 +696,22 @@ class SheetsTool:
         phone, err = require_user_id(tool_context, "sheets")
         if err:
             return err
-        lines = []
 
-        sys_token = self._oauth_client.get_valid_access_token(
-            WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-        )
-        if sys_token and _is_allowed_slack_user(phone, self._oauth_client):
-            lines.append(f"System account ({AGENT_EMAIL}) is authorized for workspace access.")
-        else:
-            lines.append(f"System account ({AGENT_EMAIL}) is NOT authorized (or not a Slack workspace user).")
+        if self._access_mode == "team":
+            token = self._oauth_client.get_valid_access_token(
+                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
+            )
+            if token:
+                return "Team workspace (system account) is connected."
+            return "Team workspace not connected. Contact admin."
 
+        # Personal mode
         user_token_data = self._oauth_client.get_token_data(phone, WORKSPACE_FEATURE)
         if user_token_data:
             email = user_token_data.get("email", "Unknown")
-            lines.append(f"Personal account ({email}) is authorized.")
-        else:
-            link = self._oauth_client.get_oauth_link(phone, WORKSPACE_FEATURE)
-            lines.append(f"Personal account is not connected. Authorize here:\n{link}")
-
-        return "\n".join(lines)
+            return f"Personal workspace ({email}) is connected."
+        link = self._oauth_client.get_oauth_link(phone, WORKSPACE_FEATURE)
+        return f"Personal workspace not connected. Authorize here:\n{link}"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

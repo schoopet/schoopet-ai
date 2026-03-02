@@ -24,20 +24,31 @@ class SessionManager:
     def __init__(
         self,
         firestore_client: firestore.AsyncClient,
-        agent_client,  # AgentEngineClient - imported at runtime to avoid circular imports
+        personal_agent_client,  # AgentEngineClient for personal channels (SMS/WhatsApp/Telegram)
+        team_agent_client,       # AgentEngineClient for team channels (Slack/Email)
         timeout_minutes: int = 10,
     ):
         """Initialize session manager.
 
         Args:
             firestore_client: Async Firestore client instance.
-            agent_client: AgentEngineClient for creating new sessions.
+            personal_agent_client: AgentEngineClient for personal agent (SMS/WhatsApp/Telegram).
+            team_agent_client: AgentEngineClient for team agent (Slack/Email).
             timeout_minutes: Session timeout in minutes (default: 10).
         """
         self._db = firestore_client
-        self._agent_client = agent_client
+        self._personal_client = personal_agent_client
+        self._team_client = team_agent_client
         self._timeout = timedelta(minutes=timeout_minutes)
         self._collection = self._db.collection(COLLECTION_NAME)
+
+    def _client_for(self, agent_type: str):
+        """Return the agent client for the given agent type."""
+        return self._team_client if agent_type == "team" else self._personal_client
+
+    def _session_id_field(self, agent_type: str) -> str:
+        """Return the Firestore field name for the given agent type's session ID."""
+        return "team_agent_session_id" if agent_type == "team" else "personal_agent_session_id"
 
     async def get_or_create_user(self, phone_number: str) -> SessionInfo:
         """Get existing user or create a new user record.
@@ -88,11 +99,12 @@ class SessionManager:
             is_new_user=True,
         )
 
-    async def set_opted_in(self, phone_number: str) -> SessionInfo:
+    async def set_opted_in(self, phone_number: str, agent_type: str = "personal") -> SessionInfo:
         """Set user as opted in and create Agent Engine session.
 
         Args:
             phone_number: User's phone number in E.164 format.
+            agent_type: "personal" or "team" — which agent to create the session on.
 
         Returns:
             SessionInfo with new session details.
@@ -100,14 +112,14 @@ class SessionManager:
         doc_id = normalize_user_id(phone_number)
         doc_ref = self._collection.document(doc_id)
 
-        # Create Agent Engine session
-        logger.info(f"User {phone_number} opted in, creating agent session")
-        agent_session_id = await self._agent_client.create_session(user_id=phone_number)
+        # Create Agent Engine session on the correct agent
+        logger.info(f"User {phone_number} opted in ({agent_type}), creating agent session")
+        agent_session_id = await self._client_for(agent_type).create_session(user_id=phone_number)
 
         now = datetime.now(timezone.utc)
         await doc_ref.update({
             "opted_in": True,
-            "agent_session_id": agent_session_id,
+            self._session_id_field(agent_type): agent_session_id,
             "last_activity": now,
         })
 
@@ -117,6 +129,7 @@ class SessionManager:
             is_new_session=True,
             opted_in=True,
             is_new_user=False,
+            agent_type=agent_type,
         )
 
     async def set_opted_out(self, phone_number: str) -> None:
@@ -132,10 +145,12 @@ class SessionManager:
         await doc_ref.update({
             "opted_in": False,
             "agent_session_id": "",
+            "personal_agent_session_id": "",
+            "team_agent_session_id": "",
             "last_activity": datetime.now(timezone.utc),
         })
 
-    async def get_or_create_session(self, phone_number: str) -> SessionInfo:
+    async def get_or_create_session(self, phone_number: str, agent_type: str = "personal") -> SessionInfo:
         """Get existing session or create a new one (for opted-in users only).
 
         Creates a new session if:
@@ -144,12 +159,14 @@ class SessionManager:
 
         Args:
             phone_number: User's phone number in E.164 format.
+            agent_type: "personal" or "team" — which agent engine to use.
 
         Returns:
             SessionInfo with session details.
         """
         doc_id = normalize_user_id(phone_number)
         doc_ref = self._collection.document(doc_id)
+        session_id_field = self._session_id_field(agent_type)
 
         doc = await doc_ref.get()
 
@@ -164,7 +181,10 @@ class SessionManager:
                     is_new_session=False,
                     opted_in=False,
                     is_new_user=False,
+                    agent_type=agent_type,
                 )
+
+            existing_session_id = getattr(session_doc, session_id_field)
 
             # Handle both timezone-aware and naive datetimes from Firestore
             now = datetime.now(timezone.utc)
@@ -173,43 +193,44 @@ class SessionManager:
                 last_activity = last_activity.replace(tzinfo=timezone.utc)
             time_since_activity = now - last_activity
 
-            if time_since_activity < self._timeout and session_doc.agent_session_id:
+            if time_since_activity < self._timeout and existing_session_id:
                 logger.info(
-                    f"Continuing session for {phone_number}, "
+                    f"Continuing {agent_type} session for {phone_number}, "
                     f"last active {time_since_activity.seconds}s ago"
                 )
                 return SessionInfo(
                     phone_number=phone_number,
-                    agent_session_id=session_doc.agent_session_id,
+                    agent_session_id=existing_session_id,
                     is_new_session=False,
                     opted_in=True,
                     is_new_user=False,
+                    agent_type=agent_type,
                 )
             else:
                 logger.info(
-                    f"Session expired for {phone_number}, "
+                    f"{agent_type} session expired for {phone_number}, "
                     f"inactive for {time_since_activity.seconds}s"
                 )
 
-        # Create new Agent Engine session
-        logger.info(f"Creating new session for {phone_number}")
-        agent_session_id = await self._agent_client.create_session(user_id=phone_number)
+        # Create new Agent Engine session on the correct agent
+        logger.info(f"Creating new {agent_type} session for {phone_number}")
+        agent_session_id = await self._client_for(agent_type).create_session(user_id=phone_number)
 
         # Store in Firestore
         now = datetime.now(timezone.utc)
         if doc.exists:
             await doc_ref.update({
-                "agent_session_id": agent_session_id,
+                session_id_field: agent_session_id,
                 "last_activity": now,
             })
         else:
             session_doc = SessionDocument(
                 phone_number=phone_number,
-                agent_session_id=agent_session_id,
                 created_at=now,
                 last_activity=now,
                 message_count=0,
                 opted_in=True,
+                **{session_id_field: agent_session_id},
             )
             await doc_ref.set(session_doc.to_firestore())
 
@@ -219,6 +240,7 @@ class SessionManager:
             is_new_session=True,
             opted_in=True,
             is_new_user=False,
+            agent_type=agent_type,
         )
 
     async def update_last_activity(self, phone_number: str, channel: str = "sms", slack_team_id: str = "") -> None:
@@ -264,6 +286,7 @@ class SessionManager:
         self,
         phone_number: str,
         task_id: str,
+        agent_type: str = "personal",
     ) -> SessionInfo:
         """Get or create a supervisor session for task review.
 
@@ -274,6 +297,7 @@ class SessionManager:
         Args:
             phone_number: User's phone number in E.164 format.
             task_id: The async task ID being reviewed.
+            agent_type: "personal" or "team" — which agent to review on.
 
         Returns:
             SessionInfo with supervisor session details.
@@ -295,14 +319,14 @@ class SessionManager:
                 is_new_user=False,
                 session_type="supervisor",
                 task_id=task_id,
+                agent_type=agent_type,
             )
 
-        # Create new supervisor session
-        # Use a special user_id format to distinguish supervisor sessions
+        # Create new supervisor session on the correct agent
         supervisor_user_id = f"{phone_number}_supervisor"
-        logger.info(f"Creating supervisor session for {phone_number}, task {task_id}")
+        logger.info(f"Creating {agent_type} supervisor session for {phone_number}, task {task_id}")
 
-        agent_session_id = await self._agent_client.create_session(user_id=supervisor_user_id)
+        agent_session_id = await self._client_for(agent_type).create_session(user_id=supervisor_user_id)
 
         now = datetime.now(timezone.utc)
         session_doc = SupervisorSessionDocument(
@@ -323,6 +347,7 @@ class SessionManager:
             is_new_user=False,
             session_type="supervisor",
             task_id=task_id,
+            agent_type=agent_type,
         )
 
     async def update_supervisor_session_activity(
@@ -357,17 +382,26 @@ class SessionManager:
             SessionInfo if active session exists, None otherwise.
         """
         session = await self.get_session(phone_number)
-        if session and session.opted_in and session.agent_session_id:
-            return SessionInfo(
-                phone_number=phone_number,
-                agent_session_id=session.agent_session_id,
-                is_new_session=False,
-                opted_in=True,
-                is_new_user=False,
-                session_type="user",
-                channel=session.channel,
-            )
-        return None
+        if not session or not session.opted_in:
+            return None
+
+        # Derive agent type from last used channel
+        agent_type = "team" if session.channel in ("slack", "email") else "personal"
+        session_id = getattr(session, self._session_id_field(agent_type))
+
+        if not session_id:
+            return None
+
+        return SessionInfo(
+            phone_number=phone_number,
+            agent_session_id=session_id,
+            is_new_session=False,
+            opted_in=True,
+            is_new_user=False,
+            session_type="user",
+            channel=session.channel,
+            agent_type=agent_type,
+        )
 
     def is_session_active(self, session: Optional[SessionInfo]) -> bool:
         """Check if a session is considered active (within timeout).

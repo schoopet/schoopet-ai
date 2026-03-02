@@ -17,7 +17,6 @@ SESSION_ID = "sess-test"
 ARTIFACT_FILENAME = "msg001_resume.pdf"
 DRIVE_FILENAME = "resume_john.pdf"
 PDF_BYTES = b"%PDF-1.4 content"
-ALLOWED_TEAM_ID = "TTEST12345"
 SYS_TOKEN = "sys-access-token"
 USER_TOKEN = "user-access-token"
 DRIVE_FILE_ID = "drive-file-abc"
@@ -73,31 +72,38 @@ def _make_tool_context(svc: InMemoryArtifactService, user_id: str = PHONE) -> As
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture
-def drive_tool():
+def drive_tool_personal():
     tool = DriveTool.__new__(DriveTool)
     tool._oauth_client = MagicMock()
+    tool._access_mode = "personal"
+    return tool
+
+
+@pytest.fixture
+def drive_tool_team():
+    tool = DriveTool.__new__(DriveTool)
+    tool._oauth_client = MagicMock()
+    tool._access_mode = "team"
     return tool
 
 
 # ── save_attachment_to_drive tests ────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_save_attachment_success_system_token(drive_tool):
-    """Uses system token when user belongs to the allowed Slack workspace."""
+async def test_save_attachment_team_mode_uses_system_token(drive_tool_team):
+    """Team-mode DriveTool always uses the workspace_system token."""
     svc = await _make_artifact_service()
     ctx = _make_tool_context(svc)
 
-    drive_tool._oauth_client.get_valid_access_token.side_effect = lambda uid, feat: (
+    drive_tool_team._oauth_client.get_valid_access_token.side_effect = lambda uid, feat: (
         SYS_TOKEN if (uid == "email_system" and feat == "workspace_system") else None
     )
-    drive_tool._oauth_client.get_slack_team_id.return_value = ALLOWED_TEAM_ID
 
     mock_resp = _make_drive_response()
 
-    with patch("agents.schoopet.drive_sheets_tool.SLACK_ALLOWED_TEAM_ID", ALLOWED_TEAM_ID), \
-         patch("httpx.Client") as mock_httpx:
+    with patch("httpx.Client") as mock_httpx:
         mock_httpx.return_value.__enter__.return_value.post.return_value = mock_resp
-        result = await drive_tool.save_attachment_to_drive(
+        result = await drive_tool_team.save_attachment_to_drive(
             artifact_filename=ARTIFACT_FILENAME,
             drive_filename=DRIVE_FILENAME,
             tool_context=ctx,
@@ -107,29 +113,26 @@ async def test_save_attachment_success_system_token(drive_tool):
     assert DRIVE_FILENAME in result
     assert DRIVE_FILE_ID in result
 
-    # Verify system token was used in the Authorization header
     post_call = mock_httpx.return_value.__enter__.return_value.post
     headers = post_call.call_args.kwargs["headers"]
     assert headers["Authorization"] == f"Bearer {SYS_TOKEN}"
 
 
 @pytest.mark.asyncio
-async def test_save_attachment_falls_back_to_user_token(drive_tool):
-    """Falls back to user's personal token when system token is unavailable."""
+async def test_save_attachment_personal_mode_uses_user_token(drive_tool_personal):
+    """Personal-mode DriveTool always uses the user's google-workspace token."""
     svc = await _make_artifact_service()
     ctx = _make_tool_context(svc)
 
-    # System token unavailable, user token present
-    drive_tool._oauth_client.get_valid_access_token.side_effect = lambda uid, feat: (
+    drive_tool_personal._oauth_client.get_valid_access_token.side_effect = lambda uid, feat: (
         USER_TOKEN if uid == PHONE else None
     )
 
     mock_resp = _make_drive_response()
 
-    with patch("agents.schoopet.drive_sheets_tool.SLACK_ALLOWED_TEAM_ID", ALLOWED_TEAM_ID), \
-         patch("httpx.Client") as mock_httpx:
+    with patch("httpx.Client") as mock_httpx:
         mock_httpx.return_value.__enter__.return_value.post.return_value = mock_resp
-        result = await drive_tool.save_attachment_to_drive(
+        result = await drive_tool_personal.save_attachment_to_drive(
             artifact_filename=ARTIFACT_FILENAME,
             drive_filename=DRIVE_FILENAME,
             tool_context=ctx,
@@ -143,12 +146,12 @@ async def test_save_attachment_falls_back_to_user_token(drive_tool):
 
 
 @pytest.mark.asyncio
-async def test_save_attachment_artifact_not_found(drive_tool):
+async def test_save_attachment_artifact_not_found(drive_tool_personal):
     """Returns error when artifact does not exist in the registry."""
     svc = InMemoryArtifactService()  # empty — nothing saved
     ctx = _make_tool_context(svc)
 
-    result = await drive_tool.save_attachment_to_drive(
+    result = await drive_tool_personal.save_attachment_to_drive(
         artifact_filename="missing.pdf",
         drive_filename=DRIVE_FILENAME,
         tool_context=ctx,
@@ -159,12 +162,12 @@ async def test_save_attachment_artifact_not_found(drive_tool):
 
 
 @pytest.mark.asyncio
-async def test_save_attachment_no_user_id(drive_tool):
+async def test_save_attachment_no_user_id(drive_tool_personal):
     """Returns error when tool_context has no user_id."""
     ctx = AsyncMock()
     ctx.user_id = None
 
-    result = await drive_tool.save_attachment_to_drive(
+    result = await drive_tool_personal.save_attachment_to_drive(
         artifact_filename=ARTIFACT_FILENAME,
         drive_filename=DRIVE_FILENAME,
         tool_context=ctx,
@@ -175,26 +178,26 @@ async def test_save_attachment_no_user_id(drive_tool):
 
 
 @pytest.mark.asyncio
-async def test_save_attachment_no_token_returns_auth_instructions(drive_tool):
-    """Returns human-readable instructions when neither token is available."""
+async def test_save_attachment_no_token_returns_auth_instructions(drive_tool_personal):
+    """Returns human-readable instructions when no token is available."""
     svc = await _make_artifact_service()
     ctx = _make_tool_context(svc)
 
-    drive_tool._oauth_client.get_valid_access_token.return_value = None
-    drive_tool._oauth_client.get_oauth_link.return_value = "https://example.com/oauth"
+    drive_tool_personal._oauth_client.get_valid_access_token.return_value = None
+    drive_tool_personal._oauth_client.get_oauth_link.return_value = "https://example.com/oauth"
 
-    result = await drive_tool.save_attachment_to_drive(
+    result = await drive_tool_personal.save_attachment_to_drive(
         artifact_filename=ARTIFACT_FILENAME,
         drive_filename=DRIVE_FILENAME,
         tool_context=ctx,
     )
 
-    assert "Authorize" in result or "authorize" in result or "Option" in result
+    assert "https://example.com/oauth" in result
 
 
 # ── _save_binary_with_token tests ──────────────────────────────────────────────
 
-def test_save_binary_with_token_body_is_bytes(drive_tool):
+def test_save_binary_with_token_body_is_bytes(drive_tool_personal):
     """The multipart body sent to Drive is bytes, not str."""
     mock_resp = _make_drive_response()
 
@@ -202,7 +205,7 @@ def test_save_binary_with_token_body_is_bytes(drive_tool):
         mock_client = mock_httpx.return_value.__enter__.return_value
         mock_client.post.return_value = mock_resp
 
-        drive_tool._save_binary_with_token(
+        drive_tool_personal._save_binary_with_token(
             token=SYS_TOKEN,
             filename=DRIVE_FILENAME,
             raw_bytes=PDF_BYTES,
@@ -217,7 +220,7 @@ def test_save_binary_with_token_body_is_bytes(drive_tool):
     assert PDF_BYTES in body
 
 
-def test_save_binary_with_token_includes_filename_in_metadata(drive_tool):
+def test_save_binary_with_token_includes_filename_in_metadata(drive_tool_personal):
     """The JSON metadata part contains the correct filename."""
     mock_resp = _make_drive_response()
 
@@ -225,7 +228,7 @@ def test_save_binary_with_token_includes_filename_in_metadata(drive_tool):
         mock_client = mock_httpx.return_value.__enter__.return_value
         mock_client.post.return_value = mock_resp
 
-        drive_tool._save_binary_with_token(
+        drive_tool_personal._save_binary_with_token(
             token=SYS_TOKEN,
             filename=DRIVE_FILENAME,
             raw_bytes=PDF_BYTES,
@@ -237,14 +240,14 @@ def test_save_binary_with_token_includes_filename_in_metadata(drive_tool):
     assert DRIVE_FILENAME.encode() in body
 
 
-def test_save_binary_with_token_returns_none_on_401(drive_tool):
-    """Returns None (triggering fallback) when the server responds 401."""
+def test_save_binary_with_token_returns_none_on_401(drive_tool_personal):
+    """Returns None when the server responds 401."""
     mock_resp = MagicMock()
     mock_resp.status_code = 401
 
     with patch("httpx.Client") as mock_httpx:
         mock_httpx.return_value.__enter__.return_value.post.return_value = mock_resp
-        result = drive_tool._save_binary_with_token(
+        result = drive_tool_personal._save_binary_with_token(
             token="bad-token",
             filename=DRIVE_FILENAME,
             raw_bytes=PDF_BYTES,
@@ -255,14 +258,14 @@ def test_save_binary_with_token_returns_none_on_401(drive_tool):
     assert result is None
 
 
-def test_save_binary_with_token_returns_none_on_403(drive_tool):
-    """Returns None (triggering fallback) when the server responds 403."""
+def test_save_binary_with_token_returns_none_on_403(drive_tool_personal):
+    """Returns None when the server responds 403."""
     mock_resp = MagicMock()
     mock_resp.status_code = 403
 
     with patch("httpx.Client") as mock_httpx:
         mock_httpx.return_value.__enter__.return_value.post.return_value = mock_resp
-        result = drive_tool._save_binary_with_token(
+        result = drive_tool_personal._save_binary_with_token(
             token="no-permission-token",
             filename=DRIVE_FILENAME,
             raw_bytes=PDF_BYTES,
@@ -273,10 +276,8 @@ def test_save_binary_with_token_returns_none_on_403(drive_tool):
     assert result is None
 
 
-def test_save_binary_with_token_includes_folder_id_in_metadata(drive_tool):
+def test_save_binary_with_token_includes_folder_id_in_metadata(drive_tool_personal):
     """When folder_id is provided it appears in the JSON metadata body."""
-    import json
-
     folder_id = "folder-xyz-123"
     mock_resp = _make_drive_response()
 
@@ -284,7 +285,7 @@ def test_save_binary_with_token_includes_folder_id_in_metadata(drive_tool):
         mock_client = mock_httpx.return_value.__enter__.return_value
         mock_client.post.return_value = mock_resp
 
-        drive_tool._save_binary_with_token(
+        drive_tool_personal._save_binary_with_token(
             token=SYS_TOKEN,
             filename=DRIVE_FILENAME,
             raw_bytes=PDF_BYTES,

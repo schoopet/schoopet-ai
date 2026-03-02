@@ -187,7 +187,7 @@ async def process_message_async(
         if not session_info.opted_in:
             if normalized_message == "YES":
                 logger.info(f"User {phone_number} opted in")
-                await _session_manager.set_opted_in(phone_number)
+                await _session_manager.set_opted_in(phone_number, agent_type="personal")
                 await _sms_sender.send(phone_number, OPT_IN_SUCCESS_MSG, channel=channel)
                 return
             else:
@@ -205,7 +205,7 @@ async def process_message_async(
                 return
 
         # User is opted in - get or create agent session and process message
-        session_info = await _session_manager.get_or_create_session(phone_number)
+        session_info = await _session_manager.get_or_create_session(phone_number, agent_type="personal")
 
         logger.info(
             f"Forwarding to agent for {phone_number}: "

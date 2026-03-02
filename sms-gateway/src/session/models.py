@@ -11,7 +11,9 @@ class SessionDocument(BaseModel):
     """
 
     phone_number: str = Field(..., description="E.164 format phone number")
-    agent_session_id: str = Field(default="", description="Vertex AI Agent Engine session ID")
+    agent_session_id: str = Field(default="", description="Legacy session ID field (migration fallback)")
+    personal_agent_session_id: str = Field(default="", description="Vertex AI personal agent session ID")
+    team_agent_session_id: str = Field(default="", description="Vertex AI team agent session ID")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_activity: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     message_count: int = Field(default=0)
@@ -24,7 +26,9 @@ class SessionDocument(BaseModel):
         """Convert to Firestore-compatible dictionary."""
         data = {
             "phone_number": self.phone_number,
-            "agent_session_id": self.agent_session_id,
+            "agent_session_id": "",  # kept empty during migration
+            "personal_agent_session_id": self.personal_agent_session_id,
+            "team_agent_session_id": self.team_agent_session_id,
             "created_at": self.created_at,
             "last_activity": self.last_activity,
             "message_count": self.message_count,
@@ -40,9 +44,15 @@ class SessionDocument(BaseModel):
     @classmethod
     def from_firestore(cls, data: dict) -> "SessionDocument":
         """Create instance from Firestore document data."""
+        # Backward compat: if new fields are absent, migrate legacy agent_session_id
+        # to team_agent_session_id (existing engine is now the team agent).
+        legacy_session_id = data.get("agent_session_id", "")
+        has_new_fields = "personal_agent_session_id" in data or "team_agent_session_id" in data
         return cls(
             phone_number=data["phone_number"],
-            agent_session_id=data.get("agent_session_id", ""),
+            agent_session_id=legacy_session_id,
+            personal_agent_session_id=data.get("personal_agent_session_id", ""),
+            team_agent_session_id=data.get("team_agent_session_id", legacy_session_id if not has_new_fields else ""),
             created_at=data["created_at"],
             last_activity=data["last_activity"],
             message_count=data.get("message_count", 0),
@@ -64,6 +74,7 @@ class SessionInfo(BaseModel):
     session_type: str = Field(default="user", description="Session type: user or supervisor")
     task_id: Optional[str] = Field(default=None, description="Associated task ID for supervisor sessions")
     channel: str = Field(default="sms", description="Communication channel: sms or whatsapp")
+    agent_type: str = Field(default="personal", description="Agent type: personal or team")
 
 
 class SupervisorSessionDocument(BaseModel):

@@ -3,9 +3,10 @@
 Provides on-demand email reading, full email fetching with attachment handling,
 and sender authorization management.
 
-Uses the system workspace_system token (phone="email_system", feature="workspace_system")
-to read the shared inbox, filtered per-user by the email_authorizations Firestore
-collection.
+Team-only tool: always uses the workspace_system token (phone="email_system",
+feature="workspace_system") to read the shared inbox, filtered per-user by the
+email_authorizations Firestore collection. This tool should only be included in
+the team agent, never in the personal agent.
 """
 import base64
 import logging

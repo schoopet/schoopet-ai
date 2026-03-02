@@ -20,24 +20,40 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 
 # Global references (initialized by main.py)
 _session_manager = None
-_agent_client = None
+_personal_agent_client = None
+_team_agent_client = None
 _sms_sender = None
 _telegram_sender = None
 _slack_sender = None
 
 
-def init_internal_services(session_manager, agent_client, sms_sender, telegram_sender=None, slack_sender=None):
+def init_internal_services(
+    session_manager,
+    personal_agent_client,
+    team_agent_client,
+    sms_sender,
+    telegram_sender=None,
+    slack_sender=None,
+):
     """Initialize internal handler services.
 
     Called by main.py during application startup.
     """
-    global _session_manager, _agent_client, _sms_sender, _telegram_sender, _slack_sender
+    global _session_manager, _personal_agent_client, _team_agent_client, _sms_sender, _telegram_sender, _slack_sender
     _session_manager = session_manager
-    _agent_client = agent_client
+    _personal_agent_client = personal_agent_client
+    _team_agent_client = team_agent_client
     _sms_sender = sms_sender
     _telegram_sender = telegram_sender
     _slack_sender = slack_sender
     logger.info("Internal handler services initialized")
+
+
+def _agent_client_for_channel(channel: str):
+    """Return the agent client for the given channel."""
+    if channel in ("slack", "email"):
+        return _team_agent_client
+    return _personal_agent_client
 
 
 # ========== Request Models ==========
@@ -91,7 +107,7 @@ async def trigger_task_review(
     4. Sends internal message to root agent for review
     5. Root agent reviews and either approves or requests correction
     """
-    if not _session_manager or not _agent_client:
+    if not _session_manager or (not _personal_agent_client and not _team_agent_client):
         raise HTTPException(
             status_code=503,
             detail="Internal services not initialized"
@@ -103,17 +119,23 @@ async def trigger_task_review(
     )
 
     try:
+        # Determine which agent to use for this user based on their last channel
+        user_session = await _session_manager.get_user_session(payload.user_id)
+        agent_type = user_session.agent_type if user_session else "personal"
+
         # Get or create supervisor session for this task
         supervisor_session = await _session_manager.get_supervisor_session(
             phone_number=payload.user_id,
             task_id=payload.task_id,
+            agent_type=agent_type,
         )
 
         # Build internal review message for root agent
         review_message = _build_review_message(payload)
 
         # Send message to root agent in supervisor session
-        response = await _agent_client.send_message(
+        agent_client = _agent_client_for_channel(user_session.channel if user_session else "sms")
+        response = await agent_client.send_message(
             user_id=f"{payload.user_id}_supervisor",
             session_id=supervisor_session.agent_session_id,
             message=review_message,
@@ -152,10 +174,7 @@ async def notify_user(
     Security: Requires valid OIDC token or HMAC signature.
     """
     if not _session_manager or (not _sms_sender and not _telegram_sender and not _slack_sender):
-        raise HTTPException(
-            status_code=503,
-            detail="Internal services not initialized"
-        )
+        raise HTTPException(status_code=503, detail="Internal services not initialized")
 
     logger.info(
         f"User notify triggered by {caller} for user {payload.user_id}, "
@@ -166,12 +185,15 @@ async def notify_user(
         # Check if user has an active session
         user_session = await _session_manager.get_user_session(payload.user_id)
 
-        if user_session and _session_manager.is_session_active(user_session) and _agent_client:
+        session_channel = user_session.channel if user_session else payload.channel
+        active_agent_client = _agent_client_for_channel(session_channel)
+
+        if user_session and _session_manager.is_session_active(user_session) and active_agent_client:
             # User has active session - send via root agent
             # This allows for conversational delivery
             internal_message = f"INTERNAL_TASK_COMPLETE: {payload.message}"
 
-            agent_response = await _agent_client.send_message(
+            agent_response = await active_agent_client.send_message(
                 user_id=payload.user_id,
                 session_id=user_session.agent_session_id,
                 message=internal_message,
@@ -181,9 +203,6 @@ async def notify_user(
             # Send the agent's response to the user via the same channel as their session
             if agent_response:
                 from ..channel import MessageChannel
-                # Use the session's channel (from user's last message), not the payload default
-                session_channel = user_session.channel if user_session.channel else "sms"
-
                 if session_channel == "telegram" and _telegram_sender:
                     await _telegram_sender.send(payload.user_id, agent_response)
                 elif session_channel == "slack" and _slack_sender:
