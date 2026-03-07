@@ -91,6 +91,19 @@ The agent uses proper Python package structure with relative imports:
 
 ## Common Commands
 
+### Running Tests
+
+```bash
+# Run all tests (SMS Gateway + Task Worker) from repo root
+make test
+
+# Run individual suites
+make test-sms-gateway
+make test-task-worker
+```
+
+Always run `make test` after making changes to `sms-gateway/` or `task-worker/`.
+
 ### Agent Development
 
 ```bash
