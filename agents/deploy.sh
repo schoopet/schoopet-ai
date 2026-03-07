@@ -7,6 +7,7 @@
 #   ./deploy.sh --agent-type=personal --env=prod           # Deploy personal agent to prod
 #   ./deploy.sh --agent-type=team --new                    # Create a new team agent engine
 #   ./deploy.sh --agent-type=personal --identity           # Deploy with Agent Identity enabled
+#   ./deploy.sh --agent-type=team --from-tf                # Read engine ID from terraform output
 #
 # Environment variables (loaded from environments/<name>.env, then schoopet/.env):
 #   GOOGLE_CLOUD_PROJECT       - GCP project ID (required)
@@ -76,6 +77,7 @@ fi
 NEW_DEPLOY=false
 USE_IDENTITY=false
 CLI_ID=""
+FROM_TF=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -91,6 +93,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --identity)
             USE_IDENTITY=true
+            shift
+            ;;
+        --from-tf)
+            FROM_TF=true
             shift
             ;;
         --project)
@@ -129,8 +135,20 @@ else
     ENV_ENGINE_ID="${TEAM_AGENT_ENGINE_ID:-}"
 fi
 
-# CLI --id overrides env var
+# CLI --id overrides env var; --from-tf reads resource_name from terraform outputs
 ENGINE_ID="${CLI_ID:-$ENV_ENGINE_ID}"
+
+if [ "$FROM_TF" = true ] || [ -z "$ENGINE_ID" ]; then
+    TF_DIR="$SCRIPT_DIR/../terraform"
+    TF_OUTPUT_KEY="${AGENT_TYPE}_agent_resource_name"
+    if command -v terraform &>/dev/null && [ -d "$TF_DIR" ]; then
+        RESOURCE_NAME=$(cd "$TF_DIR" && terraform output -raw "$TF_OUTPUT_KEY" 2>/dev/null || true)
+        if [ -n "$RESOURCE_NAME" ]; then
+            ENGINE_ID="${RESOURCE_NAME##*/}"
+            echo -e "Engine ID from Terraform: ${GREEN}$ENGINE_ID${NC}"
+        fi
+    fi
+fi
 
 echo ""
 echo -e "Environment: ${GREEN}${ENV_NAME}${NC}"

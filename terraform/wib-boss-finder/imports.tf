@@ -1,91 +1,99 @@
-# Import blocks for existing mmontan-ml (wib-boss-finder) resources.
+# Import blocks for wib-boss-finder (mmontan-ml) pre-existing resources.
 #
-# These imports reconcile pre-existing GCP resources created by the bash setup
-# scripts into Terraform state. Only relevant for the wib-boss-finder environment.
-#
-# For fresh environments (dev, prod): DELETE this file before running
-# `terraform init` — the resources don't exist yet and will be created normally.
+# Symlink this file into the terraform root before running for wib-boss-finder:
+#   ln -sf wib-boss-finder/imports.tf imports-env.tf
 #
 # Usage (requires mirko.montanari@gmail.com ADC — org policy blocks mirko@ from writing mmontan-ml IAM):
+#   ln -sf wib-boss-finder/imports.tf imports-env.tf
 #   terraform init -reconfigure \
 #     -backend-config="prefix=wib-boss-finder" \
 #     -backend-config="bucket=mmontan-ml-terraform-state"
 #   terraform plan -var-file=environments/wib-boss-finder.tfvars
 #   terraform apply -var-file=environments/wib-boss-finder.tfvars -parallelism=1
+#   rm imports-env.tf   # clean up after apply
 
 import {
-  id = "projects/mmontan-ml/serviceAccounts/task-worker@mmontan-ml.iam.gserviceaccount.com"
+  id = "projects/${var.project_id}/serviceAccounts/task-worker@${var.project_id}.iam.gserviceaccount.com"
   to = google_service_account.task_worker
 }
 
-
 import {
-  id = "projects/mmontan-ml/serviceAccounts/schoopet-sms-gateway@mmontan-ml.iam.gserviceaccount.com"
+  id = "projects/${var.project_id}/serviceAccounts/schoopet-sms-gateway@${var.project_id}.iam.gserviceaccount.com"
   to = google_service_account.sms_gateway
 }
 
-
 import {
-  id = "projects/mmontan-ml/locations/us-central1/queues/async-agent-tasks"
+  id = "projects/${var.project_id}/locations/${var.region}/queues/async-agent-tasks"
   to = google_cloud_tasks_queue.async_agent_tasks
 }
 
 import {
-  id = "mmontan-ml-agent-artifacts"
+  id = var.artifact_bucket_name
   to = google_storage_bucket.artifacts
 }
 
 import {
-  id = "projects/mmontan-ml/topics/email-notifications"
+  id = "projects/${var.project_id}/topics/email-notifications"
   to = google_pubsub_topic.email_notifications
 }
 
 import {
-  id = "projects/mmontan-ml/secrets/twilio-account-sid"
+  id = "projects/${var.project_id}/secrets/twilio-account-sid"
   to = google_secret_manager_secret.secrets["twilio-account-sid"]
 }
 
 import {
-  id = "projects/mmontan-ml/secrets/twilio-auth-token"
+  id = "projects/${var.project_id}/secrets/twilio-auth-token"
   to = google_secret_manager_secret.secrets["twilio-auth-token"]
 }
 
 import {
-  id = "projects/mmontan-ml/secrets/twilio-phone-number"
+  id = "projects/${var.project_id}/secrets/twilio-phone-number"
   to = google_secret_manager_secret.secrets["twilio-phone-number"]
 }
 
 import {
-  id = "projects/mmontan-ml/secrets/google-oauth-client-id"
+  id = "projects/${var.project_id}/secrets/google-oauth-client-id"
   to = google_secret_manager_secret.secrets["google-oauth-client-id"]
 }
 
 import {
-  id = "projects/mmontan-ml/secrets/google-oauth-client-secret"
+  id = "projects/${var.project_id}/secrets/google-oauth-client-secret"
   to = google_secret_manager_secret.secrets["google-oauth-client-secret"]
 }
 
 import {
-  id = "projects/mmontan-ml/secrets/oauth-hmac-secret"
+  id = "projects/${var.project_id}/secrets/oauth-hmac-secret"
   to = google_secret_manager_secret.secrets["oauth-hmac-secret"]
 }
 
 import {
-  id = "projects/mmontan-ml/secrets/twilio-whatsapp-number"
+  id = "projects/${var.project_id}/secrets/twilio-whatsapp-number"
   to = google_secret_manager_secret.secrets["twilio-whatsapp-number"]
 }
 
 import {
-  id = "projects/mmontan-ml/secrets/telegram-bot-token"
+  id = "projects/${var.project_id}/secrets/telegram-bot-token"
   to = google_secret_manager_secret.secrets["telegram-bot-token"]
 }
 
 import {
-  id = "projects/mmontan-ml/secrets/slack-bot-token"
+  id = "projects/${var.project_id}/secrets/slack-bot-token"
   to = google_secret_manager_secret.secrets["slack-bot-token"]
 }
 
 import {
-  id = "projects/mmontan-ml/secrets/slack-signing-secret"
+  id = "projects/${var.project_id}/secrets/slack-signing-secret"
   to = google_secret_manager_secret.secrets["slack-signing-secret"]
+}
+
+import {
+  id = "projects/${var.project_id}/roles/agentEngineUser"
+  to = google_project_iam_custom_role.agent_engine_user
+}
+
+# Team agent engine — wib-boss-finder specific ID; other envs: omit or override
+import {
+  id = "projects/${var.project_id}/locations/${var.region}/reasoningEngines/2114234416376053760"
+  to = google_vertex_ai_reasoning_engine.team_agent
 }
