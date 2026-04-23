@@ -49,16 +49,19 @@ class AgentEngineClient:
 
         logger.info(f"Initialized AgentEngineClient for {resource_name}")
 
-    async def create_session(self, user_id: str) -> str:
+    async def create_session(self, user_id: str, state: dict | None = None) -> str:
         """Create a new Agent Engine session.
 
         Args:
             user_id: User identifier (phone number for SMS gateway).
+            state: Optional initial session state (e.g., {"channel": "discord"}).
 
         Returns:
             The session ID string.
         """
-        session = await self._adk_app.async_create_session(user_id=user_id)
+        session = await self._adk_app.async_create_session(
+            user_id=user_id, state=state
+        )
         session_id = session["id"]
         logger.info(f"Created session {session_id} for user {user_id}")
         return session_id

@@ -5,9 +5,12 @@ Routes:
   GET  /internal/email/renew-watch  - Renew Gmail watch (called by Cloud Scheduler)
   GET  /internal/email/setup-watch  - One-time watch setup
 """
+import asyncio
 import base64
+import functools
 import json
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
@@ -72,6 +75,54 @@ def init_email_services(
 # ──────────────────────────── webhook ────────────────────────────
 
 
+async def _verify_pubsub_oidc(request: Request) -> None:
+    """Verify the OIDC token Pub/Sub attaches when EMAIL_PUSH_SERVICE_ACCOUNT is set.
+
+    Pub/Sub push subscriptions with oidc_token configured send:
+      Authorization: Bearer <google-signed-oidc-token>
+
+    The token's `email` claim must match EMAIL_PUSH_SERVICE_ACCOUNT and the
+    `aud` claim must match SMS_GATEWAY_URL (set as the audience in Terraform).
+    When EMAIL_PUSH_SERVICE_ACCOUNT is not configured we skip verification so
+    the endpoint still works in local dev / before Terraform is applied.
+    """
+    expected_sa = os.getenv("EMAIL_PUSH_SERVICE_ACCOUNT", "")
+    if not expected_sa:
+        logger.warning("EMAIL_PUSH_SERVICE_ACCOUNT not set — skipping Pub/Sub OIDC verification")
+        return
+
+    authorization = request.headers.get("Authorization", "")
+    if not authorization.startswith("Bearer "):
+        logger.warning("Email webhook: missing or malformed Authorization header")
+        raise HTTPException(status_code=401, detail="Missing Pub/Sub OIDC token")
+
+    token = authorization[7:]
+    audience = os.getenv("SMS_GATEWAY_URL", "")
+
+    try:
+        from google.auth.transport import requests as google_requests
+        from google.oauth2 import id_token
+
+        loop = asyncio.get_running_loop()
+        claims = await loop.run_in_executor(
+            None,
+            functools.partial(
+                id_token.verify_oauth2_token,
+                token,
+                google_requests.Request(),
+                audience=audience if audience else None,
+            ),
+        )
+    except Exception as e:
+        logger.warning(f"Email webhook: OIDC token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid Pub/Sub OIDC token")
+
+    email = claims.get("email", "")
+    if email != expected_sa:
+        logger.warning(f"Email webhook: unexpected token SA {email!r}, want {expected_sa!r}")
+        raise HTTPException(status_code=403, detail="Unauthorized Pub/Sub sender")
+
+
 @router.post("/webhook/email")
 async def handle_email_webhook(
     request: Request,
@@ -88,7 +139,12 @@ async def handle_email_webhook(
       },
       "subscription": "..."
     }
+
+    When the subscription is configured with an OIDC token (production), the
+    request carries Authorization: Bearer <token> signed by email-push SA.
     """
+    await _verify_pubsub_oidc(request)
+
     if not _gmail_client or not _authorizations or not _agent_client:
         logger.error("Email services not initialized")
         # Return 200 to avoid Pub/Sub retries while services are down
@@ -209,7 +265,7 @@ async def _route_email_to_agent(workflow: dict, email: dict) -> None:
     phone = workflow.get("authorized_user_phone", "")
     instructions = workflow.get("processing_prompt") or _DEFAULT_EMAIL_PROCESSING_PROMPT
     try:
-        session_info = await _session_manager.get_or_create_session(phone, agent_type="team")
+        session_info = await _session_manager.get_or_create_session(phone, agent_type="team", channel="email")
 
         prompt = _NOTIFICATION_WRAPPER.format(
             from_=email.get("from", ""),

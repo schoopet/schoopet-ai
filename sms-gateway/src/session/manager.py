@@ -99,12 +99,13 @@ class SessionManager:
             is_new_user=True,
         )
 
-    async def set_opted_in(self, phone_number: str, agent_type: str = "personal") -> SessionInfo:
+    async def set_opted_in(self, phone_number: str, agent_type: str = "personal", channel: str | None = None) -> SessionInfo:
         """Set user as opted in and create Agent Engine session.
 
         Args:
             phone_number: User's phone number in E.164 format.
             agent_type: "personal" or "team" — which agent to create the session on.
+            channel: Originating channel (e.g., "sms", "discord") — stored in session state.
 
         Returns:
             SessionInfo with new session details.
@@ -114,7 +115,12 @@ class SessionManager:
 
         # Create Agent Engine session on the correct agent
         logger.info(f"User {phone_number} opted in ({agent_type}), creating agent session")
-        agent_session_id = await self._client_for(agent_type).create_session(user_id=phone_number)
+        state = {"agent_type": agent_type}
+        if channel:
+            state["channel"] = channel
+        agent_session_id = await self._client_for(agent_type).create_session(
+            user_id=phone_number, state=state
+        )
 
         now = datetime.now(timezone.utc)
         await doc_ref.update({
@@ -150,7 +156,7 @@ class SessionManager:
             "last_activity": datetime.now(timezone.utc),
         })
 
-    async def get_or_create_session(self, phone_number: str, agent_type: str = "personal") -> SessionInfo:
+    async def get_or_create_session(self, phone_number: str, agent_type: str = "personal", channel: str | None = None) -> SessionInfo:
         """Get existing session or create a new one (for opted-in users only).
 
         Creates a new session if:
@@ -160,6 +166,7 @@ class SessionManager:
         Args:
             phone_number: User's phone number in E.164 format.
             agent_type: "personal" or "team" — which agent engine to use.
+            channel: Originating channel (e.g., "sms", "discord") — stored in session state.
 
         Returns:
             SessionInfo with session details.
@@ -214,7 +221,12 @@ class SessionManager:
 
         # Create new Agent Engine session on the correct agent
         logger.info(f"Creating new {agent_type} session for {phone_number}")
-        agent_session_id = await self._client_for(agent_type).create_session(user_id=phone_number)
+        state = {"agent_type": agent_type}
+        if channel:
+            state["channel"] = channel
+        agent_session_id = await self._client_for(agent_type).create_session(
+            user_id=phone_number, state=state
+        )
 
         # Store in Firestore
         now = datetime.now(timezone.utc)

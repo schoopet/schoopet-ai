@@ -97,3 +97,8 @@ import {
   id = "projects/${var.project_id}/locations/${var.region}/reasoningEngines/2114234416376053760"
   to = google_vertex_ai_reasoning_engine.team_agent
 }
+
+import {
+  id = "projects/${var.project_id}/locations/${var.region}/services/shoopet-sms-gateway"
+  to = google_cloud_run_v2_service.sms_gateway
+}

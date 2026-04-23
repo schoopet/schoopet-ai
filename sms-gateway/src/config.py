@@ -21,6 +21,7 @@ class Settings(BaseSettings):
         "sms": "personal",
         "whatsapp": "personal",
         "telegram": "personal",
+        "discord": "personal",
     }
 
     # Twilio Configuration
@@ -39,6 +40,11 @@ class Settings(BaseSettings):
     # Rate Limiting
     DAILY_MESSAGE_LIMIT: int = 1000
     RATE_LIMIT_EXCLUDED_PHONES: list[str] = ["+19494136310"]
+
+    # Discord Configuration
+    DISCORD_BOT_TOKEN: str = ""       # Empty = Discord disabled
+    DISCORD_PUBLIC_KEY: str = ""      # Ed25519 public key from Discord Developer Portal
+    DISCORD_APPLICATION_ID: str = ""  # Discord application (client) ID
 
     # Telegram Configuration
     TELEGRAM_BOT_TOKEN: str = ""  # Empty = Telegram disabled

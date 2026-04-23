@@ -25,6 +25,7 @@ _team_agent_client = None
 _sms_sender = None
 _telegram_sender = None
 _slack_sender = None
+_discord_sender = None
 
 
 def init_internal_services(
@@ -34,18 +35,20 @@ def init_internal_services(
     sms_sender,
     telegram_sender=None,
     slack_sender=None,
+    discord_sender=None,
 ):
     """Initialize internal handler services.
 
     Called by main.py during application startup.
     """
-    global _session_manager, _personal_agent_client, _team_agent_client, _sms_sender, _telegram_sender, _slack_sender
+    global _session_manager, _personal_agent_client, _team_agent_client, _sms_sender, _telegram_sender, _slack_sender, _discord_sender
     _session_manager = session_manager
     _personal_agent_client = personal_agent_client
     _team_agent_client = team_agent_client
     _sms_sender = sms_sender
     _telegram_sender = telegram_sender
     _slack_sender = slack_sender
+    _discord_sender = discord_sender
     logger.info("Internal handler services initialized")
 
 
@@ -98,7 +101,7 @@ async def trigger_task_review(
     When an async task completes, the Task Worker calls this endpoint
     to trigger root agent review in a supervisor session.
 
-    Security: Requires valid OIDC token or HMAC signature.
+    Security: Requires valid OIDC token from an allowed service account.
 
     Flow:
     1. Task Worker completes async task execution
@@ -171,9 +174,9 @@ async def notify_user(
     - If user has active session: Send via root agent in user session
     - If no active session: Send directly via SMS
 
-    Security: Requires valid OIDC token or HMAC signature.
+    Security: Requires valid OIDC token from an allowed service account.
     """
-    if not _session_manager or (not _sms_sender and not _telegram_sender and not _slack_sender):
+    if not _session_manager or (not _sms_sender and not _telegram_sender and not _slack_sender and not _discord_sender):
         raise HTTPException(status_code=503, detail="Internal services not initialized")
 
     logger.info(
@@ -203,7 +206,9 @@ async def notify_user(
             # Send the agent's response to the user via the same channel as their session
             if agent_response:
                 from ..channel import MessageChannel
-                if session_channel == "telegram" and _telegram_sender:
+                if session_channel == "discord" and _discord_sender:
+                    await _discord_sender.send(payload.user_id, agent_response)
+                elif session_channel == "telegram" and _telegram_sender:
                     await _telegram_sender.send(payload.user_id, agent_response)
                 elif session_channel == "slack" and _slack_sender:
                     await _slack_sender.send(payload.user_id, agent_response)
@@ -222,7 +227,9 @@ async def notify_user(
             )
 
         # No active session or agent client - send directly
-        if payload.channel == "telegram" and _telegram_sender:
+        if payload.channel == "discord" and _discord_sender:
+            await _discord_sender.send(payload.user_id, payload.message)
+        elif payload.channel == "telegram" and _telegram_sender:
             await _telegram_sender.send(payload.user_id, payload.message)
         elif payload.channel == "slack" and _slack_sender:
             await _slack_sender.send(payload.user_id, payload.message)

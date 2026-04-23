@@ -9,10 +9,23 @@ A Cloud Run service that bridges multiple messaging channels to the Schoopet age
 | SMS | `POST /webhook/sms` | Personal |
 | WhatsApp | `POST /webhook/sms` | Personal |
 | Telegram | `POST /webhook/telegram` | Personal |
+| Discord | `POST /webhook/discord` + Gateway WebSocket | Personal |
 | Slack | `POST /webhook/slack` | Team |
 | Email (Gmail Pub/Sub) | `POST /webhook/email` | Team |
 
 Personal and team agents are separate Vertex AI reasoning engines. The gateway routes each channel to the correct one automatically.
+
+## Adding the Discord Bot to a Server
+
+The bot supports both `/chat` slash commands and @mention / DM conversations.
+
+To add the bot to a Discord server, use this invite link (replace the client ID if the app is re-created):
+
+```
+https://discord.com/api/oauth2/authorize?client_id=1495984034268975275&permissions=274877991936&scope=bot+applications.commands
+```
+
+> **Note:** The bot must be invited with both `bot` and `applications.commands` scopes. Adding it with only `applications.commands` (the default webhook flow) will make slash commands work but the bot won't appear in the member list and @mentions won't be received.
 
 ## Architecture
 

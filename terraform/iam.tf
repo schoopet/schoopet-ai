@@ -9,6 +9,10 @@ locals {
     "roles/run.invoker",
   ]
 
+  sms_gateway_roles = [
+    "roles/secretmanager.secretAccessor",
+    "roles/datastore.user", # Firestore: session storage + OAuth token cache
+  ]
 }
 
 resource "google_project_iam_member" "task_worker" {
@@ -27,9 +31,11 @@ resource "google_project_iam_member" "task_worker_agent_engine_user" {
 
 # ── schoopet-sms-gateway SA ───────────────────────────────────────────────────
 
-resource "google_project_iam_member" "sms_gateway_secret_accessor" {
+resource "google_project_iam_member" "sms_gateway" {
+  for_each = toset(local.sms_gateway_roles)
+
   project = var.project_id
-  role    = "roles/secretmanager.secretAccessor"
+  role    = each.value
   member  = "serviceAccount:${google_service_account.sms_gateway.email}"
 }
 
@@ -38,6 +44,19 @@ resource "google_project_iam_member" "sms_gateway_agent_engine_user" {
   project = var.project_id
   role    = google_project_iam_custom_role.agent_engine_user.id
   member  = "serviceAccount:${google_service_account.sms_gateway.email}"
+}
+
+# ── SMS Gateway Cloud Run invoke ───────────────────────────────────────────────
+# Twilio, Slack, Telegram, and Discord all call the gateway without GCP bearer
+# tokens, so the service must be publicly invocable. The email push endpoint
+# additionally verifies its own OIDC token (email-push SA) in the handler.
+
+resource "google_cloud_run_v2_service_iam_member" "sms_gateway_public_invoke" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.sms_gateway.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
 }
 
 # ── Project editors ───────────────────────────────────────────────────────────

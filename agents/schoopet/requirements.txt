@@ -1,10 +1,10 @@
-google-adk[eval]==1.26.0
-google-genai==1.63.0
-google-cloud-aiplatform>=1.111.0
-google-cloud-firestore>=2.14.0
-google-cloud-secret-manager>=2.16.0
-google-cloud-tasks>=2.14.0
-httpx>=0.26.0
+google-adk
+google-genai
+google-cloud-aiplatform
+google-cloud-firestore
+google-cloud-secret-manager
+google-cloud-tasks
+httpx
 pydantic
 cloudpickle
 pytest

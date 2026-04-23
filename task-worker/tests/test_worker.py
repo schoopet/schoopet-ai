@@ -1,4 +1,4 @@
-"""Unit tests for TaskWorker."""
+"""Unit tests for TaskWorker and AsyncTaskDocument model."""
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch, ANY
 from src.worker import TaskWorker
@@ -41,18 +41,38 @@ def task_worker(mock_firestore):
     with patch.dict("os.environ", {
         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
         "AGENT_ENGINE_ID": "agent-engine-1",
+        "PERSONAL_AGENT_ENGINE_ID": "personal-engine-1",
+        "TEAM_AGENT_ENGINE_ID": "team-engine-1",
         "SMS_GATEWAY_URL": "http://gateway"
     }):
         worker._ensure_initialized()
         worker._firestore_client = mock_firestore
     return worker
 
+
+def _mock_adk_app_with_response(text: str):
+    """Create a mock ADK app that returns a streaming response with the given text."""
+    mock_adk_app = MagicMock()
+
+    # Mock async_create_session
+    async def mock_create_session(**kwargs):
+        return {"id": "session-123"}
+    mock_adk_app.async_create_session = mock_create_session
+
+    # Mock async_stream_query as an async generator
+    async def mock_stream_query(**kwargs):
+        yield {"content": {"parts": [{"text": text}]}}
+    mock_adk_app.async_stream_query = mock_stream_query
+
+    return mock_adk_app
+
+
 class TestTaskWorker:
     """Tests for TaskWorker class."""
 
     @pytest.mark.asyncio
     async def test_execute_task_success(self, task_worker, mock_firestore):
-        """Should execute task and update result."""
+        """Should execute task via Agent Engine and update result."""
         # Mock task document
         mock_doc = MagicMock()
         mock_doc.exists = True
@@ -62,41 +82,40 @@ class TestTaskWorker:
             "status": "pending",
             "task_type": "research",
             "instruction": "Research AI",
-            "memory_isolation": "shared"
+            "agent_type": "personal",
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
-        # Mock AsyncAgent
-        with patch("src.async_agent.create_async_agent") as mock_create_agent:
-            mock_agent = AsyncMock()
-            mock_agent.execute.return_value = "AI Result"
-            mock_create_agent.return_value = mock_agent
-            
-            # Mock notification
-            task_worker._notify_for_review = AsyncMock()
+        # Mock Agent Engine
+        mock_adk_app = _mock_adk_app_with_response("AI Result")
+        mock_vertex_client = MagicMock()
+        mock_vertex_client.agent_engines.get.return_value = mock_adk_app
+        task_worker._vertex_client = mock_vertex_client
 
-            result = await task_worker.execute_task(TASK_ID)
+        # Mock notification
+        task_worker._notify_for_review = AsyncMock()
 
-            assert result["success"] is True
-            
-            # Verify status updates
-            doc_ref = mock_firestore.collection.return_value.document.return_value
-            # Should update to running
-            doc_ref.update.assert_any_call({"status": "running", "started_at": ANY})
-            # Should update result
-            doc_ref.update.assert_any_call({
-                "status": "awaiting_review",
-                "result": "AI Result",
-                "result_memories": [],
-                "completed_at": ANY
-            })
+        result = await task_worker.execute_task(TASK_ID)
 
-            # Verify notification
-            task_worker._notify_for_review.assert_awaited_once_with(
-                task_id=TASK_ID,
-                user_id=USER_ID,
-                result="AI Result"
-            )
+        assert result["success"] is True
+
+        # Verify status updates
+        doc_ref = mock_firestore.collection.return_value.document.return_value
+        # Should update to running
+        doc_ref.update.assert_any_call({"status": "running", "started_at": ANY})
+        # Should update result
+        doc_ref.update.assert_any_call({
+            "status": "awaiting_review",
+            "result": "AI Result",
+            "completed_at": ANY
+        })
+
+        # Verify notification
+        task_worker._notify_for_review.assert_awaited_once_with(
+            task_id=TASK_ID,
+            user_id=USER_ID,
+            result="AI Result"
+        )
 
     @pytest.mark.asyncio
     async def test_execute_task_not_found(self, task_worker, mock_firestore):
@@ -136,32 +155,38 @@ class TestTaskWorker:
             "status": "pending",
             "task_type": "research",
             "instruction": "Research AI",
+            "agent_type": "personal",
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
-        with patch("src.async_agent.create_async_agent") as mock_create_agent:
-            mock_agent = AsyncMock()
-            mock_agent.execute.side_effect = Exception("Agent Error")
-            mock_create_agent.return_value = mock_agent
+        # Mock Agent Engine that raises
+        mock_adk_app = MagicMock()
+        async def mock_create_session(**kwargs):
+            raise Exception("Agent Error")
+        mock_adk_app.async_create_session = mock_create_session
 
-            task_worker._notify_for_review = AsyncMock()
+        mock_vertex_client = MagicMock()
+        mock_vertex_client.agent_engines.get.return_value = mock_adk_app
+        task_worker._vertex_client = mock_vertex_client
 
-            result = await task_worker.execute_task(TASK_ID)
+        task_worker._notify_for_review = AsyncMock()
 
-            assert result["success"] is False
-            assert "Agent Error" in result["error"]
+        result = await task_worker.execute_task(TASK_ID)
 
-            # Verify error update
-            doc_ref = mock_firestore.collection.return_value.document.return_value
-            doc_ref.update.assert_called_with({
-                "status": "failed",
-                "error": "Agent Error",
-                "completed_at": ANY
-            })
+        assert result["success"] is False
+        assert "Agent Error" in result["error"]
+
+        # Verify error update
+        doc_ref = mock_firestore.collection.return_value.document.return_value
+        doc_ref.update.assert_called_with({
+            "status": "failed",
+            "error": "Agent Error",
+            "completed_at": ANY
+        })
 
     @pytest.mark.asyncio
     async def test_execute_revision(self, task_worker, mock_firestore):
-        """Should execute revision logic."""
+        """Should execute revision with feedback in prompt."""
         mock_doc = MagicMock()
         mock_doc.exists = True
         mock_doc.to_dict.return_value = {
@@ -171,20 +196,108 @@ class TestTaskWorker:
             "task_type": "research",
             "instruction": "Research AI",
             "result": "Old Result",
-            "revision_feedback": "Fix it"
+            "revision_feedback": "Fix it",
+            "agent_type": "personal",
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
-        with patch("src.async_agent.create_async_agent") as mock_create_agent:
-            mock_agent = AsyncMock()
-            mock_agent.execute.return_value = "Revised Result"
-            mock_create_agent.return_value = mock_agent
-            
-            task_worker._notify_for_review = AsyncMock()
+        # Mock Agent Engine
+        mock_adk_app = _mock_adk_app_with_response("Revised Result")
+        mock_vertex_client = MagicMock()
+        mock_vertex_client.agent_engines.get.return_value = mock_adk_app
+        task_worker._vertex_client = mock_vertex_client
 
-            await task_worker.execute_task(TASK_ID)
+        task_worker._notify_for_review = AsyncMock()
 
-            # Verify revision prompt construction (indirectly via execution success)
-            # We can check if agent was called with feedback included
-            # But here just verifying flow completion is good
-            mock_agent.execute.assert_called()
+        result = await task_worker.execute_task(TASK_ID)
+
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_execute_task_defaults_to_personal_engine(self, task_worker, mock_firestore):
+        """Tasks without agent_type should default to personal engine."""
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": USER_ID,
+            "status": "pending",
+            "task_type": "reminder",
+            "instruction": "Remind user",
+            # No agent_type field — should default to personal
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        mock_adk_app = _mock_adk_app_with_response("Reminder sent")
+        mock_vertex_client = MagicMock()
+        mock_vertex_client.agent_engines.get.return_value = mock_adk_app
+        task_worker._vertex_client = mock_vertex_client
+
+        task_worker._notify_for_review = AsyncMock()
+
+        await task_worker.execute_task(TASK_ID)
+
+        engine_name = mock_vertex_client.agent_engines.get.call_args[1]["name"]
+        assert "personal-engine-1" in engine_name
+
+    @pytest.mark.asyncio
+    async def test_execute_task_missing_engine_id_fails(self, mock_firestore):
+        """Should fail with clear error when engine ID is not configured."""
+        worker = TaskWorker()
+        with patch.dict("os.environ", {
+            "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
+            # No engine IDs set
+            "SMS_GATEWAY_URL": "http://gateway"
+        }):
+            worker._ensure_initialized()
+            worker._firestore_client = mock_firestore
+            # Explicitly clear engine IDs
+            worker._personal_engine_id = None
+            worker._team_engine_id = None
+
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": USER_ID,
+            "status": "pending",
+            "task_type": "research",
+            "instruction": "Research AI",
+            "agent_type": "personal",
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        worker._notify_for_review = AsyncMock()
+
+        result = await worker.execute_task(TASK_ID)
+
+        assert result["success"] is False
+        assert "No engine ID configured" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_execute_task_routes_to_team_engine(self, task_worker, mock_firestore):
+        """Should route team agent_type tasks to the team engine."""
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": USER_ID,
+            "status": "pending",
+            "task_type": "analysis",
+            "instruction": "Analyze data",
+            "agent_type": "team",
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        mock_adk_app = _mock_adk_app_with_response("Team Result")
+        mock_vertex_client = MagicMock()
+        mock_vertex_client.agent_engines.get.return_value = mock_adk_app
+        task_worker._vertex_client = mock_vertex_client
+
+        task_worker._notify_for_review = AsyncMock()
+
+        await task_worker.execute_task(TASK_ID)
+
+        # Verify it called agent_engines.get with the team engine
+        engine_name = mock_vertex_client.agent_engines.get.call_args[1]["name"]
+        assert "team-engine-1" in engine_name

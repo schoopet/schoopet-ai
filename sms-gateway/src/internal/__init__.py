@@ -4,11 +4,10 @@ This module handles secure communication between internal services:
 - Task Worker -> SMS Gateway (task completion notifications)
 - Cloud Tasks -> Task Worker (scheduled task execution)
 
-All endpoints require authentication via OIDC tokens or HMAC signatures.
+All endpoints require OIDC authentication via GCP service accounts.
 """
-from .auth import verify_internal_request, get_internal_hmac_secret
+from .auth import verify_internal_request
 
 __all__ = [
     "verify_internal_request",
-    "get_internal_hmac_secret",
 ]

@@ -1,16 +1,18 @@
 """Async task management module."""
 from .models import (
     TaskStatus,
-    MemoryIsolation,
     AsyncTaskDocument,
     TaskReviewRequest,
     UserNotifyRequest,
+    VALID_CHANNELS,
+    VALID_AGENT_TYPES,
 )
 
 __all__ = [
     "TaskStatus",
-    "MemoryIsolation",
     "AsyncTaskDocument",
     "TaskReviewRequest",
     "UserNotifyRequest",
+    "VALID_CHANNELS",
+    "VALID_AGENT_TYPES",
 ]

@@ -1,3 +1,13 @@
+output "sms_gateway_url" {
+  description = "Deployed URL of the SMS Gateway Cloud Run service"
+  value       = google_cloud_run_v2_service.sms_gateway.uri
+}
+
+output "task_worker_url" {
+  description = "Deployed URL of the Task Worker Cloud Run service"
+  value       = google_cloud_run_v2_service.task_worker.uri
+}
+
 output "task_worker_sa_email" {
   description = "Task Worker service account email"
   value       = google_service_account.task_worker.email

@@ -103,7 +103,7 @@ class TestAsyncTaskTool:
             "status": "approved",
             "result": "AI is cool",
             "created_at": datetime.now(timezone.utc),
-            "memory_isolation": "shared"
+            "agent_type": "personal"
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
@@ -124,7 +124,7 @@ class TestAsyncTaskTool:
             "created_at": datetime.now(timezone.utc),
             "instruction": "Test",
             "task_type": "research",
-            "memory_isolation": "shared"
+            "agent_type": "personal"
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
@@ -153,7 +153,7 @@ class TestAsyncTaskTool:
             "status": "awaiting_review",
             "result": "Draft Result",
             "created_at": datetime.now(timezone.utc),
-            "memory_isolation": "shared"
+            "agent_type": "personal"
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
@@ -178,7 +178,7 @@ class TestAsyncTaskTool:
             "created_at": datetime.now(timezone.utc),
             "instruction": "Test",
             "task_type": "research",
-            "memory_isolation": "shared"
+            "agent_type": "personal"
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
@@ -208,7 +208,7 @@ class TestAsyncTaskTool:
             "created_at": datetime.now(timezone.utc),
             "instruction": "Test",
             "task_type": "research",
-            "memory_isolation": "shared"
+            "agent_type": "personal"
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
         mock_cloud_tasks.create_revision_task.return_value = "revision-task"

@@ -1,22 +1,21 @@
-"""Task Worker - Executes async tasks and notifies for review.
+"""Task Worker - Executes async tasks via deployed Agent Engine.
 
 This module handles:
 1. Loading task definitions from Firestore
-2. Executing tasks using specialized async agents
-3. Handling different memory isolation levels
-4. Notifying SMS Gateway for root agent review
-5. Processing revision requests
+2. Delegating execution to the deployed Agent Engine (full tool access)
+3. Notifying SMS Gateway for root agent review
+4. Processing revision requests
 """
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class TaskWorker:
-    """Executes async tasks spawned by the root agent."""
+    """Executes async tasks by delegating to the deployed Agent Engine."""
 
     def __init__(self):
         """Initialize the task worker - uses lazy initialization."""
@@ -28,7 +27,8 @@ class TaskWorker:
         # Configuration
         self._project_id = None
         self._location = None
-        self._agent_engine_id = None
+        self._personal_engine_id = None
+        self._team_engine_id = None
         self._sms_gateway_url = None
 
     def _ensure_initialized(self):
@@ -38,12 +38,17 @@ class TaskWorker:
 
         self._project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
         self._location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
-        self._agent_engine_id = os.getenv("AGENT_ENGINE_ID")
+        self._personal_engine_id = (
+            os.getenv("PERSONAL_AGENT_ENGINE_ID") or os.getenv("AGENT_ENGINE_ID")
+        )
+        self._team_engine_id = (
+            os.getenv("TEAM_AGENT_ENGINE_ID") or os.getenv("AGENT_ENGINE_ID")
+        )
         self._sms_gateway_url = os.getenv("SMS_GATEWAY_URL")
 
         self._initialized = True
 
-        if not self._project_id or not self._agent_engine_id:
+        if not self._project_id or not (self._personal_engine_id or self._team_engine_id):
             logger.error("Missing required environment variables")
 
     def _get_firestore_client(self):
@@ -100,24 +105,18 @@ class TaskWorker:
         await self._update_task_status(task_id, "running")
 
         try:
-            # Execute based on task type and memory isolation
-            memory_isolation = task.get("memory_isolation", "shared")
-
+            # Execute via deployed Agent Engine (full tool access)
             if status == "revision_requested":
-                # Continue with revision
-                result, memories = await self._execute_revision(task)
-            elif memory_isolation == "isolated":
-                result, memories = await self._execute_isolated(task)
-            elif memory_isolation == "readonly":
-                result, memories = await self._execute_readonly(task)
-            else:  # shared
-                result, memories = await self._execute_shared(task)
+                prompt = self._build_revision_prompt(task)
+            else:
+                prompt = self._build_task_prompt(task)
+
+            result = await self._execute_task(task, prompt)
 
             # Update task with results
             await self._update_task_result(
                 task_id=task_id,
                 result=result,
-                memories=memories,
                 status="awaiting_review"
             )
 
@@ -177,7 +176,6 @@ class TaskWorker:
         self,
         task_id: str,
         result: str,
-        memories: list,
         status: str
     ):
         """Update task with execution result."""
@@ -188,7 +186,6 @@ class TaskWorker:
         firestore_client.collection("async_tasks").document(task_id).update({
             "status": status,
             "result": result,
-            "result_memories": memories,
             "completed_at": datetime.now(timezone.utc),
         })
 
@@ -204,91 +201,63 @@ class TaskWorker:
             "completed_at": datetime.now(timezone.utc),
         })
 
-    async def _execute_shared(self, task: Dict[str, Any]) -> Tuple[str, list]:
-        """Execute task with full access to user's Memory Bank.
+    async def _execute_task(self, task: Dict[str, Any], prompt: str) -> str:
+        """Execute a task by delegating to the deployed Agent Engine.
 
-        Creates a session with the user's memory context.
+        Creates a session on the appropriate engine (personal/team),
+        sends the prompt, and streams the result. The agent engine has
+        full tool access (calendar, search, drive, sheets, memory, etc.).
         """
-        from .async_agent import create_async_agent
-
-        agent = create_async_agent(
-            task_type=task["task_type"],
-            project=self._project_id,
-            location=self._location,
+        agent_type = task.get("agent_type", "personal")
+        engine_id = (
+            self._team_engine_id if agent_type == "team"
+            else self._personal_engine_id
         )
 
-        # Build prompt with task context
-        prompt = self._build_task_prompt(task)
+        if not engine_id:
+            raise ValueError(
+                f"No engine ID configured for agent_type={agent_type}. "
+                f"Set {'TEAM' if agent_type == 'team' else 'PERSONAL'}_AGENT_ENGINE_ID."
+            )
 
-        # Execute in shared mode (agent has access to memory)
-        result = await agent.execute(prompt, task.get("context", {}))
-
-        return result, []  # No memories to sync, already in shared bank
-
-    async def _execute_isolated(self, task: Dict[str, Any]) -> Tuple[str, list]:
-        """Execute task with isolated memory.
-
-        Collects memories during execution to sync on completion.
-        """
-        from .async_agent import create_async_agent
-
-        agent = create_async_agent(
-            task_type=task["task_type"],
-            project=self._project_id,
-            location=self._location,
-            collect_memories=True,
+        client = self._get_vertex_client()
+        engine_name = (
+            f"projects/{self._project_id}/locations/{self._location}"
+            f"/reasoningEngines/{engine_id}"
         )
 
-        prompt = self._build_task_prompt(task)
-        result, memories = await agent.execute_with_memory_collection(
-            prompt, task.get("context", {})
+        # Create a task-scoped session
+        adk_app = client.agent_engines.get(name=engine_name)
+        session = await adk_app.async_create_session(user_id=task["user_id"])
+        session_id = session["id"]
+
+        logger.info(
+            f"Created Agent Engine session {session_id} on engine {engine_id} "
+            f"for user {task['user_id']}"
         )
 
-        return result, memories
-
-    async def _execute_readonly(self, task: Dict[str, Any]) -> Tuple[str, list]:
-        """Execute task with read-only memory access.
-
-        Retrieves relevant memories as context but doesn't write.
-        """
-        from .async_agent import create_async_agent
-
-        # Retrieve relevant memories for context
-        memories_context = await self._retrieve_user_memories(
+        # Stream the response
+        result_parts = []
+        async for event in adk_app.async_stream_query(
             user_id=task["user_id"],
-            query=task["instruction"]
-        )
+            session_id=session_id,
+            message=prompt,
+        ):
+            if isinstance(event, dict):
+                content = event.get("content", {})
+                if isinstance(content, dict):
+                    for part in content.get("parts", []):
+                        if isinstance(part, dict) and "text" in part:
+                            result_parts.append(part["text"])
+            elif hasattr(event, "content") and event.content:
+                if hasattr(event.content, "parts"):
+                    for part in event.content.parts:
+                        if hasattr(part, "text") and part.text:
+                            result_parts.append(part.text)
 
-        agent = create_async_agent(
-            task_type=task["task_type"],
-            project=self._project_id,
-            location=self._location,
-            preloaded_memories=memories_context,
-        )
-
-        prompt = self._build_task_prompt(task)
-        result = await agent.execute(prompt, task.get("context", {}))
-
-        return result, []
-
-    async def _execute_revision(self, task: Dict[str, Any]) -> Tuple[str, list]:
-        """Execute task revision based on supervisor feedback.
-
-        Uses the existing async session if available, with feedback context.
-        """
-        from .async_agent import create_async_agent
-
-        agent = create_async_agent(
-            task_type=task["task_type"],
-            project=self._project_id,
-            location=self._location,
-        )
-
-        # Build revision prompt with feedback
-        prompt = self._build_revision_prompt(task)
-        result = await agent.execute(prompt, task.get("context", {}))
-
-        return result, []
+        result = "".join(result_parts)
+        logger.info(f"Task execution complete: {len(result)} chars")
+        return result
 
     def _build_task_prompt(self, task: Dict[str, Any]) -> str:
         """Build the execution prompt for the async agent."""
@@ -306,8 +275,7 @@ class TaskWorker:
                 parts.append(f"  {key}: {value}")
 
         parts.append("")
-        parts.append("Provide a concise result that can be sent to the user via SMS.")
-        parts.append("Keep the response under 1000 characters if possible.")
+        parts.append("Provide a clear, concise result.")
 
         return "\n".join(parts)
 
@@ -326,51 +294,9 @@ class TaskWorker:
             task.get("revision_feedback", "(no feedback)"),
             "",
             "Provide an improved result that addresses the feedback.",
-            "Keep the response under 1000 characters if possible.",
         ]
 
         return "\n".join(parts)
-
-    async def _retrieve_user_memories(
-        self,
-        user_id: str,
-        query: str,
-        top_k: int = 10
-    ) -> list:
-        """Retrieve relevant memories for the user.
-
-        Used for readonly execution mode.
-        """
-        try:
-            vertex_client = self._get_vertex_client()
-            if not vertex_client:
-                return []
-
-            agent_engine_name = (
-                f"projects/{self._project_id}/locations/{self._location}"
-                f"/reasoningEngines/{self._agent_engine_id}"
-            )
-
-            # Query memories
-            response = vertex_client.agent_engines.memories.retrieve(
-                name=agent_engine_name,
-                scope={"user_id": user_id},
-                similarity_search_params={
-                    "query": query,
-                    "top_k": top_k
-                }
-            )
-
-            memories = []
-            for memory in response.memories:
-                if hasattr(memory, "fact"):
-                    memories.append(memory.fact)
-
-            return memories
-
-        except Exception as e:
-            logger.warning(f"Failed to retrieve memories: {e}")
-            return []
 
     async def _notify_for_review(
         self,

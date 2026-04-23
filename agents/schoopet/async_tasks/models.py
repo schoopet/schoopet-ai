@@ -10,6 +10,12 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+# Single source of truth for valid notification channels and agent types.
+# Add new channels here when adding a new messaging integration.
+VALID_CHANNELS = {"sms", "whatsapp", "telegram", "discord", "slack", "email"}
+VALID_AGENT_TYPES = {"personal", "team"}
+
+
 class TaskStatus(str, Enum):
     """Status of an async task throughout its lifecycle."""
 
@@ -22,14 +28,6 @@ class TaskStatus(str, Enum):
     NOTIFIED = "notified"  # User has been notified of completion
     FAILED = "failed"  # Failed with error
     CANCELLED = "cancelled"  # User or agent cancelled
-
-
-class MemoryIsolation(str, Enum):
-    """Memory isolation level for async task execution."""
-
-    SHARED = "shared"  # Full access to user's Memory Bank (default)
-    ISOLATED = "isolated"  # Separate session, sync results on completion
-    READONLY = "readonly"  # Can read user's memory but not write
 
 
 class AsyncTaskDocument(BaseModel):
@@ -60,9 +58,12 @@ class AsyncTaskDocument(BaseModel):
         default=None, description="Cloud Tasks task name for tracking/cancellation"
     )
 
-    # Memory configuration
-    memory_isolation: MemoryIsolation = Field(
-        default=MemoryIsolation.SHARED, description="Memory isolation level"
+    # Routing
+    agent_type: str = Field(
+        default="personal", description="Agent engine to use: personal or team"
+    )
+    notification_channel: str = Field(
+        default="sms", description="Channel to notify user on completion: sms, discord, slack, etc."
     )
 
     # Session tracking
@@ -80,9 +81,6 @@ class AsyncTaskDocument(BaseModel):
     status: TaskStatus = Field(default=TaskStatus.PENDING)
     result: Optional[str] = Field(
         default=None, description="Task result to deliver to user"
-    )
-    result_memories: List[str] = Field(
-        default_factory=list, description="Memories collected during isolated execution"
     )
     error: Optional[str] = Field(default=None, description="Error message if failed")
 
@@ -121,9 +119,9 @@ class AsyncTaskDocument(BaseModel):
             "task_type": self.task_type,
             "instruction": self.instruction,
             "context": self.context,
-            "memory_isolation": self.memory_isolation.value,
+            "agent_type": self.agent_type,
+            "notification_channel": self.notification_channel,
             "status": self.status.value,
-            "result_memories": self.result_memories,
             "review_attempts": self.review_attempts,
             "max_review_attempts": self.max_review_attempts,
             "created_at": self.created_at,
@@ -168,15 +166,13 @@ class AsyncTaskDocument(BaseModel):
             context=data.get("context", {}),
             scheduled_at=data.get("scheduled_at"),
             cloud_task_name=data.get("cloud_task_name"),
-            memory_isolation=MemoryIsolation(
-                data.get("memory_isolation", MemoryIsolation.SHARED.value)
-            ),
+            agent_type=data.get("agent_type", "personal"),
+            notification_channel=data.get("notification_channel", "sms"),
             user_session_id=data.get("user_session_id"),
             async_session_id=data.get("async_session_id"),
             supervisor_session_id=data.get("supervisor_session_id"),
             status=TaskStatus(data.get("status", TaskStatus.PENDING.value)),
             result=data.get("result"),
-            result_memories=data.get("result_memories", []),
             error=data.get("error"),
             review_attempts=data.get("review_attempts", 0),
             max_review_attempts=data.get("max_review_attempts", 3),

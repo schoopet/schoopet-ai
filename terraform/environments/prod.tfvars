@@ -4,3 +4,6 @@ artifact_bucket_name = "schoopet-prod-agent-artifacts"
 
 personal_agent_engine_id = ""
 team_agent_engine_id     = ""
+
+discord_application_id = "1495984034268975275"
+discord_public_key     = "eceda989237ba925859c04f9096a5b1aa9d213b54424b0e3136a551c3966c041"

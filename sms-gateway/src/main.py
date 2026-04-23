@@ -9,7 +9,7 @@ from google.cloud import secretmanager
 from .config import get_settings
 from .agent.client import AgentEngineClient
 from .internal.handler import router as internal_router, init_internal_services
-from .internal.auth import init_allowed_service_accounts, set_internal_hmac_secret
+from .internal.auth import init_allowed_service_accounts
 from .oauth.handler import router as oauth_router, init_oauth_services
 from .oauth.manager import OAuthManager
 from .oauth.secret_manager import SecretManagerClient
@@ -22,6 +22,10 @@ from .email.authorizations import EmailAuthorizationsClient
 from .slack.handler import router as slack_router, init_slack_services
 from .slack.sender import SlackSender
 from .slack.validator import SlackValidator
+from .discord.handler import router as discord_router, init_services as init_discord_services
+from .discord.gateway import start_gateway
+from .discord.sender import DiscordSender
+from .discord.validator import DiscordValidator
 from .telegram.handler import router as telegram_router, init_services as init_telegram_services
 from .telegram.sender import TelegramSender
 from .telegram.validator import TelegramValidator
@@ -110,6 +114,35 @@ async def lifespan(app: FastAPI):
         rate_limiter=rate_limiter,
     )
 
+    # Initialize Discord services (if configured) — personal agent
+    discord_sender = None
+    if settings.DISCORD_BOT_TOKEN and settings.DISCORD_PUBLIC_KEY and settings.DISCORD_APPLICATION_ID:
+        logger.info("Initializing Discord services...")
+        discord_sender = DiscordSender(
+            application_id=settings.DISCORD_APPLICATION_ID,
+            bot_token=settings.DISCORD_BOT_TOKEN,
+        )
+        discord_validator = DiscordValidator(public_key=settings.DISCORD_PUBLIC_KEY)
+        init_discord_services(
+            validator=discord_validator,
+            session_manager=session_manager,
+            agent_client=personal_agent_client,
+            discord_sender=discord_sender,
+            rate_limiter=rate_limiter,
+        )
+        logger.info("Discord services initialized")
+
+        # Start the Gateway for DM and @mention support
+        discord_gateway = await start_gateway(
+            bot_token=settings.DISCORD_BOT_TOKEN,
+            session_manager=session_manager,
+            agent_client=personal_agent_client,
+            rate_limiter=rate_limiter,
+        )
+    else:
+        discord_gateway = None
+        logger.info("Discord not configured (DISCORD_BOT_TOKEN, DISCORD_PUBLIC_KEY, or DISCORD_APPLICATION_ID not set)")
+
     # Initialize Telegram services (if configured) — personal agent
     telegram_sender = None
     if settings.TELEGRAM_BOT_TOKEN:
@@ -152,6 +185,7 @@ async def lifespan(app: FastAPI):
         sms_sender=sms_sender,
         telegram_sender=telegram_sender,
         slack_sender=slack_sender,
+        discord_sender=discord_sender,
     )
     init_allowed_service_accounts()
     logger.info("Internal services initialized")
@@ -208,23 +242,16 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Email services disabled (OAuth not configured)")
 
-    # Load internal HMAC secret for service-to-service auth
-    try:
-        sm_client = secretmanager.SecretManagerServiceClient()
-        secret_name = f"projects/{settings.GOOGLE_CLOUD_PROJECT}/secrets/internal-hmac-secret/versions/latest"
-        response = sm_client.access_secret_version(request={"name": secret_name})
-        internal_secret = response.payload.data.decode("UTF-8")
-        set_internal_hmac_secret(internal_secret)
-        logger.info("Internal HMAC secret loaded from Secret Manager")
-    except Exception as e:
-        logger.warning(f"Internal HMAC secret not available: {e} (OIDC auth will still work)")
-
     logger.info("SMS Gateway started successfully")
 
     yield
 
     # Cleanup
     logger.info("Shutting down SMS Gateway...")
+    if discord_gateway:
+        await discord_gateway.close()
+    if discord_sender:
+        await discord_sender.close()
     if telegram_sender:
         await telegram_sender.close()
     if slack_sender:
@@ -241,6 +268,7 @@ app = FastAPI(
 
 # Include routers
 app.include_router(webhook_router)
+app.include_router(discord_router)
 app.include_router(telegram_router)
 app.include_router(slack_router)
 app.include_router(email_router)

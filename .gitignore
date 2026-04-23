@@ -2,6 +2,7 @@
 .claude/
 .env
 **/.env
+environments/*.secrets.env
 **/.adk/
 **/.venv/
 __pycache__/

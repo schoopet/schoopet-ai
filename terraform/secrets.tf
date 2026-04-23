@@ -15,6 +15,7 @@ locals {
     "telegram-bot-token",
     "slack-bot-token",
     "slack-signing-secret",
+    "discord-bot-token",
   ]
 }
 

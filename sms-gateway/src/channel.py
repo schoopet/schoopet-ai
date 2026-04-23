@@ -10,6 +10,7 @@ class MessageChannel(str, Enum):
     TELEGRAM = "telegram"
     SLACK = "slack"
     EMAIL = "email"
+    DISCORD = "discord"
 
     @classmethod
     def from_twilio_address(cls, address: str) -> tuple["MessageChannel", str]:

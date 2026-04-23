@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy Task Worker to Cloud Run
+# Deploy Task Worker to Cloud Run via Terraform
 #
 # Usage:
 #   ./task-worker/deploy.sh                      # Deploy to dev (default)
@@ -8,14 +8,15 @@
 #
 # Prerequisites:
 #   - gcloud CLI installed and authenticated
-#   - environments/<name>.env with GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_AGENT_ENGINE_ID,
-#     SMS_GATEWAY_URL set
+#   - Terraform initialized for the target environment
+#   - environments/<name>.env with GOOGLE_CLOUD_PROJECT set
 
 set -e
 
 # Get script and repo root directories
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+TF_DIR="$REPO_ROOT/terraform"
 
 # Pre-parse --env flag
 ENV_NAME="dev"
@@ -36,95 +37,71 @@ set -a
 source "$ENV_FILE"
 set +a
 
-# Load component-level .env for secrets / local overrides
-if [ -f "$SCRIPT_DIR/.env" ]; then
-    set -a
-    source "$SCRIPT_DIR/.env"
-    set +a
-fi
-
-# Configuration
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT}"
 REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 SERVICE_NAME="schoopet-task-worker"
-SERVICE_ACCOUNT="${TASK_WORKER_SA:-task-worker@${PROJECT_ID}.iam.gserviceaccount.com}"
-AGENT_ENGINE_ID="${AGENT_ENGINE_ID:-${GOOGLE_CLOUD_AGENT_ENGINE_ID}}"
+IMAGE="gcr.io/$PROJECT_ID/$SERVICE_NAME"
 
-# Validate required variables
 if [ -z "$PROJECT_ID" ]; then
     echo "Error: GOOGLE_CLOUD_PROJECT is not set. Check environments/${ENV_NAME}.env"
-    exit 1
-fi
-
-if [ -z "$AGENT_ENGINE_ID" ]; then
-    echo "Error: AGENT_ENGINE_ID or GOOGLE_CLOUD_AGENT_ENGINE_ID is required"
-    echo "Set it in environments/${ENV_NAME}.env"
-    exit 1
-fi
-
-if [ -z "$SMS_GATEWAY_URL" ]; then
-    echo "Error: SMS_GATEWAY_URL is required"
-    echo "Set it in environments/${ENV_NAME}.env"
     exit 1
 fi
 
 echo "=========================================="
 echo "Deploying Schoopet Task Worker"
 echo "=========================================="
-echo "Environment:     $ENV_NAME"
-echo "Project:         $PROJECT_ID"
-echo "Region:          $REGION"
-echo "Service:         $SERVICE_NAME"
-echo "Service Account: $SERVICE_ACCOUNT"
-echo "Agent Engine:    $AGENT_ENGINE_ID"
-echo "SMS Gateway:     $SMS_GATEWAY_URL"
+echo "Environment: $ENV_NAME"
+echo "Project:     $PROJECT_ID"
+echo "Region:      $REGION"
+echo "Image:       $IMAGE"
 echo "=========================================="
-
-# Change to task-worker directory
-cd "$SCRIPT_DIR"
 
 # Build and push container image
 echo ""
 echo "Building container image..."
+cd "$SCRIPT_DIR"
 gcloud builds submit \
-    --tag "gcr.io/$PROJECT_ID/$SERVICE_NAME" \
+    --tag "$IMAGE" \
     --project "$PROJECT_ID"
 
-# Deploy to Cloud Run
 echo ""
-echo "Deploying to Cloud Run..."
-gcloud run deploy "$SERVICE_NAME" \
-    --image "gcr.io/$PROJECT_ID/$SERVICE_NAME" \
-    --platform managed \
-    --region "$REGION" \
-    --project "$PROJECT_ID" \
-    --no-allow-unauthenticated \
-    --service-account "$SERVICE_ACCOUNT" \
-    --min-instances 0 \
-    --max-instances 10 \
-    --memory 1Gi \
-    --cpu 1 \
-    --timeout 900 \
-    --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=$REGION,AGENT_ENGINE_ID=$AGENT_ENGINE_ID,SMS_GATEWAY_URL=$SMS_GATEWAY_URL"
+echo "Image pushed: $IMAGE"
 
-# Get the service URL
+# Resolve the exact digest so Terraform always sees a changed image value
+# and creates a new Cloud Run revision — avoids the :latest staleness problem.
+echo "Resolving image digest..."
+DIGEST=$(gcloud container images describe "$IMAGE" \
+    --project "$PROJECT_ID" \
+    --format="value(image_summary.digest)" 2>/dev/null)
+if [ -z "$DIGEST" ]; then
+    echo "Warning: could not resolve image digest, falling back to tag URL"
+    IMAGE_REF="$IMAGE"
+else
+    IMAGE_REF="${IMAGE}@${DIGEST}"
+    echo "Image digest: $IMAGE_REF"
+fi
+
+# Deploy via Terraform
 echo ""
-echo "Getting service URL..."
-SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
-    --region="$REGION" \
-    --project="$PROJECT_ID" \
-    --format='value(status.url)')
+echo "Applying Terraform..."
+TFVARS_FILE="$TF_DIR/environments/${ENV_NAME}.tfvars"
+if [ ! -f "$TFVARS_FILE" ]; then
+    echo "Warning: $TFVARS_FILE not found, running terraform without -var-file"
+    (cd "$TF_DIR" && terraform apply -auto-approve -var="task_worker_image=$IMAGE_REF")
+else
+    (cd "$TF_DIR" && terraform apply -auto-approve -var-file="$TFVARS_FILE" -var="task_worker_image=$IMAGE_REF")
+fi
 
 echo ""
 echo "=========================================="
 echo "Deployment Complete!"
 echo "=========================================="
-echo "Service URL: $SERVICE_URL"
+TASK_WORKER_URL=$(cd "$TF_DIR" && terraform output -raw task_worker_url 2>/dev/null || echo "(unknown)")
+echo "Task Worker URL: $TASK_WORKER_URL"
 echo ""
-echo "Update your agent environment with:"
-echo "  TASK_WORKER_URL=$SERVICE_URL"
-echo "  TASK_WORKER_SA=$SERVICE_ACCOUNT"
+echo "Update environments/${ENV_NAME}.env with:"
+echo "  TASK_WORKER_URL=$TASK_WORKER_URL"
 echo ""
 echo "Test the health endpoint:"
-echo "  curl -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" ${SERVICE_URL}/health"
+echo "  curl -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" ${TASK_WORKER_URL}/health"
 echo "=========================================="

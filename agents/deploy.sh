@@ -63,14 +63,15 @@ set -a
 source "$ENV_FILE"
 set +a
 
-# Load component-level .env for secrets / local overrides (second, can override)
-if [ -f "schoopet/.env" ]; then
-    echo -e "${GREEN}Loading secrets from schoopet/.env${NC}"
+# Load per-environment secrets (second, can override)
+SECRETS_FILE="$SCRIPT_DIR/../environments/${ENV_NAME}.secrets.env"
+if [ -f "$SECRETS_FILE" ]; then
+    echo -e "${GREEN}Loading secrets from environments/${ENV_NAME}.secrets.env${NC}"
     set -a
-    source schoopet/.env
+    source "$SECRETS_FILE"
     set +a
 else
-    echo -e "${YELLOW}Warning: schoopet/.env not found, using environment variables${NC}"
+    echo -e "${YELLOW}Warning: environments/${ENV_NAME}.secrets.env not found, using environment variables${NC}"
 fi
 
 # Parse all arguments

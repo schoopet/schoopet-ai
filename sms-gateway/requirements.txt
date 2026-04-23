@@ -17,6 +17,12 @@ vertexai>=1.0.0
 # HTTP Client
 httpx>=0.26.0
 
+# Cryptography (Ed25519 for Discord signature validation)
+cryptography>=41.0.0
+
+# Discord Gateway (DM and @mention support)
+discord.py>=2.3.0
+
 # Configuration
 pydantic>=2.5.0
 pydantic-settings>=2.1.0

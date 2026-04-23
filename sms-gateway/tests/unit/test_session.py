@@ -112,7 +112,9 @@ class TestSessionManager:
         # The session manager creates a new session with opted_in=True
         assert result.opted_in is True
         assert result.is_new_session is True
-        mock_agent_client.create_session.assert_called_once_with(user_id="+14155551234")
+        mock_agent_client.create_session.assert_called_once_with(
+            user_id="+14155551234", state={"agent_type": "personal"}
+        )
 
     @pytest.mark.asyncio
     async def test_recent_activity_continues_session(
@@ -221,3 +223,51 @@ class TestSessionManager:
         result = await session_manager.get_session("+14155551234")
 
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_new_session_passes_channel_in_state(
+        self, mock_firestore, mock_agent_client, session_manager
+    ):
+        """Should pass channel in session state when creating a new session."""
+        _, doc_ref = mock_firestore
+
+        mock_doc = MagicMock()
+        mock_doc.exists = False
+        doc_ref.get.return_value = mock_doc
+
+        await session_manager.get_or_create_session(
+            "+14155551234", channel="discord"
+        )
+
+        mock_agent_client.create_session.assert_called_once_with(
+            user_id="+14155551234", state={"agent_type": "personal", "channel": "discord"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_opt_in_passes_channel_in_state(
+        self, mock_firestore, mock_agent_client, session_manager
+    ):
+        """Should pass channel in session state when opting in."""
+        from datetime import timezone
+        _, doc_ref = mock_firestore
+
+        # Create a pre-existing non-opted-in user
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "phone_number": "+14155551234",
+            "personal_agent_session_id": "",
+            "created_at": datetime.now(timezone.utc),
+            "last_activity": datetime.now(timezone.utc),
+            "message_count": 0,
+            "opted_in": False,
+        }
+        doc_ref.get.return_value = mock_doc
+
+        await session_manager.set_opted_in(
+            "+14155551234", agent_type="personal", channel="telegram"
+        )
+
+        mock_agent_client.create_session.assert_called_once_with(
+            user_id="+14155551234", state={"agent_type": "personal", "channel": "telegram"}
+        )

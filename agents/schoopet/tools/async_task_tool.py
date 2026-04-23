@@ -20,8 +20,9 @@ from google.adk.tools import ToolContext
 from ..utils import normalize_user_id
 from ..async_tasks.models import (
     AsyncTaskDocument,
-    MemoryIsolation,
     TaskStatus,
+    VALID_AGENT_TYPES,
+    VALID_CHANNELS,
 )
 from .cloud_tasks_client import get_cloud_tasks_client
 
@@ -71,6 +72,34 @@ class AsyncTaskTool:
             return tool_context.user_id
         return None
 
+    def _get_channel(self, tool_context: Optional[ToolContext]) -> str:
+        """Extract notification channel from session state, defaulting to 'sms'."""
+        if not tool_context:
+            return "sms"
+        try:
+            state = tool_context.state
+            if state and "channel" in state:
+                channel = state["channel"]
+                if channel in VALID_CHANNELS:
+                    return channel
+        except Exception:
+            pass
+        return "sms"
+
+    def _get_agent_type(self, tool_context: Optional[ToolContext]) -> str:
+        """Extract agent type from session state, defaulting to 'personal'."""
+        if not tool_context:
+            return "personal"
+        try:
+            state = tool_context.state
+            if state and "agent_type" in state:
+                agent_type = state["agent_type"]
+                if agent_type in VALID_AGENT_TYPES:
+                    return agent_type
+        except Exception:
+            pass
+        return "personal"
+
     def _get_session_id(self, tool_context: Optional[ToolContext]) -> Optional[str]:
         """Extract session_id from tool context safely."""
         if not tool_context:
@@ -93,14 +122,14 @@ class AsyncTaskTool:
         context: Optional[Dict[str, Any]] = None,
         schedule_delay_minutes: int = 0,
         schedule_at: Optional[str] = None,
-        memory_isolation: str = "shared",
         tool_context: Optional[ToolContext] = None,
     ) -> str:
         """
         Create an asynchronous task that will execute in the background.
 
         Use this to delegate long-running tasks or schedule future tasks like reminders.
-        You will be notified when the task completes for your review before the user sees results.
+        The task runs on the deployed Agent Engine with full tool access (calendar, search,
+        drive, sheets, memory). You will be notified when the task completes for your review.
 
         Args:
             task_type: Type of task - one of:
@@ -117,10 +146,6 @@ class AsyncTaskTool:
             schedule_at: Specific datetime to execute (ISO 8601 format).
                 Use for "remind me tomorrow at 9am" type requests.
                 Format: "2025-01-12T09:00:00" or "2025-01-12T09:00:00-08:00"
-            memory_isolation: Memory access level for the task:
-                - "shared": Full access to user's Memory Bank (default, best for most tasks)
-                - "isolated": Separate session, results synced on completion (parallel work)
-                - "readonly": Can read memories but not write (analysis without side effects)
 
         Returns:
             Confirmation message with task ID, or error message if creation failed.
@@ -128,7 +153,7 @@ class AsyncTaskTool:
         Examples:
             - Research: create_async_task("research", "Find the best hiking trails near Yosemite with difficulty ratings")
             - Reminder: create_async_task("reminder", "Call mom", schedule_at="2025-01-12T09:00:00")
-            - Analysis: create_async_task("analysis", "Look at my calendar and find conflicts next week", memory_isolation="readonly")
+            - Analysis: create_async_task("analysis", "Look at my calendar and find conflicts next week")
         """
         user_id = self._get_user_id(tool_context)
         if not user_id:
@@ -142,12 +167,6 @@ class AsyncTaskTool:
         valid_types = ["research", "analysis", "reminder", "notification"]
         if task_type not in valid_types:
             return f"ERROR: Invalid task_type '{task_type}'. Must be one of: {', '.join(valid_types)}"
-
-        # Validate memory isolation
-        try:
-            mem_isolation = MemoryIsolation(memory_isolation)
-        except ValueError:
-            return f"ERROR: Invalid memory_isolation '{memory_isolation}'. Must be one of: shared, isolated, readonly"
 
         # Calculate scheduled time
         scheduled_at_dt = None
@@ -168,6 +187,10 @@ class AsyncTaskTool:
         # Get current session ID for context
         session_id = self._get_session_id(tool_context)
 
+        # Determine routing from session state
+        notification_channel = self._get_channel(tool_context)
+        agent_type = self._get_agent_type(tool_context)
+
         # Create task document
         task = AsyncTaskDocument(
             task_id=task_id,
@@ -176,7 +199,8 @@ class AsyncTaskTool:
             instruction=instruction,
             context=context or {},
             scheduled_at=scheduled_at_dt,
-            memory_isolation=mem_isolation,
+            agent_type=agent_type,
+            notification_channel=notification_channel,
             user_session_id=session_id,
             status=TaskStatus.SCHEDULED if scheduled_at_dt else TaskStatus.PENDING,
         )
@@ -539,7 +563,7 @@ class AsyncTaskTool:
                     task_id=task_id,
                     message=task.result,
                     schedule_time=now,  # Immediate
-                    channel="sms",
+                    channel=task.notification_channel,
                 )
 
                 # Update notified status
