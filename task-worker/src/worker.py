@@ -124,6 +124,7 @@ class TaskWorker:
             await self._notify_for_review(
                 task_id=task_id,
                 user_id=task["user_id"],
+                agent_type=task.get("agent_type", "personal"),
                 result=result
             )
 
@@ -140,6 +141,7 @@ class TaskWorker:
             await self._notify_for_review(
                 task_id=task_id,
                 user_id=task["user_id"],
+                agent_type=task.get("agent_type", "personal"),
                 result=None,
                 error=str(e)
             )
@@ -302,6 +304,7 @@ class TaskWorker:
         self,
         task_id: str,
         user_id: str,
+        agent_type: str,
         result: Optional[str],
         error: Optional[str] = None
     ):
@@ -320,6 +323,7 @@ class TaskWorker:
             payload = {
                 "task_id": task_id,
                 "user_id": user_id,
+                "agent_type": agent_type,
                 "result": result,
                 "error": error,
             }

@@ -34,6 +34,7 @@ def init_allowed_service_accounts():
     if project_id:
         default_accounts = [
             f"task-worker@{project_id}.iam.gserviceaccount.com",
+            f"gmail-watch-scheduler@{project_id}.iam.gserviceaccount.com",
         ]
         for account in default_accounts:
             if account not in ALLOWED_SERVICE_ACCOUNTS:

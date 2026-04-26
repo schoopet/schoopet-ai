@@ -114,6 +114,7 @@ class TestTaskWorker:
         task_worker._notify_for_review.assert_awaited_once_with(
             task_id=TASK_ID,
             user_id=USER_ID,
+            agent_type="personal",
             result="AI Result"
         )
 

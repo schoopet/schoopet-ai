@@ -15,7 +15,7 @@ from vertexai.preview import reasoning_engines
 from vertexai import Client, types
 
 from .memory_config import get_memory_bank_config
-from .root_agent import create_adk_agent_personal, create_adk_agent_team
+from .root_agent import create_adk_agent
 
 
 def _create_client(project_id: str, location: str, use_agent_identity: bool):
@@ -44,6 +44,8 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
         "TASK_WORKER_URL": os.getenv("TASK_WORKER_URL", ""),
         "TASK_WORKER_SA": os.getenv("TASK_WORKER_SA", ""),
         "SMS_GATEWAY_URL": os.getenv("SMS_GATEWAY_URL", "https://api.schoopet.com"),
+        # Personal agent display name (falls back to "Schoopet" if unset)
+        "PERSONAL_AGENT_NAME": os.getenv("PERSONAL_AGENT_NAME", ""),
     }
     # Filter out empty values
     env_vars = {k: v for k, v in env_vars_raw.items() if v}
@@ -77,8 +79,7 @@ def _display_result(remote_agent, agent_engine_id: str = None):
         agent_engine_id = remote_agent.api_resource.name.split("/")[-1]
         print(f"Agent Engine ID: {agent_engine_id}")
         print("\n📝 Update your environments/<name>.env file with:")
-        print(f"PERSONAL_AGENT_ENGINE_ID={agent_engine_id}  # if this was a personal agent deploy")
-        print(f"TEAM_AGENT_ENGINE_ID={agent_engine_id}       # if this was a team agent deploy")
+        print(f"PERSONAL_AGENT_ENGINE_ID={agent_engine_id}")
 
     # Display effective identity if available
     if remote_agent.api_resource and hasattr(remote_agent.api_resource, 'effective_identity') and remote_agent.api_resource.effective_identity:
@@ -88,30 +89,33 @@ def _display_result(remote_agent, agent_engine_id: str = None):
     return agent_engine_id
 
 
-def deploy(project_id: str, location: str, agent_type: str = "personal", staging_bucket: str = None, agent_engine_id: str = None, use_agent_identity: bool = False):
+def deploy(project_id: str, location: str, staging_bucket: str = None, agent_engine_id: str = None, use_agent_identity: bool = False):
     """
-    Deploys the Schoopet agent to Vertex AI Reasoning Engines using agent object deployment.
+    Updates an existing agent on Vertex AI Reasoning Engines.
+
+    The agent engine must already exist (created via Terraform). Use PERSONAL_AGENT_ENGINE_ID
+    in your environment or pass --id to specify which engine to update.
 
     Args:
         project_id: GCP Project ID
         location: GCP Region
-        agent_type: "personal" or "team" — which agent to deploy
         staging_bucket: GCS bucket for staging artifacts (optional, will use default if not provided)
-        agent_engine_id: Existing Agent Engine ID to update. If None, creates a new one.
+        agent_engine_id: Existing Agent Engine ID to update (required).
         use_agent_identity: Enable Agent Identity for least-privilege access (requires IAM setup)
     """
-    if agent_type not in ("personal", "team"):
-        print(f"Error: --agent-type must be 'personal' or 'team', got '{agent_type}'")
-        return None
+    if not agent_engine_id:
+        print("❌ No agent engine ID provided.")
+        print("   Set PERSONAL_AGENT_ENGINE_ID in your environment or pass --id <engine-id>.")
+        print("   To create a new engine, use Terraform.")
+        sys.exit(1)
 
-    display_name = f"schoopet-{agent_type}-agent"
-    print(f"🚀 Starting deployment for project {project_id} in {location} ({agent_type} agent)...")
+    display_name = "schoopet-agent"
+    print(f"🚀 Starting deployment for project {project_id} in {location}...")
 
     # Staging bucket for agent object deployment (SDK handles GCS uploads)
     if not staging_bucket:
         staging_bucket = f"gs://{project_id}-agent-staging"
         print(f"ℹ️  No staging bucket specified, using default: {staging_bucket}")
-        print(f"   (Bucket will be created automatically if it doesn't exist)")
 
     # Initialize Vertex AI
     vertexai.init(
@@ -125,74 +129,45 @@ def deploy(project_id: str, location: str, agent_type: str = "personal", staging
     print(f"📦 Using requirements from: {requirements_file}")
 
     # Instantiate the agent locally
-    print(f"🤖 Creating {agent_type} agent object locally...")
-    local_agent = create_adk_agent_personal() if agent_type == "personal" else create_adk_agent_team()
+    print("🤖 Creating agent object locally...")
+    local_agent = create_adk_agent()
     print("✅ Agent object created successfully")
 
     # Build configuration
     print("📋 Building deployment configuration...")
     config = _build_config(project_id, location, staging_bucket, requirements_file, use_agent_identity, display_name)
 
-    if agent_engine_id:
-        print(f"🔄 Updating existing Agent Engine: {agent_engine_id}")
+    print(f"🔄 Updating existing Agent Engine: {agent_engine_id}")
 
-        # Construct resource name
-        if "/" not in agent_engine_id:
-             resource_name = f"projects/{project_id}/locations/{location}/reasoningEngines/{agent_engine_id}"
-        else:
-             resource_name = agent_engine_id
-
-        try:
-            # Initialize Client
-            client = _create_client(project_id, location, use_agent_identity)
-
-            # Update the existing engine with agent object
-            print("🚀 Deploying updated agent object...")
-
-            remote_agent = client.agent_engines.update(
-                name=resource_name,
-                agent=local_agent,
-                config=config
-            )
-
-            print("\n✅ Update Successful!")
-            return _display_result(remote_agent, agent_engine_id)
-
-        except Exception as e:
-            print(f"\n❌ Update Failed: {e}")
-            traceback.print_exc()
-            return None
-
+    # Construct resource name
+    if "/" not in agent_engine_id:
+        resource_name = f"projects/{project_id}/locations/{location}/reasoningEngines/{agent_engine_id}"
     else:
-        print("✨ Creating NEW Agent Engine...")
+        resource_name = agent_engine_id
 
-        try:
-            # Initialize Client
-            client = _create_client(project_id, location, use_agent_identity)
+    try:
+        client = _create_client(project_id, location, use_agent_identity)
 
-            # Create new agent engine from agent object
-            print("🚀 Deploying agent object to Vertex AI...")
+        print("🚀 Deploying updated agent object...")
+        remote_agent = client.agent_engines.update(
+            name=resource_name,
+            agent=local_agent,
+            config=config
+        )
 
-            remote_agent = client.agent_engines.create(
-                agent=local_agent,
-                config=config
-            )
+        print("\n✅ Update Successful!")
+        return _display_result(remote_agent, agent_engine_id)
 
-            print("\n✅ Deployment Successful!")
-            return _display_result(remote_agent)
-
-        except Exception as e:
-            print(f"\n❌ Deployment Failed: {e}")
-            traceback.print_exc()
-            return None
+    except Exception as e:
+        print(f"\n❌ Update Failed: {e}")
+        traceback.print_exc()
+        return None
 
 def main():
     parser = argparse.ArgumentParser(description="Deploy Schoopet Agent to Vertex AI")
     parser.add_argument("--project", help="Google Cloud Project ID", default=os.getenv("GOOGLE_CLOUD_PROJECT"))
     parser.add_argument("--location", help="Google Cloud Region", default=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
     parser.add_argument("--staging-bucket", help="GCS Staging Bucket (optional)", default=os.getenv("GCS_STAGING_BUCKET"))
-    parser.add_argument("--agent-type", required=True, choices=["personal", "team"],
-                        help="Agent type to deploy: 'personal' (SMS/Telegram) or 'team' (Slack/Email)")
     parser.add_argument("--id", help="Existing Agent Engine ID to update (overrides env vars)", default=None)
     parser.add_argument("--agent-identity", action="store_true", help="Enable Agent Identity for least-privilege access")
 
@@ -202,18 +177,12 @@ def main():
         print("Error: Project ID must be provided via --project or GOOGLE_CLOUD_PROJECT env var.")
         return
 
-    # Resolve engine ID: --id flag overrides env var, which is agent-type specific
-    engine_id = args.id
-    if not engine_id:
-        if args.agent_type == "personal":
-            engine_id = os.getenv("PERSONAL_AGENT_ENGINE_ID") or None
-        else:
-            engine_id = os.getenv("TEAM_AGENT_ENGINE_ID") or None
+    # Resolve engine ID: --id flag overrides env var
+    engine_id = args.id or os.getenv("PERSONAL_AGENT_ENGINE_ID") or None
 
     deploy(
         project_id=args.project,
         location=args.location,
-        agent_type=args.agent_type,
         staging_bucket=args.staging_bucket,
         agent_engine_id=engine_id,
         use_agent_identity=args.agent_identity

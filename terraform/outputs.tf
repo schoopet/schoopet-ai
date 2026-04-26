@@ -34,16 +34,6 @@ output "email_pubsub_topic" {
   value       = "projects/${var.project_id}/topics/${google_pubsub_topic.email_notifications.name}"
 }
 
-output "team_agent_resource_name" {
-  description = "Full resource name of the team agent reasoning engine"
-  value       = google_vertex_ai_reasoning_engine.team_agent.name
-}
-
-output "team_agent_effective_identity" {
-  description = "effectiveIdentity of the team agent (use with principal:// prefix for IAM)"
-  value       = google_vertex_ai_reasoning_engine.team_agent.spec[0].effective_identity
-}
-
 output "personal_agent_resource_name" {
   description = "Full resource name of the personal agent reasoning engine"
   value       = google_vertex_ai_reasoning_engine.personal_agent.name

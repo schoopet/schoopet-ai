@@ -10,6 +10,10 @@ from google.genai import types
 logger = logging.getLogger(__name__)
 
 
+class _TokenExpiredError(Exception):
+    """Internal signal that the Vertex AI access token expired mid-stream."""
+
+
 class AgentEngineClient:
     """Client for interacting with Vertex AI Agent Engine.
 
@@ -37,17 +41,22 @@ class AgentEngineClient:
         self._agent_engine_id = agent_engine_id
         self._timeout = timeout_seconds
 
-        # Initialize Vertex AI client
-        self._client = vertexai.Client(project=project_id, location=location)
-
-        # Get agent engine reference
-        resource_name = (
+        self._resource_name = (
             f"projects/{project_id}/locations/{location}"
             f"/reasoningEngines/{agent_engine_id}"
         )
-        self._adk_app = self._client.agent_engines.get(name=resource_name)
+        self._client = None
+        self._adk_app = None
+        self._init_client()
+        logger.info(f"Initialized AgentEngineClient for {self._resource_name}")
 
-        logger.info(f"Initialized AgentEngineClient for {resource_name}")
+    def _init_client(self):
+        """(Re)initialize the Vertex AI client and agent engine reference.
+
+        Called at startup and again whenever the token expires (401).
+        """
+        self._client = vertexai.Client(project=self._project_id, location=self._location)
+        self._adk_app = self._client.agent_engines.get(name=self._resource_name)
 
     async def create_session(self, user_id: str, state: dict | None = None) -> str:
         """Create a new Agent Engine session.
@@ -102,6 +111,11 @@ class AgentEngineClient:
                 session_id=session_id,
                 message=message,
             ):
+                # Reinitialize client on expired token and propagate so caller retries
+                if isinstance(event, dict) and event.get("code") == 401:
+                    logger.warning("Access token expired — reinitializing Vertex AI client")
+                    self._init_client()
+                    raise _TokenExpiredError()
                 # Debug: log raw event
                 logger.debug(f"Event type: {type(event).__name__}, event: {event}")
 
@@ -134,8 +148,15 @@ class AgentEngineClient:
                                     ttft_ms = (time.monotonic() - t_start) * 1000
                                 full_response.append(part.text)
 
-        # Apply timeout to the streaming operation
-        await asyncio.wait_for(stream_response(), timeout=self._timeout)
+        # Apply timeout to the streaming operation; retry once on token expiry
+        try:
+            await asyncio.wait_for(stream_response(), timeout=self._timeout)
+        except _TokenExpiredError:
+            logger.info("Retrying stream after token refresh")
+            full_response.clear()
+            ttft_ms = None
+            t_start = time.monotonic()
+            await asyncio.wait_for(stream_response(), timeout=self._timeout)
 
         total_ms = (time.monotonic() - t_start) * 1000
         response_text = "".join(full_response)

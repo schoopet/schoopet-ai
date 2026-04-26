@@ -20,19 +20,19 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 
 # Global references (initialized by main.py)
 _session_manager = None
-_personal_agent_client = None
-_team_agent_client = None
+_agent_client = None
 _sms_sender = None
 _telegram_sender = None
 _slack_sender = None
 _discord_sender = None
+_firestore_client = None
 
 
 def init_internal_services(
     session_manager,
-    personal_agent_client,
-    team_agent_client,
+    agent_client,
     sms_sender,
+    firestore_client=None,
     telegram_sender=None,
     slack_sender=None,
     discord_sender=None,
@@ -41,22 +41,15 @@ def init_internal_services(
 
     Called by main.py during application startup.
     """
-    global _session_manager, _personal_agent_client, _team_agent_client, _sms_sender, _telegram_sender, _slack_sender, _discord_sender
+    global _session_manager, _agent_client, _sms_sender, _telegram_sender, _slack_sender, _discord_sender, _firestore_client
     _session_manager = session_manager
-    _personal_agent_client = personal_agent_client
-    _team_agent_client = team_agent_client
+    _agent_client = agent_client
     _sms_sender = sms_sender
+    _firestore_client = firestore_client
     _telegram_sender = telegram_sender
     _slack_sender = slack_sender
     _discord_sender = discord_sender
     logger.info("Internal handler services initialized")
-
-
-def _agent_client_for_channel(channel: str):
-    """Return the agent client for the given channel."""
-    if channel in ("slack", "email"):
-        return _team_agent_client
-    return _personal_agent_client
 
 
 # ========== Request Models ==========
@@ -67,6 +60,7 @@ class TaskReviewRequest(BaseModel):
 
     task_id: str = Field(..., description="Task ID to review")
     user_id: str = Field(..., description="User's phone number")
+    agent_type: str = Field(default="personal", description="Kept for backward compat, ignored")
     result: Optional[str] = Field(default=None, description="Task result")
     error: Optional[str] = Field(default=None, description="Error if task failed")
 
@@ -85,6 +79,23 @@ class InternalResponse(BaseModel):
 
     status: str
     message: Optional[str] = None
+
+
+# ========== Helpers ==========
+
+
+async def _mark_task_notified(task_id: str) -> None:
+    """Set task status to NOTIFIED after confirmed delivery."""
+    if not _firestore_client or not task_id:
+        return
+    try:
+        from datetime import datetime, timezone
+        await _firestore_client.collection("async_tasks").document(task_id).update({
+            "status": "notified",
+            "notified_at": datetime.now(timezone.utc),
+        })
+    except Exception as e:
+        logger.warning(f"Failed to mark task {task_id} as notified: {e}")
 
 
 # ========== Endpoints ==========
@@ -110,7 +121,7 @@ async def trigger_task_review(
     4. Sends internal message to root agent for review
     5. Root agent reviews and either approves or requests correction
     """
-    if not _session_manager or (not _personal_agent_client and not _team_agent_client):
+    if not _session_manager or not _agent_client:
         raise HTTPException(
             status_code=503,
             detail="Internal services not initialized"
@@ -122,23 +133,16 @@ async def trigger_task_review(
     )
 
     try:
-        # Determine which agent to use for this user based on their last channel
-        user_session = await _session_manager.get_user_session(payload.user_id)
-        agent_type = user_session.agent_type if user_session else "personal"
-
         # Get or create supervisor session for this task
         supervisor_session = await _session_manager.get_supervisor_session(
             phone_number=payload.user_id,
             task_id=payload.task_id,
-            agent_type=agent_type,
         )
 
         # Build internal review message for root agent
         review_message = _build_review_message(payload)
 
-        # Send message to root agent in supervisor session
-        agent_client = _agent_client_for_channel(user_session.channel if user_session else "sms")
-        response = await agent_client.send_message(
+        response = await _agent_client.send_message(
             user_id=f"{payload.user_id}_supervisor",
             session_id=supervisor_session.agent_session_id,
             message=review_message,
@@ -189,21 +193,18 @@ async def notify_user(
         user_session = await _session_manager.get_user_session(payload.user_id)
 
         session_channel = user_session.channel if user_session else payload.channel
-        active_agent_client = _agent_client_for_channel(session_channel)
 
-        if user_session and _session_manager.is_session_active(user_session) and active_agent_client:
-            # User has active session - send via root agent
-            # This allows for conversational delivery
+        if user_session and _session_manager.is_session_active(user_session) and _agent_client:
+            # User has active session - send via root agent for conversational delivery
             internal_message = f"INTERNAL_TASK_COMPLETE: {payload.message}"
 
-            agent_response = await active_agent_client.send_message(
+            agent_response = await _agent_client.send_message(
                 user_id=payload.user_id,
                 session_id=user_session.agent_session_id,
                 message=internal_message,
             )
             logger.info(f"Agent response for task notification: {agent_response[:100]}...")
 
-            # Send the agent's response to the user via the same channel as their session
             if agent_response:
                 from ..channel import MessageChannel
                 if session_channel == "discord" and _discord_sender:
@@ -220,13 +221,15 @@ async def notify_user(
                         channel=channel,
                     )
                 logger.info(f"Notification sent via {session_channel} after agent processing")
+                await _mark_task_notified(payload.task_id)
 
             return InternalResponse(
                 status="notified_via_session",
                 message="User notified through active session"
             )
 
-        # No active session or agent client - send directly
+        # No active session - send directly
+        from ..channel import MessageChannel
         if payload.channel == "discord" and _discord_sender:
             await _discord_sender.send(payload.user_id, payload.message)
         elif payload.channel == "telegram" and _telegram_sender:
@@ -234,7 +237,6 @@ async def notify_user(
         elif payload.channel == "slack" and _slack_sender:
             await _slack_sender.send(payload.user_id, payload.message)
         elif _sms_sender:
-            from ..channel import MessageChannel
             channel = MessageChannel.WHATSAPP if payload.channel == "whatsapp" else MessageChannel.SMS
             await _sms_sender.send(
                 to_number=payload.user_id,
@@ -243,9 +245,10 @@ async def notify_user(
             )
 
         logger.info(f"Notification sent directly via {payload.channel}")
+        await _mark_task_notified(payload.task_id)
 
         return InternalResponse(
-            status="notified_via_sms",
+            status="notified_via_direct",
             message=f"User notified via {payload.channel}"
         )
 

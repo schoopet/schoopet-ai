@@ -58,10 +58,11 @@ def _eml_to_gmail_payload(eml_path: Path) -> dict:
 
 
 def _make_tool() -> EmailTool:
-    tool = EmailTool.__new__(EmailTool)
-    tool._oauth_client = None
+    tool = EmailTool("team")
+    mock_oauth = MagicMock()
+    mock_oauth.get_valid_access_token.return_value = "mock-token"
+    tool._oauth_client = mock_oauth
     tool._firestore_client = None
-    tool._get_system_token = MagicMock(return_value="mock-token")
     return tool
 
 

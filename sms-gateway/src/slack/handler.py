@@ -138,7 +138,7 @@ async def process_slack_message(user_id: str, message: str, team_id: str = "") -
         # Auto opt-in on first message (workspace-authorized users)
         if session_info.is_new_user or not session_info.opted_in:
             logger.info(f"Auto opt-in for Slack user {user_id}")
-            await _session_manager.set_opted_in(user_id, agent_type="team", channel="slack")
+            await _session_manager.set_opted_in(user_id, channel="slack")
 
         # Acknowledge immediately before any slow operations
         t_before_ack = time.time()
@@ -156,7 +156,7 @@ async def process_slack_message(user_id: str, message: str, team_id: str = "") -
                 return
 
         # Get or create agent session
-        session_info = await _session_manager.get_or_create_session(user_id, agent_type="team", channel="slack")
+        session_info = await _session_manager.get_or_create_session(user_id, channel="slack")
 
         logger.info(
             f"Forwarding to agent for Slack user {user_id}: "

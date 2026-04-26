@@ -1,16 +1,14 @@
 """Email tool for the Schoopet agent.
 
-Provides on-demand email reading, full email fetching with attachment handling,
-and sender authorization management.
+Provides email reading, attachment handling, and email rule management.
+Uses the calling user's personal Gmail inbox via their personal OAuth token.
 
-Team-only tool: always uses the workspace_system token (phone="email_system",
-feature="workspace_system") to read the shared inbox, filtered per-user by the
-email_authorizations Firestore collection. This tool should only be included in
-the team agent, never in the personal agent.
+Rules are stored in Firestore at email_rules/{user_id}/rules/{rule_id} for all users.
 """
 import base64
 import logging
 import os
+import uuid
 from typing import Optional
 
 from google.adk.tools import ToolContext
@@ -19,12 +17,11 @@ from .utils import require_user_id
 
 logger = logging.getLogger(__name__)
 
-# System Gmail account identifiers (mirror of gmail_client.py constants)
-SYSTEM_PHONE = "email_system"
-SYSTEM_FEATURE = "workspace_system"
-
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
-AUTHORIZATIONS_COLLECTION = "email_workflows"
+
+# Unified email rules collection for all users.
+# NOTE: sms-gateway/src/email/gmail_client.py defines the same constant — must stay in sync.
+EMAIL_RULES_COLLECTION = "email_rules"
 
 # MIME types natively understood by Gemini as inline_data
 GEMINI_SUPPORTED_MIME_TYPES: frozenset[str] = frozenset({
@@ -58,13 +55,9 @@ GEMINI_SUPPORTED_MIME_TYPES: frozenset[str] = frozenset({
 })
 
 
-class EmailTool:
-    """Agent tool for email reading and authorization management.
 
-    Uses:
-    - OAuthClient (with system account) to read Gmail
-    - Firestore directly for email_authorizations lookups
-    """
+class EmailTool:
+    """Agent tool for email reading and rule management using personal Gmail OAuth token."""
 
     def __init__(self):
         self._oauth_client = None
@@ -84,42 +77,43 @@ class EmailTool:
                 self._firestore_client = firestore.Client(project=project)
         return self._firestore_client
 
-    # ── Firestore helpers ──────────────────────────────────────────────────
+    # ── Token helpers ──────────────────────────────────────────────────────
 
-    def _get_authorized_senders(self, phone: str) -> list[str]:
-        """Return list of sender emails authorized for this phone."""
+    def _get_token(self, phone: str) -> Optional[str]:
+        """Return a valid access token for this user."""
+        return self._get_oauth_client().get_valid_access_token(phone, "google")
+
+    def _token_missing_message(self, phone: str) -> str:
+        """Return the auth-link message when no token exists."""
+        link = self._get_oauth_client().get_oauth_link(phone)
+        return (
+            f"Your Gmail is not connected yet. "
+            f"Click this link to authorize email access:\n{link}"
+        )
+
+    # ── Firestore rule helpers ─────────────────────────────────────────────
+
+    def _rules_ref(self, user_id: str):
         db = self._get_firestore()
         if not db:
+            return None
+        return (
+            db.collection(EMAIL_RULES_COLLECTION)
+            .document(user_id)
+            .collection("rules")
+        )
+
+    def _get_rules(self, user_id: str) -> list[dict]:
+        ref = self._rules_ref(user_id)
+        if not ref:
             return []
         try:
-            docs = (
-                db.collection(AUTHORIZATIONS_COLLECTION)
-                .where("authorized_user_phone", "==", phone)
-                .stream()
-            )
-            return [doc.to_dict().get("sender_email", "") for doc in docs]
+            return [doc.to_dict() for doc in ref.stream()]
         except Exception as e:
-            logger.error(f"Failed to load authorized senders: {e}")
+            logger.error(f"Failed to load email rules for {user_id[:4]}****: {e}")
             return []
-
-    def _get_authorization(self, sender_email: str) -> Optional[dict]:
-        db = self._get_firestore()
-        if not db:
-            return None
-        try:
-            doc = (
-                db.collection(AUTHORIZATIONS_COLLECTION)
-                .document(sender_email.lower().strip())
-                .get()
-            )
-            return doc.to_dict() if doc.exists else None
-        except Exception:
-            return None
 
     # ── Gmail helpers ──────────────────────────────────────────────────────
-
-    def _get_system_token(self) -> Optional[str]:
-        return self._get_oauth_client().get_valid_access_token(SYSTEM_PHONE, SYSTEM_FEATURE)
 
     def _gmail_search(self, query: str, max_results: int, token: str) -> list[dict]:
         import httpx
@@ -202,16 +196,7 @@ class EmailTool:
     def _collect_attachments(
         self, payload: dict, message_id: str, token: str
     ) -> list[dict]:
-        """Recursively walk the MIME tree and collect attachment data.
-
-        For each attachment part:
-        - If the MIME type is in GEMINI_SUPPORTED_MIME_TYPES: fetch bytes and
-          return {"filename", "mime_type", "bytes": bytes}.
-        - Otherwise: return {"filename", "mime_type", "bytes": None} so the caller
-          can emit a text note about the unsupported attachment.
-
-        text/plain parts are skipped (handled as the email body).
-        """
+        """Recursively walk the MIME tree and collect attachment data."""
         import httpx
         results: list[dict] = []
         with httpx.Client() as client:
@@ -223,23 +208,19 @@ class EmailTool:
     ) -> None:
         mime_type = part.get("mimeType", "")
 
-        # Skip inline text body parts (plain, html, calendar, etc.) — no filename means body content
         if mime_type.startswith("text/") and not part.get("filename", ""):
             return
 
-        # Recurse into multipart containers
         if mime_type.startswith("multipart/"):
             for sub in part.get("parts", []):
                 self._walk_parts(sub, message_id, token, client, results)
             return
 
-        # Skip text/html and other inline text variants without a filename
         filename = part.get("filename", "")
         body = part.get("body", {})
         if not filename and not body.get("attachmentId") and not body.get("data"):
             return
 
-        # Determine bytes for supported types; None for unsupported
         attachment_bytes: Optional[bytes] = None
         if mime_type in GEMINI_SUPPORTED_MIME_TYPES:
             attachment_bytes = self._fetch_attachment_bytes(part, message_id, token, client)
@@ -258,7 +239,6 @@ class EmailTool:
         """Decode or download attachment bytes for a single MIME part."""
         body = part.get("body", {})
 
-        # Small/inline attachment: data is embedded in the payload
         if body.get("data"):
             try:
                 return base64.urlsafe_b64decode(body["data"] + "==")
@@ -266,7 +246,6 @@ class EmailTool:
                 logger.warning(f"Failed to decode inline attachment data: {e}")
                 return None
 
-        # Large attachment: fetch via attachments.get
         attachment_id = body.get("attachmentId")
         if not attachment_id:
             return None
@@ -294,44 +273,24 @@ class EmailTool:
         tool_context: ToolContext = None,
     ) -> str:
         """
-        Read emails from the shared inbox filtered to authorized senders only.
+        Read emails from the inbox.
 
         Returns a list with message IDs, sender, subject, and a preview snippet.
-        Call fetch_email(message_id) to get the full content and attachments for
-        a specific message.
+        Call fetch_email(message_id) to get the full content and attachments.
 
         Args:
-            query: Additional Gmail search query (e.g., "is:unread").
+            query: Gmail search query (e.g., "is:unread", "from:boss@company.com").
             max_results: Maximum number of emails to return (default: 10).
-
-        Returns:
-            Formatted email list with IDs, or a message if no emails found.
-
-        Note:
-            Requires user_id from tool_context (phone number).
-            Only returns emails from senders the user has explicitly authorized.
         """
         phone, err = require_user_id(tool_context, "email")
         if err:
             return err
-        token = self._get_system_token()
+
+        token = self._get_token(phone)
         if not token:
-            return (
-                "The email system is not connected yet. "
-                "Please ask an admin to set up the system Gmail authorization."
-            )
+            return self._token_missing_message(phone)
 
-        senders = self._get_authorized_senders(phone)
-        if not senders:
-            return (
-                "You haven't set up any email workflows yet. "
-                "Use add_email_workflow(sender_email, processing_prompt) to add one."
-            )
-
-        sender_filter = " OR ".join(f"from:{s}" for s in senders)
-        full_query = f"({sender_filter})"
-        if query:
-            full_query = f"{full_query} {query}"
+        full_query = query or "in:inbox"
 
         try:
             messages = self._gmail_search(full_query, max_results, token)
@@ -339,7 +298,7 @@ class EmailTool:
             return f"Error searching emails: {e}"
 
         if not messages:
-            return "No emails found from your authorized senders."
+            return "No emails found."
 
         results = []
         for m in messages:
@@ -381,26 +340,22 @@ class EmailTool:
         Fetch a single email by message ID, store any supported attachments
         in the artifact registry, and return the full formatted content.
 
-        Use this after read_emails identifies a message to process. The returned
-        text includes an 'Attachments' section listing artifact keys you can pass
-        to save_attachment_to_drive.
-
-        Attachments in supported formats (PDF, DOCX, images, audio, video) are
-        stored as artifacts and can be accessed by Gemini for content extraction.
+        Use this after read_emails identifies a message to process, or when
+        called from an INCOMING_EMAIL_NOTIFICATION prompt.
 
         Args:
-            message_id: Gmail message ID (from read_emails output).
+            message_id: Gmail message ID (from read_emails output or notification).
 
         Returns:
             Formatted email with body and attachment artifact keys,
             or an error message.
         """
-        token = self._get_system_token()
+        user_id, err = require_user_id(tool_context, "email")
+        if err:
+            return err
+        token = self._get_token(user_id)
         if not token:
-            return (
-                "The email system is not connected yet. "
-                "Please ask an admin to set up the system Gmail authorization."
-            )
+            return self._token_missing_message(user_id or "")
 
         try:
             raw = self._gmail_fetch(message_id, token)
@@ -454,210 +409,6 @@ class EmailTool:
 
         return "\n".join(lines)
 
-    def add_email_workflow(
-        self,
-        sender_email: str,
-        processing_prompt: str,
-        drive_folder_id: str = "",
-        sheet_id: str = "",
-        tool_context: ToolContext = None,
-    ) -> str:
-        """
-        Register an email sender with a custom processing workflow.
-
-        When an email arrives from this sender it will be routed to you and the
-        agent will execute the instructions in processing_prompt automatically.
-
-        Args:
-            sender_email: The sender's email address to authorize.
-            processing_prompt: Instructions for what to do with each email
-                (e.g. "Extract invoice numbers and save to Drive").
-            drive_folder_id: Optional Google Drive folder ID for saving emails.
-            sheet_id: Optional Google Sheets ID for logging emails.
-
-        Returns:
-            Confirmation message, or Drive/Sheets auth links if tokens are missing.
-
-        Note:
-            Requires user_id from tool_context (phone number).
-        """
-        phone, err = require_user_id(tool_context, "email workflow")
-        if err:
-            return err
-        db = self._get_firestore()
-        if not db:
-            return "ERROR: Database not available."
-
-        try:
-            doc_id = sender_email.lower().strip()
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc)
-            db.collection(AUTHORIZATIONS_COLLECTION).document(doc_id).set(
-                {
-                    "sender_email": doc_id,
-                    "authorized_user_phone": phone,
-                    "drive_folder_id": drive_folder_id,
-                    "sheet_id": sheet_id,
-                    "processing_prompt": processing_prompt,
-                    "updated_at": now,
-                    "created_at": now,
-                },
-                merge=True,
-            )
-        except Exception as e:
-            return f"Failed to save workflow: {e}"
-
-        messages = [
-            f"Workflow created for {sender_email} — emails will be routed to you and processed automatically."
-        ]
-
-        # Check Google Workspace token (covers both Drive and Sheets)
-        oauth = self._get_oauth_client()
-        ws_token = oauth.get_valid_access_token(phone, "google-workspace")
-        if not ws_token:
-            ws_link = oauth.get_oauth_link(phone, "google-workspace")
-            messages.append(
-                f"Google Workspace (Drive + Sheets) is not connected. Authorize here:\n{ws_link}"
-            )
-
-        return "\n\n".join(messages)
-
-    def update_email_workflow(
-        self,
-        sender_email: str,
-        processing_prompt: str = None,
-        drive_folder_id: str = None,
-        sheet_id: str = None,
-        tool_context: ToolContext = None,
-    ) -> str:
-        """
-        Update an existing email workflow (patch-style — only provided fields are changed).
-
-        Args:
-            sender_email: The sender's email address whose workflow to update.
-            processing_prompt: New instructions for processing emails (optional).
-            drive_folder_id: New Drive folder ID (optional).
-            sheet_id: New Sheets ID (optional).
-
-        Returns:
-            Confirmation or error message.
-
-        Note:
-            Requires user_id from tool_context (phone number).
-        """
-        phone, err = require_user_id(tool_context, "email workflow")
-        if err:
-            return err
-        db = self._get_firestore()
-        if not db:
-            return "ERROR: Database not available."
-
-        doc_id = sender_email.lower().strip()
-        try:
-            doc_ref = db.collection(AUTHORIZATIONS_COLLECTION).document(doc_id)
-            doc = doc_ref.get()
-            if not doc.exists:
-                return f"No workflow found for {sender_email}. Use add_email_workflow() to create one."
-            data = doc.to_dict()
-            if data.get("authorized_user_phone") != phone:
-                return f"You don't own the workflow for {sender_email}."
-
-            updates = {}
-            if processing_prompt is not None:
-                updates["processing_prompt"] = processing_prompt
-            if drive_folder_id is not None:
-                updates["drive_folder_id"] = drive_folder_id
-            if sheet_id is not None:
-                updates["sheet_id"] = sheet_id
-
-            if not updates:
-                return "Nothing to update — provide at least one field to change."
-
-            from datetime import datetime, timezone
-            updates["updated_at"] = datetime.now(timezone.utc)
-            doc_ref.update(updates)
-        except Exception as e:
-            return f"Failed to update workflow: {e}"
-
-        return f"Workflow updated for {sender_email}."
-
-    def remove_email_workflow(
-        self,
-        sender_email: str,
-        tool_context: ToolContext = None,
-    ) -> str:
-        """
-        Remove the email workflow for a sender.
-
-        Args:
-            sender_email: The sender's email address whose workflow to remove.
-
-        Returns:
-            Confirmation or error message.
-
-        Note:
-            Requires user_id from tool_context (phone number).
-        """
-        phone, err = require_user_id(tool_context, "email workflow")
-        if err:
-            return err
-        db = self._get_firestore()
-        if not db:
-            return "ERROR: Database not available."
-
-        doc_id = sender_email.lower().strip()
-        try:
-            doc_ref = db.collection(AUTHORIZATIONS_COLLECTION).document(doc_id)
-            doc = doc_ref.get()
-            if not doc.exists:
-                return f"No workflow found for {sender_email}."
-            data = doc.to_dict()
-            if data.get("authorized_user_phone") != phone:
-                return f"You don't own the workflow for {sender_email}."
-            doc_ref.delete()
-        except Exception as e:
-            return f"Failed to remove workflow: {e}"
-
-        return f"Workflow removed for {sender_email}. Subsequent emails from that sender will be discarded."
-
-    def list_email_workflows(
-        self,
-        tool_context: ToolContext = None,
-    ) -> str:
-        """
-        List all email workflows configured for this user.
-
-        Returns:
-            Formatted list of workflows with sender, prompt preview, and IDs.
-
-        Note:
-            Requires user_id from tool_context (phone number).
-        """
-        phone, err = require_user_id(tool_context, "email workflow")
-        if err:
-            return err
-        senders = self._get_authorized_senders(phone)
-        if not senders:
-            return "No email workflows configured yet. Use add_email_workflow() to create one."
-
-        lines = [f"Email workflows ({len(senders)}):"]
-        for sender in senders:
-            workflow = self._get_authorization(sender)
-            if workflow:
-                prompt_preview = (workflow.get("processing_prompt") or "")[:80]
-                if len(workflow.get("processing_prompt") or "") > 80:
-                    prompt_preview += "..."
-                folder = workflow.get("drive_folder_id") or "not set"
-                sheet = workflow.get("sheet_id") or "not set"
-                lines.append(
-                    f"  - {sender}\n"
-                    f"    Prompt: {prompt_preview or '(default)'}\n"
-                    f"    Drive folder: {folder} | Sheet: {sheet}"
-                )
-            else:
-                lines.append(f"  - {sender}")
-        return "\n".join(lines)
-
     async def list_artifacts(
         self,
         tool_context: ToolContext = None,
@@ -667,11 +418,6 @@ class EmailTool:
 
         Artifacts are saved automatically by fetch_email for each supported attachment
         (PDF, DOCX, images, etc.). Each key has the format "<message_id>_<filename>".
-        Pass a key to read_artifact to load and analyze the file.
-
-        Returns:
-            Formatted list of artifact keys with MIME type and size,
-            or a message if none are stored.
         """
         if tool_context is None:
             return "ERROR: No tool_context available."
@@ -700,19 +446,8 @@ class EmailTool:
         """
         Load an artifact from the session registry and make it available to the model.
 
-        The artifact bytes (PDF, image, etc.) are injected directly into the model's
-        context as inline_data by the agent's before_model_callback, so the model can
-        perform native multimodal analysis (e.g., extract text from a PDF, describe an image).
-
-        For plain text artifacts the decoded content is also returned in this response.
-
         Args:
-            artifact_key: Artifact key from list_artifacts or fetch_email output
-                          (format: "<message_id>_<filename>").
-
-        Returns:
-            Dict with status, artifact metadata, and tool_response_artifact_id so the
-            before_model_callback knows which artifact to inject.
+            artifact_key: Artifact key from list_artifacts or fetch_email output.
         """
         if tool_context is None:
             return {"status": "error", "message": "No tool_context available.",
@@ -738,21 +473,233 @@ class EmailTool:
             result["content"] = part.inline_data.data.decode("utf-8", errors="replace")
         return result
 
-    def get_email_system_status(
+    # ── Unified email rule tools ───────────────────────────────────────────
+
+    def get_gmail_status(
         self,
         tool_context: ToolContext = None,
     ) -> str:
         """
-        Check whether the system Gmail account is connected and ready.
+        Check whether Gmail is connected.
+
+        For the personal agent: checks your own Gmail connection.
+        For the team agent: checks the shared system Gmail connection.
 
         Returns:
-            Status string indicating connection state.
+            Status string. If not connected, includes an authorization link (personal)
+            or an admin error message (team).
         """
-        token = self._get_system_token()
+        phone, err = require_user_id(tool_context, "gmail status")
+        if err:
+            return err
+        token = self._get_oauth_client().get_valid_access_token(phone, "google")
         if not token:
+            link = self._get_oauth_client().get_oauth_link(phone)
             return (
-                "System Gmail is NOT connected. "
-                "An admin needs to authorize the workspace_system OAuth token. "
-                "Contact support to set this up."
+                f"Your Gmail is not connected. "
+                f"Click this link to authorize:\n{link}\n\n"
+                f"Once authorized, I'll automatically monitor your inbox and act on emails according to your rules."
             )
-        return "System Gmail is connected and ready to receive emails."
+        return "Your Gmail is connected. I'm monitoring your inbox for new emails."
+
+    def add_email_rule(
+        self,
+        prompt: str,
+        topic: str = "",
+        sender_filter: str = "",
+        tool_context: ToolContext = None,
+    ) -> str:
+        """
+        Add an email rule. Rules determine what the agent does when a matching
+        email arrives in the inbox.
+
+        Args:
+            prompt: Instructions for what to do when a matching email arrives.
+                    Written in natural language, e.g.:
+                    - "Extract the applicant's name, email, and role. Log to sheet
+                      <sheet_id> and send me a one-line summary."
+                    - "Silently ignore — do not notify me."
+                    - "Create a calendar event from the booking details and notify me."
+            topic: Natural language description of the emails this rule matches
+                   (e.g., "job applications", "flight confirmations", "invoices").
+            sender_filter: Optional email address or domain to match
+                           (e.g., "boss@company.com", "@stripe.com").
+
+        Returns:
+            Confirmation message with the new rule ID.
+
+        Note:
+            At least one of `topic` or `sender_filter` must be provided.
+        """
+        phone, err = require_user_id(tool_context, "email rule")
+        if err:
+            return err
+
+        if not topic and not sender_filter:
+            return "ERROR: Provide at least a topic or sender_filter for the rule."
+
+        if not prompt:
+            return "ERROR: prompt is required — describe what to do when a matching email arrives."
+
+        db = self._get_firestore()
+        if not db:
+            return "ERROR: Database not available."
+
+        user_id = phone
+        rule_id = str(uuid.uuid4())[:8]
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        rule = {
+            "rule_id": rule_id,
+            "topic": topic,
+            "sender_filter": sender_filter,
+            "prompt": prompt,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        try:
+            (
+                db.collection(EMAIL_RULES_COLLECTION)
+                .document(user_id)
+                .collection("rules")
+                .document(rule_id)
+                .set(rule)
+            )
+        except Exception as e:
+            return f"Failed to save rule: {e}"
+
+        parts = []
+        if topic:
+            parts.append(f"topic: {topic}")
+        if sender_filter:
+            parts.append(f"sender: {sender_filter}")
+        return (
+            f"Rule added (ID: {rule_id}) — "
+            f"match [{', '.join(parts)}] → \"{prompt}\"."
+        )
+
+    def update_email_rule(
+        self,
+        rule_id: str,
+        prompt: str = None,
+        topic: str = None,
+        sender_filter: str = None,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """
+        Update an existing email rule (patch-style — only provided fields change).
+
+        Args:
+            rule_id: Rule ID from list_email_rules.
+            prompt: New instruction prompt (optional).
+            topic: New topic description (optional).
+            sender_filter: New sender filter (optional).
+        """
+        phone, err = require_user_id(tool_context, "email rule")
+        if err:
+            return err
+
+        db = self._get_firestore()
+        if not db:
+            return "ERROR: Database not available."
+
+        user_id = phone
+        try:
+            doc_ref = (
+                db.collection(EMAIL_RULES_COLLECTION)
+                .document(user_id)
+                .collection("rules")
+                .document(rule_id)
+            )
+            doc = doc_ref.get()
+            if not doc.exists:
+                return f"No rule found with ID {rule_id}. Use list_email_rules() to see your rules."
+
+            updates = {}
+            if prompt is not None:
+                updates["prompt"] = prompt
+            if topic is not None:
+                updates["topic"] = topic
+            if sender_filter is not None:
+                updates["sender_filter"] = sender_filter
+
+            if not updates:
+                return "Nothing to update — provide at least one field to change."
+
+            from datetime import datetime, timezone
+            updates["updated_at"] = datetime.now(timezone.utc)
+            doc_ref.update(updates)
+        except Exception as e:
+            return f"Failed to update rule: {e}"
+
+        return f"Rule {rule_id} updated."
+
+    def remove_email_rule(
+        self,
+        rule_id: str,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """
+        Remove an email rule.
+
+        Args:
+            rule_id: Rule ID from list_email_rules.
+        """
+        phone, err = require_user_id(tool_context, "email rule")
+        if err:
+            return err
+
+        db = self._get_firestore()
+        if not db:
+            return "ERROR: Database not available."
+
+        user_id = phone
+        try:
+            doc_ref = (
+                db.collection(EMAIL_RULES_COLLECTION)
+                .document(user_id)
+                .collection("rules")
+                .document(rule_id)
+            )
+            doc = doc_ref.get()
+            if not doc.exists:
+                return f"No rule found with ID {rule_id}."
+            doc_ref.delete()
+        except Exception as e:
+            return f"Failed to remove rule: {e}"
+
+        return f"Rule {rule_id} removed."
+
+    def list_email_rules(
+        self,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """
+        List all email rules.
+
+        Returns:
+            Formatted list of rules with IDs, match criteria, and actions.
+        """
+        phone, err = require_user_id(tool_context, "email rule")
+        if err:
+            return err
+
+        user_id = phone
+        rules = self._get_rules(user_id)
+        if not rules:
+            return (
+                "No email rules configured yet. "
+                "Use add_email_rule() to set one up. "
+                "Example: 'notify me about job applications and log them to a spreadsheet'."
+            )
+
+        lines = [f"Email rules ({len(rules)}):"]
+        for r in rules:
+            parts = []
+            if r.get("topic"):
+                parts.append(f"topic: {r['topic']}")
+            if r.get("sender_filter"):
+                parts.append(f"sender: {r['sender_filter']}")
+            lines.append(f"  [{r['rule_id']}] Match [{', '.join(parts)}] → {r.get('prompt', '')}")
+        return "\n".join(lines)

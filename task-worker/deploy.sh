@@ -3,7 +3,6 @@
 #
 # Usage:
 #   ./task-worker/deploy.sh                      # Deploy to dev (default)
-#   ./task-worker/deploy.sh --env=wib-boss-finder # Deploy to wib-boss-finder environment
 #   ./task-worker/deploy.sh --env=prod           # Deploy to prod environment
 #
 # Prerequisites:

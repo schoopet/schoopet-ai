@@ -17,8 +17,6 @@ from .ratelimit.limiter import RateLimiter
 from .session.manager import SessionManager
 from .sms.sender import SMSSender
 from .email.handler import router as email_router, init_email_services
-from .email.gmail_client import GmailClient
-from .email.authorizations import EmailAuthorizationsClient
 from .slack.handler import router as slack_router, init_slack_services
 from .slack.sender import SlackSender
 from .slack.validator import SlackValidator
@@ -48,16 +46,15 @@ async def lifespan(app: FastAPI):
     logger.info("Starting SMS Gateway...")
     logger.info(f"Project: {settings.GOOGLE_CLOUD_PROJECT}")
     logger.info(f"Location: {settings.GOOGLE_CLOUD_LOCATION}")
-    logger.info(f"Personal Agent Engine: {settings.PERSONAL_AGENT_ENGINE_ID or '(not configured)'}")
-    logger.info(f"Team Agent Engine: {settings.TEAM_AGENT_ENGINE_ID or '(not configured)'}")
+    logger.info(f"Agent Engine: {settings.PERSONAL_AGENT_ENGINE_ID or '(not configured)'}")
 
     # Initialize Firestore client
     firestore_client = firestore.AsyncClient(
         project=settings.GOOGLE_CLOUD_PROJECT,
     )
 
-    # Initialize per-type Agent Engine clients (None if not configured)
-    personal_agent_client = (
+    # Initialize Agent Engine client
+    agent_client = (
         AgentEngineClient(
             project_id=settings.GOOGLE_CLOUD_PROJECT,
             location=settings.GOOGLE_CLOUD_LOCATION,
@@ -67,22 +64,11 @@ async def lifespan(app: FastAPI):
         if settings.PERSONAL_AGENT_ENGINE_ID
         else None
     )
-    team_agent_client = (
-        AgentEngineClient(
-            project_id=settings.GOOGLE_CLOUD_PROJECT,
-            location=settings.GOOGLE_CLOUD_LOCATION,
-            agent_engine_id=settings.TEAM_AGENT_ENGINE_ID,
-            timeout_seconds=settings.AGENT_TIMEOUT_SECONDS,
-        )
-        if settings.TEAM_AGENT_ENGINE_ID
-        else None
-    )
 
-    # Initialize Session Manager with both clients
+    # Initialize Session Manager
     session_manager = SessionManager(
         firestore_client=firestore_client,
-        personal_agent_client=personal_agent_client,
-        team_agent_client=team_agent_client,
+        agent_client=agent_client,
         timeout_minutes=settings.SESSION_TIMEOUT_MINUTES,
     )
 
@@ -109,12 +95,12 @@ async def lifespan(app: FastAPI):
     init_services(
         validator=validator,
         session_manager=session_manager,
-        agent_client=personal_agent_client,
+        agent_client=agent_client,
         sms_sender=sms_sender,
         rate_limiter=rate_limiter,
     )
 
-    # Initialize Discord services (if configured) — personal agent
+    # Initialize Discord services (if configured)
     discord_sender = None
     if settings.DISCORD_BOT_TOKEN and settings.DISCORD_PUBLIC_KEY and settings.DISCORD_APPLICATION_ID:
         logger.info("Initializing Discord services...")
@@ -126,7 +112,7 @@ async def lifespan(app: FastAPI):
         init_discord_services(
             validator=discord_validator,
             session_manager=session_manager,
-            agent_client=personal_agent_client,
+            agent_client=agent_client,
             discord_sender=discord_sender,
             rate_limiter=rate_limiter,
         )
@@ -136,7 +122,7 @@ async def lifespan(app: FastAPI):
         discord_gateway = await start_gateway(
             bot_token=settings.DISCORD_BOT_TOKEN,
             session_manager=session_manager,
-            agent_client=personal_agent_client,
+            agent_client=agent_client,
             rate_limiter=rate_limiter,
         )
     else:
@@ -152,7 +138,7 @@ async def lifespan(app: FastAPI):
         init_telegram_services(
             validator=telegram_validator,
             session_manager=session_manager,
-            agent_client=personal_agent_client,
+            agent_client=agent_client,
             telegram_sender=telegram_sender,
             rate_limiter=rate_limiter,
         )
@@ -160,7 +146,7 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Telegram not configured (TELEGRAM_BOT_TOKEN not set)")
 
-    # Initialize Slack services (if configured) — team agent
+    # Initialize Slack services (if configured)
     slack_sender = None
     if settings.SLACK_BOT_TOKEN and settings.SLACK_SIGNING_SECRET:
         logger.info("Initializing Slack services...")
@@ -169,7 +155,7 @@ async def lifespan(app: FastAPI):
         init_slack_services(
             validator=slack_validator,
             session_manager=session_manager,
-            agent_client=team_agent_client,
+            agent_client=agent_client,
             slack_sender=slack_sender,
             rate_limiter=rate_limiter,
         )
@@ -177,12 +163,12 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Slack not configured (SLACK_BOT_TOKEN or SLACK_SIGNING_SECRET not set)")
 
-    # Initialize internal services — needs both clients for channel-based routing
+    # Initialize internal services
     init_internal_services(
         session_manager=session_manager,
-        personal_agent_client=personal_agent_client,
-        team_agent_client=team_agent_client,
+        agent_client=agent_client,
         sms_sender=sms_sender,
+        firestore_client=firestore_client,
         telegram_sender=telegram_sender,
         slack_sender=slack_sender,
         discord_sender=discord_sender,
@@ -190,7 +176,7 @@ async def lifespan(app: FastAPI):
     init_allowed_service_accounts()
     logger.info("Internal services initialized")
 
-    # Initialize OAuth services (if configured)
+    # Initialize OAuth + Email services (both require the same OAuth manager)
     oauth_manager = None
     if settings.GOOGLE_OAUTH_CLIENT_ID and settings.GOOGLE_OAUTH_CLIENT_SECRET:
         logger.info("Initializing OAuth services...")
@@ -205,6 +191,7 @@ async def lifespan(app: FastAPI):
             redirect_uri=settings.GOOGLE_OAUTH_REDIRECT_URI,
             state_ttl_seconds=settings.OAUTH_STATE_TTL_SECONDS,
         )
+
         init_oauth_services(
             oauth_manager=oauth_manager,
             session_manager=session_manager,
@@ -222,25 +209,23 @@ async def lifespan(app: FastAPI):
             app.state.oauth_hmac_secret = None
 
         logger.info("OAuth services initialized")
-    else:
-        logger.warning("OAuth not configured - calendar features disabled")
-        app.state.oauth_hmac_secret = None
 
-    # Initialize Email services (if OAuth is configured — needs gmail_system token) — team agent
-    if oauth_manager:
+        # Initialize Email services
         logger.info("Initializing Email services...")
-        gmail_client = GmailClient(oauth_manager=oauth_manager)
-        authorizations = EmailAuthorizationsClient(firestore_client=firestore_client)
         init_email_services(
-            gmail_client=gmail_client,
-            authorizations=authorizations,
-            agent_client=team_agent_client,
+            oauth_manager=oauth_manager,
+            db=firestore_client,
+            agent_client=agent_client,
             session_manager=session_manager,
             slack_sender=slack_sender,
+            sms_sender=sms_sender,
+            telegram_sender=telegram_sender,
+            discord_sender=discord_sender,
         )
         logger.info("Email services initialized")
     else:
-        logger.info("Email services disabled (OAuth not configured)")
+        logger.warning("OAuth not configured - calendar and email features disabled")
+        app.state.oauth_hmac_secret = None
 
     logger.info("SMS Gateway started successfully")
 

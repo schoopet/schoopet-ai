@@ -1,13 +1,9 @@
 """Google Calendar tool for agent using OAuth tokens.
 
-Access mode determines which token is used at construction time:
-- "personal": user's personal OAuth token (feature="calendar")
-- "team": system token (feature="workspace_system", user="email_system")
-
-No runtime fallback. Each instance uses exactly one token path.
+Uses the calling user's personal OAuth token (feature="google").
 """
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, Literal
+from typing import Optional, Dict, Any
 from zoneinfo import ZoneInfo
 from google.adk.tools import ToolContext
 from .oauth_client import OAuthClient
@@ -16,42 +12,15 @@ from .utils import require_user_id
 # Google Calendar API endpoints
 CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 
-# System-level shared agent account constants
-CALENDAR_SYSTEM_USER_ID = "email_system"
-CALENDAR_SYSTEM_FEATURE = "workspace_system"
-
 
 class CalendarTool:
-    """Tool for accessing Google Calendar via OAuth tokens.
+    """Tool for accessing Google Calendar via the user's personal OAuth token."""
 
-    Access mode is set at construction time and never changes:
-    - "personal": uses the user's personal OAuth token (feature="calendar")
-    - "team": uses the system workspace_system token (email_system account)
-    """
-
-    def __init__(self, access_mode: Literal["personal", "team"] = "personal"):
-        """Initialize the Calendar Tool.
-
-        Args:
-            access_mode: "personal" to use the user's own token,
-                         "team" to use the shared system token.
-        """
+    def __init__(self):
         self._oauth_client = OAuthClient()
-        self._access_mode = access_mode
 
     def _get_token(self, user_id: str):
-        """Return (token, error) using exactly one token path.
-
-        Returns:
-            (token, None) on success, (None, error_string) on failure.
-        """
-        if self._access_mode == "team":
-            token = self._oauth_client.get_valid_access_token(
-                CALENDAR_SYSTEM_USER_ID, CALENDAR_SYSTEM_FEATURE
-            )
-            return token, (None if token else "Team calendar not connected. Contact admin.")
-        token = self._oauth_client.get_valid_access_token(user_id, "calendar")
-        return token, (None if token else self._oauth_client.get_oauth_link(user_id, "calendar"))
+        return self._oauth_client.get_tool_token(user_id)
 
     def _format_event(self, event: Dict[str, Any]) -> str:
         """Format a calendar event for display."""
@@ -229,7 +198,7 @@ class CalendarTool:
             - When the user expresses a time range (e.g., "today", "tomorrow"), the agent
               should determine their timezone and pass it here.
         """
-        phone_number, err = require_user_id(tool_context, "calendar")
+        user_id, err = require_user_id(tool_context, "google")
         if err:
             return err
 
@@ -259,7 +228,7 @@ class CalendarTool:
         except ValueError as e:
             return f"Invalid date format. Please use YYYY-MM-DD. Error: {e}"
 
-        token, error = self._get_token(phone_number)
+        token, error = self._get_token(user_id)
         if token is None:
             return error
 
@@ -302,7 +271,7 @@ class CalendarTool:
 
         Note: Requires user_id from tool_context (phone number).
         """
-        phone_number, err = require_user_id(tool_context, "calendar")
+        user_id, err = require_user_id(tool_context, "google")
         if err:
             return err
 
@@ -335,7 +304,7 @@ class CalendarTool:
         except ValueError as e:
             return f"Invalid datetime format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM. Error: {e}"
 
-        token, error = self._get_token(phone_number)
+        token, error = self._get_token(user_id)
         if token is None:
             return error
 
@@ -376,11 +345,11 @@ class CalendarTool:
 
         Note: Requires user_id from tool_context (phone number).
         """
-        phone_number, err = require_user_id(tool_context, "calendar")
+        user_id, err = require_user_id(tool_context, "google")
         if err:
             return err
 
-        token, error = self._get_token(phone_number)
+        token, error = self._get_token(user_id)
         if token is None:
             return error
 
@@ -438,27 +407,18 @@ class CalendarTool:
 
         Note: Requires user_id from tool_context (phone number).
         """
-        phone_number, err = require_user_id(tool_context, "calendar")
+        user_id, err = require_user_id(tool_context, "google")
         if err:
             return err
 
-        if self._access_mode == "team":
-            token = self._oauth_client.get_valid_access_token(
-                CALENDAR_SYSTEM_USER_ID, CALENDAR_SYSTEM_FEATURE
-            )
-            if token:
-                return "Team calendar (system account) is connected and ready."
-            return "Team calendar not connected. Contact admin."
-
-        # Personal mode
-        user_token_data = self._oauth_client.get_token_data(phone_number, "calendar")
+        user_token_data = self._oauth_client.get_token_data(user_id, "google")
         if user_token_data:
             email = user_token_data.get("email", "Unknown")
-            user_access_token = self._oauth_client.get_valid_access_token(phone_number, "calendar")
+            user_access_token = self._oauth_client.get_valid_access_token(user_id, "google")
             if user_access_token:
-                return f"Personal calendar ({email}) is connected."
-            link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-            return f"Personal calendar ({email}) connection has expired. Re-authorize:\n{link}"
+                return f"Calendar ({email}) is connected."
+            link = self._oauth_client.get_oauth_link(user_id)
+            return f"Calendar ({email}) connection has expired. Re-authorize:\n{link}"
 
-        link = self._oauth_client.get_oauth_link(phone_number, "calendar")
-        return f"Personal calendar is not connected. Authorize here:\n{link}"
+        link = self._oauth_client.get_oauth_link(user_id)
+        return f"Calendar is not connected. Authorize here:\n{link}"

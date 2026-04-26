@@ -1,6 +1,5 @@
 locals {
   sms_gateway_image        = coalesce(var.sms_gateway_image, "us-docker.pkg.dev/${var.project_id}/gcr/shoopet-sms-gateway:latest")
-  team_agent_engine_id     = regex("[^/]+$", google_vertex_ai_reasoning_engine.team_agent.name)
   personal_agent_engine_id = regex("[^/]+$", google_vertex_ai_reasoning_engine.personal_agent.name)
 }
 
@@ -18,7 +17,7 @@ resource "google_cloud_run_v2_service" "sms_gateway" {
 
     scaling {
       min_instance_count = 1
-      max_instance_count = 10
+      max_instance_count = 1
     }
 
     containers {
@@ -39,10 +38,6 @@ resource "google_cloud_run_v2_service" "sms_gateway" {
       env {
         name  = "GOOGLE_CLOUD_LOCATION"
         value = var.region
-      }
-      env {
-        name  = "TEAM_AGENT_ENGINE_ID"
-        value = local.team_agent_engine_id
       }
       env {
         name  = "PERSONAL_AGENT_ENGINE_ID"

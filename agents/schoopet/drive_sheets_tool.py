@@ -1,13 +1,9 @@
 """Google Drive and Google Sheets tools for the Schoopet agent.
 
-Access mode determines which token is used at construction time:
-- "personal": user's personal OAuth token (feature="google-workspace")
-- "team": system token (feature="workspace_system", user="email_system")
-
-No runtime fallback. Each instance uses exactly one token path.
+Uses the calling user's personal OAuth token (feature="google").
 """
 import logging
-from typing import Optional, Literal
+from typing import Optional, List
 
 from google.adk.tools import ToolContext
 from .oauth_client import OAuthClient
@@ -19,35 +15,15 @@ DRIVE_API_BASE = "https://www.googleapis.com/drive/v3"
 DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3"
 SHEETS_API_BASE = "https://sheets.googleapis.com/v4/spreadsheets"
 
-# Single OAuth feature covering both Drive and Sheets scopes (personal user)
-WORKSPACE_FEATURE = "google-workspace"
-
-# System-level shared agent account constants
-WORKSPACE_SYSTEM_USER_ID = "email_system"
-WORKSPACE_SYSTEM_FEATURE = "workspace_system"
-
 
 class DriveTool:
-    """Tool for saving and listing files in Google Drive.
+    """Tool for saving and listing files in Google Drive using personal OAuth token."""
 
-    Access mode is set at construction time:
-    - "personal": uses the user's personal google-workspace token
-    - "team": uses the shared workspace_system token (system account)
-    """
-
-    def __init__(self, access_mode: Literal["personal", "team"] = "personal"):
+    def __init__(self):
         self._oauth_client = OAuthClient()
-        self._access_mode = access_mode
 
     def _get_token(self, user_id: str):
-        """Return (token, error) using exactly one token path."""
-        if self._access_mode == "team":
-            token = self._oauth_client.get_valid_access_token(
-                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-            )
-            return token, (None if token else "Team workspace not connected. Contact admin.")
-        token = self._oauth_client.get_valid_access_token(user_id, WORKSPACE_FEATURE)
-        return token, (None if token else self._oauth_client.get_oauth_link(user_id, WORKSPACE_FEATURE))
+        return self._oauth_client.get_tool_token(user_id)
 
     # ── Private token-specific helpers ─────────────────────────────────────────
 
@@ -214,11 +190,11 @@ class DriveTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        phone, err = require_user_id(tool_context, "drive")
+        user_id, err = require_user_id(tool_context, "drive")
         if err:
             return err
 
-        token, error = self._get_token(phone)
+        token, error = self._get_token(user_id)
         if token is None:
             return error
 
@@ -256,7 +232,7 @@ class DriveTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        phone, err = require_user_id(tool_context, "drive")
+        user_id, err = require_user_id(tool_context, "drive")
         if err:
             return err
 
@@ -267,7 +243,7 @@ class DriveTool:
         raw_bytes = artifact.inline_data.data
         mime_type = artifact.inline_data.mime_type or "application/octet-stream"
 
-        token, error = self._get_token(phone)
+        token, error = self._get_token(user_id)
         if token is None:
             return error
 
@@ -304,11 +280,11 @@ class DriveTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        phone, err = require_user_id(tool_context, "drive")
+        user_id, err = require_user_id(tool_context, "drive")
         if err:
             return err
 
-        token, error = self._get_token(phone)
+        token, error = self._get_token(user_id)
         if token is None:
             return error
 
@@ -333,48 +309,26 @@ class DriveTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        phone, err = require_user_id(tool_context, "drive")
+        user_id, err = require_user_id(tool_context, "drive")
         if err:
             return err
 
-        if self._access_mode == "team":
-            token = self._oauth_client.get_valid_access_token(
-                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-            )
-            if token:
-                return "Team workspace (system account) is connected."
-            return "Team workspace not connected. Contact admin."
-
-        # Personal mode
-        user_token_data = self._oauth_client.get_token_data(phone, WORKSPACE_FEATURE)
+        user_token_data = self._oauth_client.get_token_data(user_id, "google")
         if user_token_data:
             email = user_token_data.get("email", "Unknown")
-            return f"Personal workspace ({email}) is connected."
-        link = self._oauth_client.get_oauth_link(phone, WORKSPACE_FEATURE)
-        return f"Personal workspace not connected. Authorize here:\n{link}"
+            return f"Workspace ({email}) is connected."
+        link = self._oauth_client.get_oauth_link(user_id)
+        return f"Workspace not connected. Authorize here:\n{link}"
 
 
 class SheetsTool:
-    """Tool for reading and writing to Google Sheets.
+    """Tool for reading and writing to Google Sheets using personal OAuth token."""
 
-    Access mode is set at construction time:
-    - "personal": uses the user's personal google-workspace token
-    - "team": uses the shared workspace_system token (system account)
-    """
-
-    def __init__(self, access_mode: Literal["personal", "team"] = "personal"):
+    def __init__(self):
         self._oauth_client = OAuthClient()
-        self._access_mode = access_mode
 
     def _get_token(self, user_id: str):
-        """Return (token, error) using exactly one token path."""
-        if self._access_mode == "team":
-            token = self._oauth_client.get_valid_access_token(
-                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-            )
-            return token, (None if token else "Team workspace not connected. Contact admin.")
-        token = self._oauth_client.get_valid_access_token(user_id, WORKSPACE_FEATURE)
-        return token, (None if token else self._oauth_client.get_oauth_link(user_id, WORKSPACE_FEATURE))
+        return self._oauth_client.get_tool_token(user_id)
 
     # ── Private token-specific helpers ─────────────────────────────────────────
 
@@ -416,7 +370,7 @@ class SheetsTool:
     def _append_row_with_token(
         self,
         token: str,
-        values: list,
+        values: List[str],
         sheet_id: str,
         sheet_tab: str,
     ) -> Optional[str]:
@@ -522,7 +476,7 @@ class SheetsTool:
 
     def append_row_to_sheet(
         self,
-        values: list,
+        values: List[str],
         sheet_id: str,
         sheet_tab: str = "Sheet1",
         tool_context: ToolContext = None,
@@ -541,11 +495,11 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        phone, err = require_user_id(tool_context, "sheets")
+        user_id, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        token, error = self._get_token(phone)
+        token, error = self._get_token(user_id)
         if token is None:
             return error
 
@@ -581,11 +535,11 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        phone, err = require_user_id(tool_context, "sheets")
+        user_id, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        token, error = self._get_token(phone)
+        token, error = self._get_token(user_id)
         if token is None:
             return error
 
@@ -621,11 +575,11 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        phone, err = require_user_id(tool_context, "sheets")
+        user_id, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        token, error = self._get_token(phone)
+        token, error = self._get_token(user_id)
         if token is None:
             return error
 
@@ -662,11 +616,11 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        phone, err = require_user_id(tool_context, "sheets")
+        user_id, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        token, error = self._get_token(phone)
+        token, error = self._get_token(user_id)
         if token is None:
             return error
 
@@ -693,25 +647,16 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context (phone number).
         """
-        phone, err = require_user_id(tool_context, "sheets")
+        user_id, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        if self._access_mode == "team":
-            token = self._oauth_client.get_valid_access_token(
-                WORKSPACE_SYSTEM_USER_ID, WORKSPACE_SYSTEM_FEATURE
-            )
-            if token:
-                return "Team workspace (system account) is connected."
-            return "Team workspace not connected. Contact admin."
-
-        # Personal mode
-        user_token_data = self._oauth_client.get_token_data(phone, WORKSPACE_FEATURE)
+        user_token_data = self._oauth_client.get_token_data(user_id, "google")
         if user_token_data:
             email = user_token_data.get("email", "Unknown")
-            return f"Personal workspace ({email}) is connected."
-        link = self._oauth_client.get_oauth_link(phone, WORKSPACE_FEATURE)
-        return f"Personal workspace not connected. Authorize here:\n{link}"
+            return f"Workspace ({email}) is connected."
+        link = self._oauth_client.get_oauth_link(user_id)
+        return f"Workspace not connected. Authorize here:\n{link}"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@ class OAuthState(BaseModel):
 
     state_id: str = Field(..., description="UUID for state parameter")
     user_id: str = Field(..., description="User identifier (phone number, Slack ID, etc.)")
-    feature: str = Field(default="calendar", description="Feature being authorized (e.g., calendar, workspace_system)")
+    feature: str = Field(default="google", description="Feature being authorized (e.g., calendar, workspace_system)")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = Field(..., description="State expiration time")
     used: bool = Field(default=False, description="Whether state has been consumed")
@@ -34,7 +34,7 @@ class OAuthState(BaseModel):
         return cls(
             state_id=data["state_id"],
             user_id=data["user_id"],
-            feature=data.get("feature", "calendar"),
+            feature=data.get("feature", "google"),
             created_at=data["created_at"],
             expires_at=data["expires_at"],
             used=data.get("used", False),
@@ -57,7 +57,7 @@ class OAuthToken(BaseModel):
     """
 
     user_id: str = Field(..., description="User identifier (phone number, Slack ID, etc.)")
-    feature: str = Field(default="calendar", description="Feature authorized (e.g., calendar, workspace_system)")
+    feature: str = Field(default="google", description="Feature authorized (e.g., calendar, workspace_system)")
     email: str = Field(..., description="Google account email")
     access_token: str = Field(..., description="OAuth access token")
     token_type: str = Field(default="Bearer", description="Token type")
@@ -83,7 +83,7 @@ class OAuthToken(BaseModel):
         """Create instance from Firestore document data."""
         return cls(
             user_id=data["user_id"],
-            feature=data.get("feature", "calendar"),
+            feature=data.get("feature", "google"),
             email=data["email"],
             access_token=data["access_token"],
             token_type=data.get("token_type", "Bearer"),

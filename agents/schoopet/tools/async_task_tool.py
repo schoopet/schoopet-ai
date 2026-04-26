@@ -562,16 +562,11 @@ class AsyncTaskTool:
                     user_id=task_user,
                     task_id=task_id,
                     message=task.result,
-                    schedule_time=now,  # Immediate
+                    schedule_time=now,
                     channel=task.notification_channel,
                 )
-
-                # Update notified status
-                doc_ref.update({
-                    "status": TaskStatus.NOTIFIED.value,
-                    "notified_at": now,
-                })
-
+                # NOTIFIED status is set by the SMS Gateway /internal/user-notify
+                # endpoint after confirmed delivery — not here.
                 return f"Task {task_id} approved. User will be notified with the result."
             else:
                 return f"Task {task_id} approved but has no result to send."

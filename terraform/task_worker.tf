@@ -42,10 +42,6 @@ resource "google_cloud_run_v2_service" "task_worker" {
         value = local.personal_agent_engine_id
       }
       env {
-        name  = "TEAM_AGENT_ENGINE_ID"
-        value = local.team_agent_engine_id
-      }
-      env {
         name  = "SMS_GATEWAY_URL"
         value = google_cloud_run_v2_service.sms_gateway.uri
       }

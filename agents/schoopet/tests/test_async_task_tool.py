@@ -164,7 +164,7 @@ class TestAsyncTaskTool:
         assert "Use approve_task" in result
 
     def test_approve_task(self, async_task_tool, tool_context, mock_firestore, mock_cloud_tasks):
-        """Should approve task and trigger notification."""
+        """Should approve task and trigger notification Cloud Task."""
         supervisor_context = MagicMock(spec=ToolContext)
         supervisor_context.user_id = f"{USER_ID}_supervisor"
 
@@ -190,6 +190,40 @@ class TestAsyncTaskTool:
             "reviewed_at": ANY
         })
         mock_cloud_tasks.create_notification_task.assert_called_once()
+
+    def test_approve_task_does_not_set_notified(self, async_task_tool, tool_context, mock_firestore, mock_cloud_tasks):
+        """approve_task must NOT set status=notified — that is the gateway's job
+        after confirmed delivery. Setting it early was the status race condition."""
+        supervisor_context = MagicMock(spec=ToolContext)
+        supervisor_context.user_id = f"{USER_ID}_supervisor"
+
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": USER_ID,
+            "status": "awaiting_review",
+            "result": "Final Result",
+            "created_at": datetime.now(timezone.utc),
+            "instruction": "Test",
+            "task_type": "research",
+            "agent_type": "personal",
+            "notification_channel": "sms",
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        async_task_tool.approve_task(TASK_ID, tool_context=supervisor_context)
+
+        all_updates = mock_firestore.collection.return_value.document.return_value.update.call_args_list
+        statuses_written = [
+            call[0][0].get("status")
+            for call in all_updates
+            if isinstance(call[0][0], dict) and "status" in call[0][0]
+        ]
+        assert "notified" not in statuses_written, (
+            f"approve_task must not write status=notified (got: {statuses_written}). "
+            "NOTIFIED is set by /internal/user-notify after confirmed delivery."
+        )
 
     def test_request_correction(self, async_task_tool, tool_context, mock_firestore, mock_cloud_tasks):
         """Should request revision."""

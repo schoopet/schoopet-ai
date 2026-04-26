@@ -87,7 +87,18 @@ class OAuthClient:
         self._hmac_secret = self._get_secret("oauth-hmac-secret")
         return self._hmac_secret
 
-    def get_oauth_link(self, user_id: str, feature: str) -> str:
+    def get_tool_token(
+        self,
+        user_id: str,
+    ):
+        """Return (token, error_or_link) for a personal tool.
+
+        Uses user_id's google token; returns an OAuth link on failure.
+        """
+        token = self.get_valid_access_token(user_id, "google")
+        return token, (None if token else self.get_oauth_link(user_id))
+
+    def get_oauth_link(self, user_id: str, feature: str = "google") -> str:
         """Generate secure HMAC-signed OAuth authorization link."""
         self._ensure_initialized()
 

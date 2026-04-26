@@ -61,7 +61,7 @@ class OAuthManager:
         self._states_collection = self._db.collection(STATES_COLLECTION)
         self._tokens_collection = self._db.collection(TOKENS_COLLECTION)
 
-    async def generate_state(self, user_id: str, feature: str = "calendar") -> str:
+    async def generate_state(self, user_id: str, feature: str = "google") -> str:
         """Generate a new OAuth state parameter for CSRF protection.
 
         Args:
@@ -181,7 +181,7 @@ class OAuthManager:
         access_token: str,
         refresh_token: Optional[str],
         expires_in: int,
-        feature: str = "calendar",
+        feature: str = "google",
     ) -> bool:
         """Store OAuth tokens securely.
 
@@ -233,7 +233,7 @@ class OAuthManager:
             logger.error(f"Failed to store tokens: {e}")
             return False
 
-    async def get_access_token(self, user_id: str, feature: str = "calendar") -> Optional[str]:
+    async def get_access_token(self, user_id: str, feature: str = "google") -> Optional[str]:
         """Get a valid access token for a user and feature.
 
         If the token is expired, attempts to refresh it using the stored
@@ -272,7 +272,7 @@ class OAuthManager:
         return None
 
     async def _refresh_access_token(
-        self, user_id: str, email: str, feature: str = "calendar"
+        self, user_id: str, email: str, feature: str = "google"
     ) -> Optional[str]:
         """Refresh an expired access token using the refresh token.
 
@@ -332,7 +332,7 @@ class OAuthManager:
                 logger.error(f"Token refresh error: {e}")
                 return None
 
-    async def get_token_info(self, user_id: str, feature: str = "calendar") -> Optional[OAuthToken]:
+    async def get_token_info(self, user_id: str, feature: str = "google") -> Optional[OAuthToken]:
         """Get token information for a user.
 
         Args:
@@ -352,7 +352,7 @@ class OAuthManager:
 
         return OAuthToken.from_firestore(doc.to_dict())
 
-    async def has_valid_token(self, user_id: str, feature: str = "calendar") -> bool:
+    async def has_valid_token(self, user_id: str, feature: str = "google") -> bool:
         """Check if a user has a valid (or refreshable) OAuth token.
 
         Args:
@@ -365,7 +365,7 @@ class OAuthManager:
         token = await self.get_access_token(user_id, feature)
         return token is not None
 
-    async def revoke_tokens(self, user_id: str, feature: str = "calendar") -> bool:
+    async def revoke_tokens(self, user_id: str, feature: str = "google") -> bool:
         """Revoke and delete all tokens for a user and feature.
 
         Args:

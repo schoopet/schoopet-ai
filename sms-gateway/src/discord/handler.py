@@ -157,7 +157,7 @@ async def _handle_discord_message(
         # Auto opt-in
         if session_info.is_new_user or not session_info.opted_in:
             logger.info(f"Auto opt-in for Discord user {user_id}")
-            await _session_manager.set_opted_in(user_id, agent_type="personal", channel="discord")
+            await _session_manager.set_opted_in(user_id, channel="discord")
             if session_info.is_new_user:
                 await reply_fn(WELCOME_MSG)
 
@@ -173,7 +173,7 @@ async def _handle_discord_message(
 
         # Get or create agent session
         session_info = await _session_manager.get_or_create_session(
-            user_id, agent_type="personal", channel="discord"
+            user_id, channel="discord"
         )
 
         logger.info(

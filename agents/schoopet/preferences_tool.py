@@ -40,28 +40,26 @@ class PreferencesTool:
                 self._firestore_client = firestore.Client(project=self._project_id)
         return self._firestore_client
 
+    def _doc_ref(self, phone_number: str):
+        """Return the Firestore document reference for a user, or None if unavailable."""
+        db = self._get_firestore_client()
+        if not db:
+            return None
+        return db.collection(PREFERENCES_COLLECTION).document(normalize_user_id(phone_number))
+
     def _get_preferences(self, phone_number: str) -> Optional[Dict[str, Any]]:
         """Get all preferences for a user from Firestore."""
-        firestore_client = self._get_firestore_client()
-        if not firestore_client:
+        doc_ref = self._doc_ref(phone_number)
+        if not doc_ref:
             return None
-
-        normalized = normalize_user_id(phone_number)
-        doc_ref = firestore_client.collection(PREFERENCES_COLLECTION).document(normalized)
         doc = doc_ref.get()
-
-        if doc.exists:
-            return doc.to_dict()
-        return None
+        return doc.to_dict() if doc.exists else None
 
     def _save_preference(self, phone_number: str, key: str, value: Any) -> bool:
         """Save a single preference for a user."""
-        firestore_client = self._get_firestore_client()
-        if not firestore_client:
+        doc_ref = self._doc_ref(phone_number)
+        if not doc_ref:
             return False
-
-        normalized = normalize_user_id(phone_number)
-        doc_ref = firestore_client.collection(PREFERENCES_COLLECTION).document(normalized)
 
         from datetime import datetime, timezone
         doc_ref.set({

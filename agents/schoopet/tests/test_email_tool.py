@@ -4,7 +4,7 @@ Strategy:
 - Wire tool_context.save_artifact to an InMemoryArtifactService so we can
   verify stored artifacts without GCS credentials.
 - Mock httpx.Client to simulate Gmail API responses.
-- Mock _get_system_token to avoid live OAuth calls.
+- Mock _oauth_client.get_valid_access_token to avoid live OAuth calls.
 """
 import base64
 
@@ -98,10 +98,11 @@ async def _make_artifact_service_with_save(
 
 
 def _make_email_tool(token: str = SYSTEM_TOKEN) -> EmailTool:
-    tool = EmailTool.__new__(EmailTool)
-    tool._oauth_client = None
+    tool = EmailTool("team")
+    mock_oauth = MagicMock()
+    mock_oauth.get_valid_access_token.return_value = token
+    tool._oauth_client = mock_oauth
     tool._firestore_client = None
-    tool._get_system_token = MagicMock(return_value=token)
     return tool
 
 

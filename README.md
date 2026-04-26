@@ -22,7 +22,6 @@ Project settings live in `environments/` (checked in, no secrets):
 |------|-------------|-----|
 | `environments/dev.env` | `schoopet-dev` | Development |
 | `environments/prod.env` | `schoopet-prod` | Production |
-| `environments/wib-boss-finder.env` | `mmontan-ml` | Current live environment |
 
 Secrets and local overrides go in component-level `.env` files (gitignored):
 - `agents/schoopet/.env`
@@ -32,16 +31,16 @@ Secrets and local overrides go in component-level `.env` files (gitignored):
 
 ```bash
 # Team agent (Slack/Email) — --agent-type is required
-./agents/deploy.sh --agent-type=team --env=wib-boss-finder
+./agents/deploy.sh --agent-type=team --env=prod
 
 # Personal agent (SMS/WhatsApp/Telegram)
-./agents/deploy.sh --agent-type=personal --env=wib-boss-finder
+./agents/deploy.sh --agent-type=personal --env=prod
 
 # SMS Gateway
-./sms-gateway/scripts/deploy.sh --env=wib-boss-finder
+./sms-gateway/scripts/deploy.sh --env=prod
 
 # Task Worker
-./task-worker/deploy.sh --env=wib-boss-finder
+./task-worker/deploy.sh --env=prod
 ```
 
 Each script loads `environments/<name>.env` first, then the component `.env` for secrets.
@@ -51,7 +50,7 @@ Pass `--new` to `agents/deploy.sh` to create a fresh Agent Engine instead of upd
 
 ### 1. Create the env file
 
-Create `environments/<name>.env` with at minimum `GOOGLE_CLOUD_PROJECT` set. Use `environments/wib-boss-finder.env` as a reference.
+Create `environments/<name>.env` with at minimum `GOOGLE_CLOUD_PROJECT` set. Use `environments/prod.env` as a reference.
 
 ### 2. Deploy the agents
 
@@ -136,5 +135,21 @@ Each environment needs its webhooks pointed at its own gateway URL. These are pl
 | Twilio SMS | Twilio Console → Phone Number → Messaging webhook | `https://<gateway-url>/webhook/sms` |
 | Telegram | Call `setWebhook` via Bot API | `https://<gateway-url>/webhook/telegram` |
 | Slack | Slack App settings → Event Subscriptions | `https://<gateway-url>/webhook/slack` |
+| Discord | Discord Developer Portal → General Information → Interactions Endpoint URL | `https://<gateway-url>/webhook/discord` |
+
+**Adding the Discord bot to a server**
+
+Use this invite link to add Schoopet to a Discord server:
+
+```
+https://discord.com/oauth2/authorize?client_id=1495984034268975275&scope=bot+applications.commands&permissions=2048
+```
+
+Once added, users can talk to the agent by:
+- DMing the bot directly
+- @mentioning it in any channel
+- Using the `/chat` slash command
+
+> **Note:** Enable **Message Content Intent** in the Discord Developer Portal under Bot → Privileged Gateway Intents, otherwise the bot cannot read message text.
 
 For `dev`, the pragmatic approach is to use a separate Twilio test number and separate Telegram/Slack apps. Sharing a single number/bot across environments is not recommended as webhooks can only point to one URL at a time.

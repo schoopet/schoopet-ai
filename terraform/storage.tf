@@ -8,12 +8,6 @@ resource "google_storage_bucket" "artifacts" {
 }
 
 # Agent Engine reads pickled agent code from this bucket during deployment.
-resource "google_storage_bucket_iam_member" "team_agent_artifact_reader" {
-  bucket = google_storage_bucket.artifacts.name
-  role   = "roles/storage.objectViewer"
-  member = local.team_agent_principal
-}
-
 resource "google_storage_bucket_iam_member" "personal_agent_artifact_reader" {
   bucket = google_storage_bucket.artifacts.name
   role   = "roles/storage.objectViewer"

@@ -1,19 +1,18 @@
 #!/bin/bash
 # Deploy Schoopet Agent to Vertex AI Agent Engine
 #
+# Updates an existing agent engine. New engines must be created via Terraform.
+#
 # Usage:
-#   ./deploy.sh --agent-type=personal                      # Deploy personal agent to dev (default)
-#   ./deploy.sh --agent-type=team --env=wib-boss-finder    # Deploy team agent to wib-boss-finder
-#   ./deploy.sh --agent-type=personal --env=prod           # Deploy personal agent to prod
-#   ./deploy.sh --agent-type=team --new                    # Create a new team agent engine
-#   ./deploy.sh --agent-type=personal --identity           # Deploy with Agent Identity enabled
-#   ./deploy.sh --agent-type=team --from-tf                # Read engine ID from terraform output
+#   ./deploy.sh                        # Deploy to dev (default)
+#   ./deploy.sh --env=prod             # Deploy to prod environment
+#   ./deploy.sh --identity             # Deploy with Agent Identity enabled
+#   ./deploy.sh --from-tf              # Read engine ID from terraform output
 #
 # Environment variables (loaded from environments/<name>.env, then schoopet/.env):
 #   GOOGLE_CLOUD_PROJECT       - GCP project ID (required)
 #   GOOGLE_CLOUD_LOCATION      - GCP region (default: us-central1)
-#   PERSONAL_AGENT_ENGINE_ID   - Existing personal agent engine ID for updates
-#   TEAM_AGENT_ENGINE_ID       - Existing team agent engine ID for updates
+#   PERSONAL_AGENT_ENGINE_ID   - Agent engine ID to update (required)
 
 set -e
 
@@ -31,26 +30,13 @@ echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}  Schoopet Agent Deployment${NC}"
 echo -e "${BLUE}========================================${NC}"
 
-# Pre-parse --env and --agent-type flags (before loading env files)
+# Pre-parse --env flag (before loading env files)
 ENV_NAME="dev"
-AGENT_TYPE=""
 for arg in "$@"; do
     case $arg in
         --env=*) ENV_NAME="${arg#*=}" ;;
-        --agent-type=*) AGENT_TYPE="${arg#*=}" ;;
     esac
 done
-
-# Validate agent type early
-if [ -z "$AGENT_TYPE" ]; then
-    echo -e "${RED}Error: --agent-type=personal|team is required${NC}"
-    echo "Usage: ./deploy.sh --agent-type=personal|team [--env=<name>] [--new] [--identity]"
-    exit 1
-fi
-if [ "$AGENT_TYPE" != "personal" ] && [ "$AGENT_TYPE" != "team" ]; then
-    echo -e "${RED}Error: --agent-type must be 'personal' or 'team', got '${AGENT_TYPE}'${NC}"
-    exit 1
-fi
 
 # Load environment-specific settings (project-level, not secret)
 ENV_FILE="$SCRIPT_DIR/../environments/${ENV_NAME}.env"
@@ -75,7 +61,6 @@ else
 fi
 
 # Parse all arguments
-NEW_DEPLOY=false
 USE_IDENTITY=false
 CLI_ID=""
 FROM_TF=false
@@ -83,13 +68,6 @@ FROM_TF=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --env=*)
-            shift
-            ;;
-        --agent-type=*)
-            shift
-            ;;
-        --new)
-            NEW_DEPLOY=true
             shift
             ;;
         --identity)
@@ -129,21 +107,16 @@ fi
 # Set defaults
 GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 
-# Determine engine ID for this agent type
-if [ "$AGENT_TYPE" = "personal" ]; then
-    ENV_ENGINE_ID="${PERSONAL_AGENT_ENGINE_ID:-}"
-else
-    ENV_ENGINE_ID="${TEAM_AGENT_ENGINE_ID:-}"
-fi
+# Determine engine ID
+ENV_ENGINE_ID="${PERSONAL_AGENT_ENGINE_ID:-}"
 
 # CLI --id overrides env var; --from-tf reads resource_name from terraform outputs
 ENGINE_ID="${CLI_ID:-$ENV_ENGINE_ID}"
 
 if [ "$FROM_TF" = true ] || [ -z "$ENGINE_ID" ]; then
     TF_DIR="$SCRIPT_DIR/../terraform"
-    TF_OUTPUT_KEY="${AGENT_TYPE}_agent_resource_name"
     if command -v terraform &>/dev/null && [ -d "$TF_DIR" ]; then
-        RESOURCE_NAME=$(cd "$TF_DIR" && terraform output -raw "$TF_OUTPUT_KEY" 2>/dev/null || true)
+        RESOURCE_NAME=$(cd "$TF_DIR" && terraform output -raw personal_agent_resource_name 2>/dev/null || true)
         if [ -n "$RESOURCE_NAME" ]; then
             ENGINE_ID="${RESOURCE_NAME##*/}"
             echo -e "Engine ID from Terraform: ${GREEN}$ENGINE_ID${NC}"
@@ -153,12 +126,11 @@ fi
 
 echo ""
 echo -e "Environment: ${GREEN}${ENV_NAME}${NC}"
-echo -e "Agent type:  ${GREEN}${AGENT_TYPE}${NC}"
 echo -e "Project:     ${GREEN}$GOOGLE_CLOUD_PROJECT${NC}"
 echo -e "Location:    ${GREEN}$GOOGLE_CLOUD_LOCATION${NC}"
 
 # Activate virtual environment
-VENV_PATH="$SCRIPT_DIR/schoopet/.venv"
+VENV_PATH="$SCRIPT_DIR/.venv"
 echo -e "${GREEN}Activating virtual environment: $VENV_PATH${NC}"
 source "$VENV_PATH/bin/activate"
 PYTHON_CMD="$VENV_PATH/bin/python"
@@ -167,16 +139,10 @@ PYTHON_CMD="$VENV_PATH/bin/python"
 DEPLOY_CMD="$PYTHON_CMD -m schoopet.deploy"
 DEPLOY_CMD="$DEPLOY_CMD --project $GOOGLE_CLOUD_PROJECT"
 DEPLOY_CMD="$DEPLOY_CMD --location $GOOGLE_CLOUD_LOCATION"
-DEPLOY_CMD="$DEPLOY_CMD --agent-type $AGENT_TYPE"
 
-if [ "$NEW_DEPLOY" = true ]; then
-    echo -e "Mode:        ${YELLOW}Creating NEW agent engine${NC}"
-elif [ -n "$ENGINE_ID" ]; then
+if [ -n "$ENGINE_ID" ]; then
     echo -e "Engine:      ${GREEN}$ENGINE_ID${NC}"
-    echo -e "Mode:        ${GREEN}Updating existing agent${NC}"
     DEPLOY_CMD="$DEPLOY_CMD --id $ENGINE_ID"
-else
-    echo -e "${YELLOW}Warning: No engine ID set for ${AGENT_TYPE} agent, creating new engine${NC}"
 fi
 
 if [ "$USE_IDENTITY" = true ]; then

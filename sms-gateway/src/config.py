@@ -12,17 +12,6 @@ class Settings(BaseSettings):
     GOOGLE_CLOUD_PROJECT: str
     GOOGLE_CLOUD_LOCATION: str = "us-central1"
     PERSONAL_AGENT_ENGINE_ID: str = ""
-    TEAM_AGENT_ENGINE_ID: str = ""
-
-    # Channel-to-agent routing.  New channels default to "personal" (safe default).
-    CHANNEL_AGENT_ROUTING: dict[str, str] = {
-        "slack": "team",
-        "email": "team",
-        "sms": "personal",
-        "whatsapp": "personal",
-        "telegram": "personal",
-        "discord": "personal",
-    }
 
     # Twilio Configuration
     TWILIO_ACCOUNT_SID: str
@@ -67,16 +56,16 @@ class Settings(BaseSettings):
     # Artifact registry
     ARTIFACT_BUCKET_NAME: str = ""  # GCS bucket for email attachment binaries; computed from project if unset
 
-    # Scopes per feature
+    # Scopes per feature.
+    # "google"           — all personal-user scopes (calendar, drive, sheets, gmail)
+    # "workspace_system" — system account (schoopet.agent@gmail.com) for team agent
     OAUTH_SCOPES: dict[str, list[str]] = {
-        "calendar": [
+        "google": [
             "https://www.googleapis.com/auth/calendar.events",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "openid",
-        ],
-        "google-workspace": [
             "https://www.googleapis.com/auth/drive.file",
             "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.labels",
             "https://www.googleapis.com/auth/userinfo.email",
             "openid",
         ],
@@ -109,8 +98,5 @@ def get_settings() -> Settings:
 
 
 def agent_type_for_channel(channel: str) -> str:
-    """Return the agent type for a given channel name.
-
-    Reads from CHANNEL_AGENT_ROUTING; defaults to 'personal' for unknown channels.
-    """
-    return get_settings().CHANNEL_AGENT_ROUTING.get(channel, "personal")
+    """Return the agent type for a given channel name. Always 'personal'."""
+    return "personal"

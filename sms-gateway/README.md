@@ -58,7 +58,7 @@ Session state is stored in Firestore (`sms_sessions` collection) with separate s
 
 ### 1. Configure environment
 
-Copy `environments/wib-boss-finder.env` as a reference for your environment file. Secrets go in `sms-gateway/.env` (gitignored).
+Copy `environments/prod.env` as a reference for your environment file. Secrets go in `sms-gateway/.env` (gitignored).
 
 Required in `environments/<name>.env`:
 ```
@@ -77,7 +77,7 @@ TEAM_AGENT_ENGINE_ID=...       # team agent (Slack/Email)
 
 ```bash
 # From repo root:
-./sms-gateway/scripts/deploy.sh --env=wib-boss-finder
+./sms-gateway/scripts/deploy.sh --env=prod
 ```
 
 The script loads `environments/<name>.env` then `sms-gateway/.env` (secrets/overrides).
@@ -111,7 +111,7 @@ pip install -r requirements.txt
 ### Set environment variables
 
 ```bash
-set -a && source ../environments/wib-boss-finder.env && set +a
+set -a && source ../environments/prod.env && set +a
 cp .env.example .env
 # Edit .env with your secrets
 ```

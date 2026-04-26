@@ -16,6 +16,24 @@ class MemoryTool:
         self.agent_engine_id = None
         self.agent_engine_name = None
 
+    def _require_scope(self, tool_context: ToolContext, action: str):
+        """Return (scope_dict, None) or (None, error_message).
+
+        Validates client initialization and user_id presence. All memory
+        operations require a user_id for proper scoping and security.
+        """
+        if not self.client:
+            return None, (
+                "Error: Memory tool not initialized. "
+                "Check environment variables: GOOGLE_CLOUD_PROJECT, "
+                "GOOGLE_CLOUD_LOCATION, and GOOGLE_CLOUD_AGENT_ENGINE_ID."
+            )
+        if not tool_context or not getattr(tool_context, "user_id", None):
+            error_msg = f"ERROR: Cannot {action} — no user_id in tool_context. Memory not saved for security reasons."
+            print(error_msg)
+            return None, error_msg
+        return {"user_id": tool_context.user_id}, None
+
     @property
     def client(self):
         """Lazy initialization of Vertex AI client for pickling support."""
@@ -46,17 +64,11 @@ class MemoryTool:
 
         Note: Requires user_id from tool_context for proper memory scoping.
         """
-        if not self.client:
-            return "Error: Memory tool not initialized. Check environment variables: GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION, and GOOGLE_CLOUD_AGENT_ENGINE_ID."
-
-        # Extract user_id from tool_context - REQUIRED for security
-        if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
-            error_msg = "ERROR: Cannot save memory - no user_id in tool_context. Memory not saved for security reasons."
-            print(error_msg)
-            return error_msg
+        scope, err = self._require_scope(tool_context, "save memory")
+        if err:
+            return err
 
         try:
-            scope = {"user_id": tool_context.user_id}
 
             # Generate memory with proper user scope
             response = self.client.agent_engines.memories.generate(
@@ -82,22 +94,15 @@ class MemoryTool:
 
         Note: Requires user_id from tool_context for proper memory scoping.
         """
-        if not self.client:
-            return "Error: Memory tool not initialized. Check environment variables."
-
-        # Extract user_id from tool_context - REQUIRED for security
-        if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
-            error_msg = "ERROR: Cannot save memories - no user_id in tool_context. Memories not saved for security reasons."
-            print(error_msg)
-            return error_msg
+        scope, err = self._require_scope(tool_context, "save memories")
+        if err:
+            return err
 
         # Handle both string and list input
         if isinstance(facts, str):
-            # Split on commas if string provided
             facts = [f.strip() for f in facts.split(',') if f.strip()]
 
         try:
-            scope = {"user_id": tool_context.user_id}
 
             # Build direct memories list
             direct_memories = [{"fact": fact} for fact in facts]
@@ -133,17 +138,11 @@ class MemoryTool:
         Note: Use this when automatic memory retrieval doesn't provide enough context
         or when you need to expand search terms. Requires user_id from tool_context.
         """
-        if not self.client:
-            return "Error: Memory tool not initialized. Check environment variables."
-
-        # Extract user_id from tool_context - REQUIRED for security
-        if not tool_context or not hasattr(tool_context, 'user_id') or not tool_context.user_id:
-            error_msg = "ERROR: Cannot retrieve memories - no user_id in tool_context."
-            print(error_msg)
-            return error_msg
+        scope, err = self._require_scope(tool_context, "retrieve memories")
+        if err:
+            return err
 
         try:
-            scope = {"user_id": tool_context.user_id}
 
             # Retrieve memories using similarity search
             results = self.client.agent_engines.memories.retrieve(

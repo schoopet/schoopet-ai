@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..config import get_settings
 from .hmac_token import validate_oauth_init_token
+from ..email.handler import register_gmail_watch
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +159,7 @@ def _error_html(message: str) -> str:
 async def initiate_oauth(
     request: Request,
     token: str = Query(..., description="HMAC-signed initiation token"),
-    feature: str = Query("calendar", description="Feature to authorize (e.g., calendar, workspace_system)"),
+    feature: str = Query("google", description="Feature to authorize (google or workspace_system)"),
 ):
     """Initiate Google OAuth flow using HMAC-signed token.
 
@@ -223,7 +224,13 @@ async def initiate_oauth(
     }
 
     auth_url = f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
-    logger.info(f"Initiating OAuth for user {user_id[:4]}****, feature: {feature}")
+
+    # Log enough to diagnose redirect issues without leaking secrets
+    client_id_hint = (settings.GOOGLE_OAUTH_CLIENT_ID[:8] + "****") if settings.GOOGLE_OAUTH_CLIENT_ID else "<EMPTY>"
+    logger.info(
+        f"Initiating OAuth for user {user_id[:4]}****, feature: {feature}, "
+        f"redirect_uri={settings.GOOGLE_OAUTH_REDIRECT_URI!r}, client_id={client_id_hint}"
+    )
 
     return RedirectResponse(url=auth_url)
 
@@ -267,7 +274,7 @@ async def oauth_callback(
         )
 
     settings = get_settings()
-    scopes = settings.OAUTH_SCOPES.get(feature, settings.OAUTH_SCOPES["calendar"])
+    scopes = settings.OAUTH_SCOPES.get(feature, settings.OAUTH_SCOPES["google"])
 
     # Exchange code for tokens
     access_token, refresh_token, expires_in, email = await _oauth_manager.exchange_code_for_tokens(
@@ -287,7 +294,26 @@ async def oauth_callback(
 
     logger.info(f"OAuth completed for user {user_id[:4]}****, feature: {feature}, email: {email}")
 
-    service_name = "Google Calendar"
+    # Set up Gmail push watch for features that include Gmail scope
+    if feature in ("google", "workspace_system"):
+        preferred_channel = "slack" if feature == "workspace_system" else "discord"
+        if _session_manager:
+            try:
+                session = await _session_manager.get_session(user_id)
+                if session and session.channel:
+                    preferred_channel = session.channel
+            except Exception:
+                pass
+        try:
+            await register_gmail_watch(user_id, email, feature, preferred_channel)
+        except Exception as e:
+            logger.error(f"Failed to register Gmail watch for {email}: {e}")
+
+    service_name_map = {
+        "google": "Google",
+        "workspace_system": "Google Workspace",
+    }
+    service_name = service_name_map.get(feature, "Google")
     return HTMLResponse(_success_html(email, service_name))
 
 
@@ -295,7 +321,7 @@ async def oauth_callback(
 async def oauth_status(
     request: Request,
     token: str = Query(..., description="HMAC-signed token containing user ID"),
-    feature: str = "calendar",
+    feature: str = "google",
 ):
     """Check OAuth status for a user and feature.
 
@@ -345,7 +371,7 @@ async def oauth_status(
 async def revoke_oauth(
     request: Request,
     token: str = Query(..., description="HMAC-signed token containing user ID"),
-    feature: str = "calendar",
+    feature: str = "google",
 ):
     """Revoke OAuth tokens for a user and feature.
 
