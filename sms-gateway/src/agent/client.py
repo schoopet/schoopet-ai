@@ -1,4 +1,5 @@
 """Vertex AI Agent Engine client wrapper."""
+import asyncio
 import logging
 import time
 from typing import Optional, Union
