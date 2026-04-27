@@ -25,7 +25,7 @@ class SessionManager:
         self,
         firestore_client: firestore.AsyncClient,
         agent_client,  # AgentEngineClient
-        timeout_minutes: int = 10,
+        timeout_minutes: int = 30,
     ):
         """Initialize session manager.
 
@@ -93,7 +93,7 @@ class SessionManager:
 
         Args:
             phone_number: User's phone number in E.164 format.
-            channel: Originating channel (e.g., "sms", "discord") — stored in session state.
+            channel: Originating channel (e.g., "sms", "discord") — stored in agent session state and on the Firestore session doc.
 
         Returns:
             SessionInfo with new session details.
@@ -102,7 +102,7 @@ class SessionManager:
         doc_ref = self._collection.document(doc_id)
 
         logger.info(f"User {phone_number} opted in, creating agent session")
-        state = {}
+        state: dict = {}
         if channel:
             state["channel"] = channel
         agent_session_id = await self._agent_client.create_session(
@@ -110,11 +110,14 @@ class SessionManager:
         )
 
         now = datetime.now(timezone.utc)
-        await doc_ref.update({
+        update_fields = {
             "opted_in": True,
             "personal_agent_session_id": agent_session_id,
             "last_activity": now,
-        })
+        }
+        if channel:
+            update_fields["channel"] = channel
+        await doc_ref.update(update_fields)
 
         return SessionInfo(
             phone_number=phone_number,
@@ -133,6 +136,10 @@ class SessionManager:
         doc_id = normalize_user_id(phone_number)
         doc_ref = self._collection.document(doc_id)
 
+        existing = await self.get_session(phone_number)
+        if existing and existing.personal_agent_session_id:
+            await self._retire_session(phone_number, existing.personal_agent_session_id)
+
         logger.info(f"User {phone_number} opted out")
         await doc_ref.update({
             "opted_in": False,
@@ -140,38 +147,40 @@ class SessionManager:
             "last_activity": datetime.now(timezone.utc),
         })
 
-    async def get_or_create_session(self, phone_number: str, channel: str | None = None) -> SessionInfo:
-        """Get existing session or create a new one (for opted-in users only).
+    async def _retire_session(self, user_id: str, session_id: str) -> None:
+        """Delete a session when it is no longer active.
 
-        Creates a new session if:
-        - No existing session for phone number
+        Memory ingestion is handled inside the agent via ADK callbacks.
+        Session retirement here is cleanup only. Best-effort.
+        """
+        await self._agent_client.delete_session(user_id, session_id)
+
+    async def get_or_create_session(self, phone_number: str, channel: str | None = None) -> SessionInfo:
+        """Get existing session or create a new one.
+
+        Creates a new Agent Engine session if:
+        - No existing session document for the user
         - Existing session has been inactive for more than timeout_minutes
 
+        Does NOT check `opted_in` — callers that need opt-in gating (SMS) must
+        check it themselves via `get_or_create_user()`.
+
         Args:
-            phone_number: User's phone number in E.164 format.
-            channel: Originating channel (e.g., "sms", "discord") — stored in session state.
+            phone_number: User identifier (phone for SMS, snowflake/user_id for other channels).
+            channel: Originating channel (e.g., "sms", "discord") — stored in agent session state and on the Firestore session doc.
 
         Returns:
-            SessionInfo with session details.
+            SessionInfo with `is_new_user` set when the Firestore doc was just created.
         """
         doc_id = normalize_user_id(phone_number)
         doc_ref = self._collection.document(doc_id)
 
         doc = await doc_ref.get()
+        is_new_user = not doc.exists
+        stale_session_id: str | None = None
 
         if doc.exists:
             session_doc = SessionDocument.from_firestore(doc.to_dict())
-
-            # Check if user is opted in
-            if not session_doc.opted_in:
-                return SessionInfo(
-                    phone_number=phone_number,
-                    agent_session_id="",
-                    is_new_session=False,
-                    opted_in=False,
-                    is_new_user=False,
-                )
-
             existing_session_id = session_doc.personal_agent_session_id
 
             # Handle both timezone-aware and naive datetimes from Firestore
@@ -190,7 +199,7 @@ class SessionManager:
                     phone_number=phone_number,
                     agent_session_id=existing_session_id,
                     is_new_session=False,
-                    opted_in=True,
+                    opted_in=session_doc.opted_in,
                     is_new_user=False,
                 )
             else:
@@ -198,10 +207,16 @@ class SessionManager:
                     f"Session expired for {phone_number}, "
                     f"inactive for {time_since_activity.seconds}s"
                 )
+                if existing_session_id:
+                    stale_session_id = existing_session_id
+
+        # Retire the stale session before creating the replacement.
+        if stale_session_id:
+            await self._retire_session(phone_number, stale_session_id)
 
         # Create new Agent Engine session
         logger.info(f"Creating new session for {phone_number}")
-        state = {}
+        state: dict = {}
         if channel:
             state["channel"] = channel
         agent_session_id = await self._agent_client.create_session(
@@ -211,10 +226,13 @@ class SessionManager:
         # Store in Firestore
         now = datetime.now(timezone.utc)
         if doc.exists:
-            await doc_ref.update({
+            update_fields = {
                 "personal_agent_session_id": agent_session_id,
                 "last_activity": now,
-            })
+            }
+            if channel:
+                update_fields["channel"] = channel
+            await doc_ref.update(update_fields)
         else:
             session_doc = SessionDocument(
                 phone_number=phone_number,
@@ -223,6 +241,7 @@ class SessionManager:
                 message_count=0,
                 opted_in=True,
                 personal_agent_session_id=agent_session_id,
+                channel=channel or "sms",
             )
             await doc_ref.set(session_doc.to_firestore())
 
@@ -231,7 +250,7 @@ class SessionManager:
             agent_session_id=agent_session_id,
             is_new_session=True,
             opted_in=True,
-            is_new_user=False,
+            is_new_user=is_new_user,
         )
 
     async def update_last_activity(self, phone_number: str, channel: str = "sms", slack_team_id: str = "") -> None:

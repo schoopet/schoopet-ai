@@ -91,28 +91,19 @@ async def process_telegram_message(
 ) -> None:
     """Process incoming Telegram message in the background.
 
-    Simplified flow (no opt-in required for Telegram):
-    1. /start -> auto opt-in + welcome message
-    2. All other messages -> forward to agent (auto opt-in on first message)
+    Flow:
+    1. /start -> create session + welcome message.
+    2. All other messages -> rate limit, then forward to agent.
     """
     start_time = time.time()
 
     try:
-        # Get or create user record
-        session_info = await _session_manager.get_or_create_user(user_id)
-
         # Handle /start command
         if message == "/start":
-            if not session_info.opted_in:
-                await _session_manager.set_opted_in(user_id, channel="telegram")
+            await _session_manager.get_or_create_session(user_id, channel="telegram")
             await _telegram_sender.send(chat_id, WELCOME_MSG)
             await _session_manager.update_last_activity(user_id, channel="telegram")
             return
-
-        # Auto opt-in on first message (no explicit consent needed for Telegram)
-        if session_info.is_new_user or not session_info.opted_in:
-            logger.info(f"Auto opt-in for Telegram user {user_id}")
-            await _session_manager.set_opted_in(user_id, channel="telegram")
 
         # Check rate limit
         if _rate_limiter:
@@ -122,8 +113,10 @@ async def process_telegram_message(
                 await _telegram_sender.send(chat_id, RATE_LIMIT_MSG)
                 return
 
-        # Get or create agent session
+        # Get or create agent session (welcome message on first contact)
         session_info = await _session_manager.get_or_create_session(user_id, channel="telegram")
+        if session_info.is_new_user:
+            await _telegram_sender.send(chat_id, WELCOME_MSG)
 
         logger.info(
             f"Forwarding to agent for Telegram user {user_id}: "

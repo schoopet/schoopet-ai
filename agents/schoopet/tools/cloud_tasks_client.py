@@ -17,6 +17,18 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def _timestamp_to_datetime(value):
+    """Convert a protobuf timestamp-like object to datetime when present."""
+    if not value:
+        return None
+
+    to_datetime = getattr(value, "ToDatetime", None)
+    if callable(to_datetime):
+        return to_datetime()
+
+    return None
+
+
 class CloudTasksClient:
     """Client for creating and managing Cloud Tasks for async agent execution.
 
@@ -313,14 +325,55 @@ class CloudTasksClient:
             task = client.get_task(name=task_name)
             return {
                 "name": task.name,
-                "schedule_time": task.schedule_time.ToDatetime() if task.schedule_time else None,
-                "create_time": task.create_time.ToDatetime() if task.create_time else None,
-                "dispatch_count": task.dispatch_count,
-                "response_count": task.response_count,
+                "schedule_time": _timestamp_to_datetime(getattr(task, "schedule_time", None)),
+                "create_time": _timestamp_to_datetime(getattr(task, "create_time", None)),
+                "dispatch_count": getattr(task, "dispatch_count", 0),
+                "response_count": getattr(task, "response_count", 0),
+                "last_attempt": self._format_attempt(getattr(task, "last_attempt", None)),
+                "first_attempt": self._format_attempt(getattr(task, "first_attempt", None)),
             }
         except Exception as e:
             logger.warning(f"Could not get Cloud Task {task_name}: {e}")
             return None
+
+    def list_tasks(self) -> list[dict]:
+        """List Cloud Tasks in the configured queue."""
+        client = self._get_client()
+        if not client or not self.queue_path:
+            return []
+
+        try:
+            tasks = client.list_tasks(parent=self.queue_path)
+            return [
+                {
+                    "name": task.name,
+                    "schedule_time": _timestamp_to_datetime(getattr(task, "schedule_time", None)),
+                    "create_time": _timestamp_to_datetime(getattr(task, "create_time", None)),
+                    "dispatch_count": getattr(task, "dispatch_count", 0),
+                    "response_count": getattr(task, "response_count", 0),
+                    "last_attempt": self._format_attempt(getattr(task, "last_attempt", None)),
+                }
+                for task in tasks
+            ]
+        except Exception as e:
+            logger.warning(f"Could not list Cloud Tasks: {e}")
+            return []
+
+    def _format_attempt(self, attempt) -> Optional[dict]:
+        """Normalize Cloud Task attempt metadata."""
+        if not attempt:
+            return None
+
+        dispatch_time = _timestamp_to_datetime(getattr(attempt, "dispatch_time", None))
+        response_time = _timestamp_to_datetime(getattr(attempt, "response_time", None))
+        response_status = getattr(attempt, "response_status", None)
+
+        return {
+            "dispatch_time": dispatch_time,
+            "response_time": response_time,
+            "http_status_code": getattr(response_status, "code", None),
+            "http_status_message": getattr(response_status, "message", None),
+        }
 
 
 # Module-level singleton for convenience

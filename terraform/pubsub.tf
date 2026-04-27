@@ -5,6 +5,15 @@ resource "google_pubsub_topic" "email_notifications" {
   depends_on = [google_project_service.apis["pubsub.googleapis.com"]]
 }
 
+# Gmail's managed publisher identity must be able to publish mailbox change
+# notifications to the topic, or users.watch returns 403 Forbidden.
+resource "google_pubsub_topic_iam_member" "gmail_api_publish" {
+  project = var.project_id
+  topic   = google_pubsub_topic.email_notifications.name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:gmail-api-push@system.gserviceaccount.com"
+}
+
 # ── Gmail push subscription ───────────────────────────────────────────────────
 # Pub/Sub delivers Gmail notifications to the SMS gateway's /webhook/email
 # endpoint. A dedicated SA is used so the handler can verify the OIDC token

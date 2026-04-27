@@ -245,8 +245,22 @@ class OAuthClient:
 
         if self.is_token_expired(token_data):
             refresh_token = self._get_refresh_token(user_id, feature)
-            if refresh_token:
-                access_token = self._refresh_access_token(user_id, refresh_token, feature)
+            if not refresh_token:
+                logging.warning(
+                    "OAuth token expired for %s (%s) but no refresh token is stored",
+                    f"{user_id[:4]}****",
+                    feature,
+                )
+                return None
+
+            access_token = self._refresh_access_token(user_id, refresh_token, feature)
+            if not access_token:
+                logging.warning(
+                    "OAuth token refresh failed for %s (%s)",
+                    f"{user_id[:4]}****",
+                    feature,
+                )
+                return None
 
         return access_token
 

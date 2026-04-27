@@ -1,163 +1,104 @@
-"""Unit tests for MemoryTool."""
+"""Unit tests for memory tool functions."""
+
 import pytest
-from unittest.mock import MagicMock, patch
-from agents.schoopet.memory_tool import MemoryTool
+from unittest.mock import AsyncMock, MagicMock
+
+from agents.schoopet.memory_tool import (
+    save_memory,
+    save_multiple_memories,
+    save_session_to_memory,
+)
+from google.adk.agents.context import Context
 from google.adk.tools import ToolContext
 
-# Sample data
-PROJECT_ID = "test-project"
-LOCATION = "us-central1"
-AGENT_ENGINE_ID = "test-engine-id"
+
 USER_ID = "+14155551234"
 MEMORY_FACT = "Test fact"
 
-@pytest.fixture
-def mock_env():
-    """Mock environment variables."""
-    with patch("os.getenv") as mock_getenv:
-        def getenv_side_effect(key, default=None):
-            env_vars = {
-                "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
-                "GOOGLE_CLOUD_LOCATION": LOCATION,
-                "GOOGLE_CLOUD_AGENT_ENGINE_ID": AGENT_ENGINE_ID,
-            }
-            return env_vars.get(key, default)
-        
-        mock_getenv.side_effect = getenv_side_effect
-        yield mock_getenv
-
-@pytest.fixture
-def memory_tool(mock_env):
-    """Create a MemoryTool instance with mocked client."""
-    with patch("vertexai.Client") as mock_client_cls:
-        tool = MemoryTool()
-        # Trigger lazy init
-        _ = tool.client
-        
-        # Inject mock
-        tool._client = mock_client_cls.return_value
-        
-        yield tool
 
 @pytest.fixture
 def tool_context():
-    """Create a mock ToolContext."""
     context = MagicMock(spec=ToolContext)
     context.user_id = USER_ID
+    context.add_memory = AsyncMock()
     return context
 
-class TestMemoryTool:
-    """Tests for MemoryTool class."""
 
-    def test_initialization(self, memory_tool):
-        """Should initialize with correct configuration."""
-        assert memory_tool.project_id == PROJECT_ID
-        assert memory_tool.location == LOCATION
-        assert memory_tool.agent_engine_id == AGENT_ENGINE_ID
-        assert memory_tool.agent_engine_name == f"projects/{PROJECT_ID}/locations/{LOCATION}/reasoningEngines/{AGENT_ENGINE_ID}"
+class TestMemoryTools:
+    @pytest.mark.asyncio
+    async def test_save_memory_success(self, tool_context):
+        result = await save_memory(MEMORY_FACT, tool_context)
 
-    def test_initialization_missing_env(self):
-        """Should warn if env vars missing."""
-        with patch("os.getenv", return_value=None):
-            tool = MemoryTool()
-            assert tool.client is None
-            assert tool.agent_engine_name is None
-
-    def test_save_memory_success(self, memory_tool, tool_context):
-        """Should save memory successfully."""
-        # Mock API response
-        mock_memories = memory_tool.client.agent_engines.memories
-        
-        result = memory_tool.save_memory(MEMORY_FACT, tool_context)
-        
         assert "Saved" in result
-        mock_memories.generate.assert_called_once_with(
-            name=memory_tool.agent_engine_name,
-            direct_memories_source={"direct_memories": [{"fact": MEMORY_FACT}]},
-            scope={"user_id": USER_ID}
-        )
+        tool_context.add_memory.assert_awaited_once()
+        call = tool_context.add_memory.await_args.kwargs
+        assert call["custom_metadata"] == {"enable_consolidation": True}
+        assert len(call["memories"]) == 1
+        assert call["memories"][0].author == "agent"
+        assert call["memories"][0].content.parts[0].text == MEMORY_FACT
 
-    def test_save_memory_no_context(self, memory_tool):
-        """Should fail if tool context is missing."""
-        result = memory_tool.save_memory(MEMORY_FACT, None)
+    @pytest.mark.asyncio
+    async def test_save_memory_no_context(self):
+        result = await save_memory(MEMORY_FACT, None)
+
         assert "ERROR: Cannot save memory" in result
-        memory_tool.client.agent_engines.memories.generate.assert_not_called()
 
-    def test_save_memory_no_user_id(self, memory_tool):
-        """Should fail if user_id is missing from context."""
+    @pytest.mark.asyncio
+    async def test_save_memory_no_user_id(self):
         context = MagicMock(spec=ToolContext)
         context.user_id = None
-        
-        result = memory_tool.save_memory(MEMORY_FACT, context)
+        context.add_memory = AsyncMock()
+
+        result = await save_memory(MEMORY_FACT, context)
+
         assert "ERROR: Cannot save memory" in result
-        memory_tool.client.agent_engines.memories.generate.assert_not_called()
+        context.add_memory.assert_not_awaited()
 
-    def test_save_multiple_memories_list(self, memory_tool, tool_context):
-        """Should save list of memories."""
-        facts = ["Fact 1", "Fact 2"]
-        mock_memories = memory_tool.client.agent_engines.memories
-        
-        result = memory_tool.save_multiple_memories(facts, tool_context)
-        
+    @pytest.mark.asyncio
+    async def test_save_multiple_memories_list(self, tool_context):
+        result = await save_multiple_memories(["Fact 1", "Fact 2"], tool_context)
+
         assert "Saved 2 memories" in result
-        mock_memories.generate.assert_called_once_with(
-            name=memory_tool.agent_engine_name,
-            direct_memories_source={"direct_memories": [{"fact": "Fact 1"}, {"fact": "Fact 2"}]},
-            scope={"user_id": USER_ID}
-        )
+        call = tool_context.add_memory.await_args.kwargs
+        assert [m.content.parts[0].text for m in call["memories"]] == ["Fact 1", "Fact 2"]
+        assert call["custom_metadata"] == {"enable_consolidation": True}
 
-    def test_save_multiple_memories_string(self, memory_tool, tool_context):
-        """Should split comma-separated string."""
-        facts = "Fact 1, Fact 2 "
-        mock_memories = memory_tool.client.agent_engines.memories
-        
-        result = memory_tool.save_multiple_memories(facts, tool_context)
-        
+    @pytest.mark.asyncio
+    async def test_save_multiple_memories_string(self, tool_context):
+        result = await save_multiple_memories("Fact 1, Fact 2 ", tool_context)
+
         assert "Saved 2 memories" in result
-        mock_memories.generate.assert_called_once_with(
-            name=memory_tool.agent_engine_name,
-            direct_memories_source={"direct_memories": [{"fact": "Fact 1"}, {"fact": "Fact 2"}]},
-            scope={"user_id": USER_ID}
-        )
+        call = tool_context.add_memory.await_args.kwargs
+        assert [m.content.parts[0].text for m in call["memories"]] == ["Fact 1", "Fact 2"]
 
-    def test_retrieve_memories_success(self, memory_tool, tool_context):
-        """Should retrieve and format memories."""
-        # Mock search results
-        mock_result1 = MagicMock()
-        mock_result1.memory.fact = "Fact 1"
-        mock_result1.distance = 0.1
-        
-        mock_result2 = MagicMock()
-        mock_result2.memory.fact = "Fact 2"
-        mock_result2.distance = 0.2
-        
-        mock_memories = memory_tool.client.agent_engines.memories
-        mock_memories.retrieve.return_value = [mock_result1, mock_result2]
-        
-        result = memory_tool.retrieve_memories("query", tool_context=tool_context)
-        
-        assert "Found 2 relevant memories" in result
-        assert "1. Fact 1 (similarity: 0.1)" in result
-        assert "2. Fact 2 (similarity: 0.2)" in result
-        
-        mock_memories.retrieve.assert_called_once_with(
-            name=memory_tool.agent_engine_name,
-            scope={"user_id": USER_ID},
-            similarity_search_params={"search_query": "query", "top_k": 5}
-        )
+    @pytest.mark.asyncio
+    async def test_save_multiple_memories_ignores_blank_items(self, tool_context):
+        result = await save_multiple_memories(["Fact 1", " ", ""], tool_context)
 
-    def test_retrieve_memories_empty(self, memory_tool, tool_context):
-        """Should handle empty results."""
-        memory_tool.client.agent_engines.memories.retrieve.return_value = []
-        
-        result = memory_tool.retrieve_memories("query", tool_context=tool_context)
-        
-        assert "No memories found" in result
+        assert "Saved 1 memories" in result
+        call = tool_context.add_memory.await_args.kwargs
+        assert [m.content.parts[0].text for m in call["memories"]] == ["Fact 1"]
 
-    def test_retrieve_memories_error(self, memory_tool, tool_context):
-        """Should handle API errors."""
-        memory_tool.client.agent_engines.memories.retrieve.side_effect = Exception("API Error")
-        
-        result = memory_tool.retrieve_memories("query", tool_context=tool_context)
-        
-        assert "Error retrieving memories: API Error" in result
+    @pytest.mark.asyncio
+    async def test_save_memory_error(self, tool_context):
+        tool_context.add_memory.side_effect = Exception("boom")
+
+        result = await save_memory(MEMORY_FACT, tool_context)
+
+        assert result == "Error saving memory: boom"
+
+    @pytest.mark.asyncio
+    async def test_save_session_to_memory(self):
+        context = MagicMock(spec=Context)
+        context.add_session_to_memory = AsyncMock()
+
+        await save_session_to_memory(context)
+
+        context.add_session_to_memory.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_save_session_to_memory_swallows_errors(self):
+        context = MagicMock(spec=Context)
+        context.add_session_to_memory = AsyncMock(side_effect=Exception("boom"))
+
+        await save_session_to_memory(context)

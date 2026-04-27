@@ -10,7 +10,9 @@ locals {
   ]
 
   sms_gateway_roles = [
-    "roles/secretmanager.secretAccessor",
+    # OAuth refresh tokens are created per user at runtime, then updated/read/deleted.
+    # The gateway needs secret create/version/write/delete permissions, not just read.
+    "roles/secretmanager.admin",
     "roles/datastore.user", # Firestore: session storage + OAuth token cache
   ]
 }
@@ -68,4 +70,3 @@ resource "google_project_iam_member" "editors" {
   role    = "roles/editor"
   member  = each.value
 }
-

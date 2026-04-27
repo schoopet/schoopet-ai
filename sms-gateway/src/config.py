@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     TWILIO_WHATSAPP_NUMBER: str = ""  # Optional, defaults to TWILIO_PHONE_NUMBER
 
     # Service Configuration
-    SESSION_TIMEOUT_MINUTES: int = 10
+    SESSION_TIMEOUT_MINUTES: int = 30
     AGENT_TIMEOUT_SECONDS: int = 300
 
     # Feature Flags

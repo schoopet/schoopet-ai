@@ -224,7 +224,15 @@ class OAuthManager:
             # Key format must match what agent expects: {normalized}-{feature}
             if refresh_token:
                 secret_key = f"{normalized}-{feature}"
-                await self._secret_manager.store_refresh_token(secret_key, refresh_token)
+                stored = await self._secret_manager.store_refresh_token(secret_key, refresh_token)
+                if not stored:
+                    await doc_ref.delete()
+                    logger.error(
+                        "Refresh token storage failed; rolled back Firestore token for %s (%s)",
+                        f"{user_id[:4]}****",
+                        feature,
+                    )
+                    return False
 
             logger.info(f"Stored tokens for user {user_id[:4]}****, feature: {feature}, email: {email}")
             return True

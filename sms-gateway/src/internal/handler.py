@@ -193,35 +193,54 @@ async def notify_user(
         user_session = await _session_manager.get_user_session(payload.user_id)
 
         session_channel = user_session.channel if user_session else payload.channel
+        logger.info(
+            f"notify_user session lookup: user_id={payload.user_id}, "
+            f"session_found={user_session is not None}, "
+            f"session_channel={session_channel!r}, payload_channel={payload.channel!r}, "
+            f"agent_session_id={getattr(user_session, 'agent_session_id', None)!r}"
+        )
 
         if user_session and _session_manager.is_session_active(user_session) and _agent_client:
-            # User has active session - send via root agent for conversational delivery
-            internal_message = f"INTERNAL_TASK_COMPLETE: {payload.message}"
-
             agent_response = await _agent_client.send_message(
                 user_id=payload.user_id,
                 session_id=user_session.agent_session_id,
-                message=internal_message,
+                message=f"INTERNAL_TASK_COMPLETE: {payload.message}",
             )
-            logger.info(f"Agent response for task notification: {agent_response[:100]}...")
+            response_len = len(agent_response) if agent_response else 0
+            logger.info(
+                f"Agent response for task notification: len={response_len}, "
+                f"preview={(agent_response or '')[:100]!r}"
+            )
 
             if agent_response:
                 from ..channel import MessageChannel
-                if session_channel == "discord" and _discord_sender:
-                    await _discord_sender.send(payload.user_id, agent_response)
-                elif session_channel == "telegram" and _telegram_sender:
-                    await _telegram_sender.send(payload.user_id, agent_response)
-                elif session_channel == "slack" and _slack_sender:
-                    await _slack_sender.send(payload.user_id, agent_response)
-                elif _sms_sender:
-                    channel = MessageChannel.WHATSAPP if session_channel == "whatsapp" else MessageChannel.SMS
-                    await _sms_sender.send(
-                        to_number=payload.user_id,
-                        body=agent_response,
-                        channel=channel,
+                try:
+                    if session_channel == "discord" and _discord_sender:
+                        await _discord_sender.send(payload.user_id, agent_response)
+                    elif session_channel == "telegram" and _telegram_sender:
+                        await _telegram_sender.send(payload.user_id, agent_response)
+                    elif session_channel == "slack" and _slack_sender:
+                        await _slack_sender.send(payload.user_id, agent_response)
+                    elif _sms_sender:
+                        channel = MessageChannel.WHATSAPP if session_channel == "whatsapp" else MessageChannel.SMS
+                        await _sms_sender.send(
+                            to_number=payload.user_id,
+                            body=agent_response,
+                            channel=channel,
+                        )
+                except Exception as send_err:
+                    logger.exception(
+                        f"Sender failed for channel={session_channel!r}, "
+                        f"user_id={payload.user_id}: {send_err}"
                     )
+                    raise
                 logger.info(f"Notification sent via {session_channel} after agent processing")
                 await _mark_task_notified(payload.task_id)
+            else:
+                logger.warning(
+                    f"Agent returned empty response for task {payload.task_id}; "
+                    f"skipping send and NOT marking task as notified"
+                )
 
             return InternalResponse(
                 status="notified_via_session",
@@ -230,19 +249,26 @@ async def notify_user(
 
         # No active session - send directly
         from ..channel import MessageChannel
-        if payload.channel == "discord" and _discord_sender:
-            await _discord_sender.send(payload.user_id, payload.message)
-        elif payload.channel == "telegram" and _telegram_sender:
-            await _telegram_sender.send(payload.user_id, payload.message)
-        elif payload.channel == "slack" and _slack_sender:
-            await _slack_sender.send(payload.user_id, payload.message)
-        elif _sms_sender:
-            channel = MessageChannel.WHATSAPP if payload.channel == "whatsapp" else MessageChannel.SMS
-            await _sms_sender.send(
-                to_number=payload.user_id,
-                body=payload.message,
-                channel=channel,
+        try:
+            if payload.channel == "discord" and _discord_sender:
+                await _discord_sender.send(payload.user_id, payload.message)
+            elif payload.channel == "telegram" and _telegram_sender:
+                await _telegram_sender.send(payload.user_id, payload.message)
+            elif payload.channel == "slack" and _slack_sender:
+                await _slack_sender.send(payload.user_id, payload.message)
+            elif _sms_sender:
+                channel = MessageChannel.WHATSAPP if payload.channel == "whatsapp" else MessageChannel.SMS
+                await _sms_sender.send(
+                    to_number=payload.user_id,
+                    body=payload.message,
+                    channel=channel,
+                )
+        except Exception as send_err:
+            logger.exception(
+                f"Direct sender failed for channel={payload.channel!r}, "
+                f"user_id={payload.user_id}: {send_err}"
             )
+            raise
 
         logger.info(f"Notification sent directly via {payload.channel}")
         await _mark_task_notified(payload.task_id)

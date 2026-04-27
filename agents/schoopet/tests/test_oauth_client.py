@@ -116,6 +116,22 @@ class TestOAuthClient:
             assert token == "new-token"
             oauth_client._refresh_access_token.assert_called_with(PHONE_NUMBER, REFRESH_TOKEN, "calendar")
 
+    def test_get_valid_access_token_returns_none_when_expired_without_refresh_token(self, oauth_client):
+        """Should not return an expired token when refresh credentials are missing."""
+        token_data = {
+            "access_token": "expired-token",
+            "expires_at": datetime.now(timezone.utc) - timedelta(minutes=5)
+        }
+
+        with patch.object(oauth_client, "get_token_data", return_value=token_data), \
+             patch.object(oauth_client, "_get_refresh_token", return_value=None), \
+             patch.object(oauth_client, "_refresh_access_token") as mock_refresh:
+
+            token = oauth_client.get_valid_access_token(PHONE_NUMBER, "calendar")
+
+        assert token is None
+        mock_refresh.assert_not_called()
+
     def test_is_token_expired(self, oauth_client):
         """Should correctly identify expired tokens."""
         now = datetime.now(timezone.utc)

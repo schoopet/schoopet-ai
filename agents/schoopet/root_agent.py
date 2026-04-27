@@ -1,11 +1,13 @@
 import os
 
 from vertexai.agent_engines.templates.adk import AdkApp
-from .memory_tool import MemoryTool
+from .memory_tool import save_memory, save_multiple_memories, save_session_to_memory
 from .calendar_tool import CalendarTool
 from .preferences_tool import PreferencesTool
+from .time_tool import TimeTool
+from .task_debug_tool import TaskDebugTool
 from .email_tool import EmailTool
-from .drive_sheets_tool import DriveTool, SheetsTool
+from .drive_sheets_tool import DocsTool, DriveTool, SheetsTool
 from .model_callbacks import before_model_modifier
 from .tools.async_task_tool import AsyncTaskTool
 from .structured_notes_agent import create_structured_notes_agent
@@ -14,6 +16,7 @@ from .code_executor_agent import create_code_executor_agent
 from google.adk.agents.llm_agent import LlmAgent
 from .global_gemini import GlobalGemini
 from google.adk.tools.function_tool import FunctionTool
+from google.adk.tools.load_memory_tool import LoadMemoryTool
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from google.adk.tools.agent_tool import AgentTool
 
@@ -40,15 +43,20 @@ def _personal_prompt() -> str:
 
         "## Memory Tools\n\n"
 
+        "**Built-in memory reads:**\n"
+        "- `preload_memory` runs automatically before each model turn and injects relevant prior conversation context\n"
+        "- `load_memory(query)` lets you explicitly search memory when the automatic preload is not enough\n"
+        "Treat returned memory as prior user context, not as new information to surface unprompted.\n\n"
+
         "**Saving:**\n"
         "- save_memory(fact): Save a single important fact\n"
         "- save_multiple_memories(facts): Save multiple facts at once\n"
         "Use when the user asks you to remember something or when information is clearly worth keeping.\n\n"
 
         "**Retrieving:**\n"
-        "- retrieve_memories(search_query, top_k): Search stored memories by similarity\n"
+        "- load_memory(query): Search stored memories using ADK's built-in memory support\n"
         "Use when:\n"
-        "  • You need more context than what's automatically loaded\n"
+        "  • The automatic memory preload doesn't cover what you need\n"
         "  • User asks 'what do I know about...' or 'remind me about...'\n"
         "  • Making connections between past and present information\n\n"
 
@@ -64,6 +72,10 @@ def _personal_prompt() -> str:
         "## User Preferences\n"
         "- set_timezone(timezone_str): Save the user's timezone (e.g., 'America/Los_Angeles')\n"
         "- get_timezone(): Retrieve the saved timezone\n"
+        "- get_current_time(timezone_str): Get the current time, using the saved timezone if omitted\n"
+        "- convert_time(source_time, source_tz, target_tz): Convert between timezones\n"
+        "- parse_natural_datetime(text, user_timezone): Parse reminder-style datetime text into exact timestamps\n"
+        "- next_occurrence(rule, user_timezone): Compute the next time a recurring rule will fire\n"
         "Always call get_timezone() before any calendar operation. If unset, ask the user and save it.\n\n"
 
         "## Google Calendar\n"
@@ -82,14 +94,33 @@ def _personal_prompt() -> str:
         "Drive and Sheets share one Google authorization. "
         "If not connected, the tool returns a single auth link covering both.\n\n"
 
+        "## Google Docs\n"
+        "- create_google_doc(title, content, folder_id)\n"
+        "- read_google_doc(document_id)\n"
+        "- append_to_google_doc(document_id, content)\n"
+        "- replace_text_in_google_doc(document_id, search_text, replace_text)\n"
+        "- get_docs_status()\n\n"
+        "Use for native Google Docs documents when you need editable prose, notes, drafts, or reports. "
+        "Prefer Docs over plain text Drive files when the user wants a Google Doc.\n\n"
+
         "## Google Sheets\n"
+        "- create_spreadsheet(title, sheet_tab, headers)\n"
+        "- add_sheet_tab(sheet_id, sheet_tab, headers)\n"
         "- read_sheet(sheet_id, sheet_tab, max_rows)\n"
+        "- get_sheet_schema(sheet_id, sheet_tab)\n"
+        "- read_sheet_records(sheet_id, sheet_tab, max_rows)\n"
+        "- ensure_sheet_headers(sheet_id, headers, sheet_tab)\n"
+        "- append_record_to_sheet(record, sheet_id, sheet_tab)\n"
+        "- find_sheet_rows(sheet_id, match_column, match_value, sheet_tab, max_rows)\n"
+        "- update_sheet_row(sheet_id, row, updates, sheet_tab)\n"
         "- append_row_to_sheet(values, sheet_id, sheet_tab)\n"
         "- add_sheet_column(sheet_id, column_header, sheet_tab)\n"
         "- update_sheet_cell(sheet_id, row, column, value, sheet_tab)\n"
         "- get_sheets_status()\n\n"
-        "Workflow: call read_sheet first to verify column layout before appending. "
-        "Add missing columns with add_sheet_column before appending rows.\n\n"
+        "Preferred workflow: if no spreadsheet exists, call create_spreadsheet. "
+        "If you need another tab, call add_sheet_tab. Then call get_sheet_schema or "
+        "read_sheet_records, then ensure_sheet_headers, then append_record_to_sheet "
+        "or update_sheet_row. Use the lower-level cell tools only when you need exact cell control.\n\n"
 
         "## Async Tasks\n"
         "Delegate long-running or scheduled work to background workers.\n"
@@ -100,7 +131,10 @@ def _personal_prompt() -> str:
         "- create_async_task(task_type, instruction, context, schedule_delay_minutes, schedule_at)\n"
         "- check_task_status(task_id)\n"
         "- cancel_task(task_id)\n"
-        "- list_pending_tasks()\n\n"
+        "- list_pending_tasks()\n"
+        "- get_cloud_task_status(task_id, cloud_task_name)\n"
+        "- list_scheduled_tasks(limit)\n"
+        "- debug_task(task_id)\n\n"
 
         "**Task types:**\n"
         "- 'research': Multi-step research requiring searches and synthesis\n"
@@ -197,17 +231,19 @@ def create_agent(
     location: str = None
 ):
     """Creates the Schoopet agent instance."""
-    memory_tool = MemoryTool()
     calendar_tool = CalendarTool()
     preferences_tool = PreferencesTool()
+    time_tool = TimeTool()
+    task_debug_tool = TaskDebugTool()
     drive_tool = DriveTool()
+    docs_tool = DocsTool()
     sheets_tool = SheetsTool()
     async_task_tool = AsyncTaskTool()
 
     # Wrap tools using FunctionTool
-    save_memory_tool = FunctionTool(func=memory_tool.save_memory)
-    save_multiple_memories_tool = FunctionTool(func=memory_tool.save_multiple_memories)
-    retrieve_memories_tool = FunctionTool(func=memory_tool.retrieve_memories)
+    save_memory_tool = FunctionTool(func=save_memory)
+    save_multiple_memories_tool = FunctionTool(func=save_multiple_memories)
+    load_memory_tool = LoadMemoryTool()
     preload_memory_tool = PreloadMemoryTool()
 
     # Async task tools
@@ -231,7 +267,22 @@ def create_agent(
     list_drive_files_tool = FunctionTool(func=drive_tool.list_drive_files)
     drive_status_tool = FunctionTool(func=drive_tool.get_drive_status)
 
+    # Docs tools
+    create_google_doc_tool = FunctionTool(func=docs_tool.create_google_doc)
+    read_google_doc_tool = FunctionTool(func=docs_tool.read_google_doc)
+    append_to_google_doc_tool = FunctionTool(func=docs_tool.append_to_google_doc)
+    replace_text_in_google_doc_tool = FunctionTool(func=docs_tool.replace_text_in_google_doc)
+    docs_status_tool = FunctionTool(func=docs_tool.get_docs_status)
+
     # Sheets tools
+    create_spreadsheet_tool = FunctionTool(func=sheets_tool.create_spreadsheet)
+    add_sheet_tab_tool = FunctionTool(func=sheets_tool.add_sheet_tab)
+    sheet_schema_tool = FunctionTool(func=sheets_tool.get_sheet_schema)
+    read_sheet_records_tool = FunctionTool(func=sheets_tool.read_sheet_records)
+    ensure_sheet_headers_tool = FunctionTool(func=sheets_tool.ensure_sheet_headers)
+    append_record_to_sheet_tool = FunctionTool(func=sheets_tool.append_record_to_sheet)
+    find_sheet_rows_tool = FunctionTool(func=sheets_tool.find_sheet_rows)
+    update_sheet_row_tool = FunctionTool(func=sheets_tool.update_sheet_row)
     append_to_sheet_tool = FunctionTool(func=sheets_tool.append_row_to_sheet)
     read_sheet_tool = FunctionTool(func=sheets_tool.read_sheet)
     add_column_tool = FunctionTool(func=sheets_tool.add_sheet_column)
@@ -241,6 +292,15 @@ def create_agent(
     # Preferences tools
     set_timezone_tool = FunctionTool(func=preferences_tool.set_timezone)
     get_timezone_tool = FunctionTool(func=preferences_tool.get_timezone)
+    current_time_tool = FunctionTool(func=time_tool.get_current_time)
+    convert_time_tool = FunctionTool(func=time_tool.convert_time)
+    parse_natural_datetime_tool = FunctionTool(func=time_tool.parse_natural_datetime)
+    next_occurrence_tool = FunctionTool(func=time_tool.next_occurrence)
+
+    # Task observability tools
+    get_cloud_task_status_tool = FunctionTool(func=task_debug_tool.get_cloud_task_status)
+    list_scheduled_tasks_tool = FunctionTool(func=task_debug_tool.list_scheduled_tasks)
+    debug_task_tool = FunctionTool(func=task_debug_tool.debug_task)
 
     # Initialize Search Subagent (handles Google Search)
     search_agent = create_search_agent(
@@ -261,7 +321,7 @@ def create_agent(
     tools = [
         save_memory_tool,
         save_multiple_memories_tool,
-        retrieve_memories_tool,
+        load_memory_tool,
         preload_memory_tool,
         search_tool,
         code_executor_tool,
@@ -274,7 +334,21 @@ def create_agent(
         save_attachment_to_drive_tool,
         list_drive_files_tool,
         drive_status_tool,
+        # Docs tools
+        create_google_doc_tool,
+        read_google_doc_tool,
+        append_to_google_doc_tool,
+        replace_text_in_google_doc_tool,
+        docs_status_tool,
         # Sheets tools
+        create_spreadsheet_tool,
+        add_sheet_tab_tool,
+        sheet_schema_tool,
+        read_sheet_records_tool,
+        ensure_sheet_headers_tool,
+        append_record_to_sheet_tool,
+        find_sheet_rows_tool,
+        update_sheet_row_tool,
         append_to_sheet_tool,
         read_sheet_tool,
         add_column_tool,
@@ -282,11 +356,18 @@ def create_agent(
         sheets_status_tool,
         set_timezone_tool,
         get_timezone_tool,
+        current_time_tool,
+        convert_time_tool,
+        parse_natural_datetime_tool,
+        next_occurrence_tool,
         # Async task tools
         create_async_task,
         check_task_status,
         cancel_task,
         list_pending_tasks,
+        get_cloud_task_status_tool,
+        list_scheduled_tasks_tool,
+        debug_task_tool,
         review_task_result,
         approve_task,
         request_correction,
@@ -321,6 +402,7 @@ def create_agent(
         sub_agents=[structured_notes_agent],
         instruction=_personal_prompt(),
         before_model_callback=before_model_modifier,
+        after_agent_callback=save_session_to_memory,
     )
     return agent
 

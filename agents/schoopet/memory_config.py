@@ -80,6 +80,17 @@ COMMITMENTS & INTENTIONS: Promises made, gifts to buy, follow-ups needed, things
 CONTEXT & CONNECTIONS: Why someone likes/dislikes something, how people know each other, relevant history, social dynamics, past conflicts or positive interactions.
 
 Always capture WHO, WHAT, WHEN, WHY, and HOW information relates to other stored facts. This memory supports someone who may have difficulty recalling social details."""
+                    }},
+                    {"custom_memory_topic": {
+                        "label": "conversation_summaries",
+                        "description": """Narrative summaries of prior conversations so the assistant can pick up where it left off when the user returns after a gap.
+
+For each meaningful conversation produce ONE summary fact that captures:
+- WHEN: rough timeframe (today, yesterday morning, last week)
+- TOPIC: what the conversation was about
+- OUTCOME / OPEN THREAD: decisions made, tasks created or scheduled, questions left unanswered, follow-ups the user is expecting
+
+Format the summary as a single dense sentence or two — enough that re-reading it makes the prior session feel continuous. Do NOT generate summaries for trivial exchanges (greetings only, single-question lookups with no follow-up). Do NOT duplicate facts already captured by the other topics — this is for narrative continuity, not atomic facts."""
                     }}
                 ],
                 "generate_memories_examples": [

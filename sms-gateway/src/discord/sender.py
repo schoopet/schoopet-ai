@@ -76,13 +76,19 @@ class DiscordSender:
         if not text:
             text = "(empty response)"
 
-        # Open (or retrieve) the DM channel
+        logger.info(f"Discord DM open: opening channel for user {discord_user_id}")
         dm_response = await self._client.post(
             f"{DISCORD_API_BASE}/users/@me/channels",
             json={"recipient_id": discord_user_id},
         )
-        dm_response.raise_for_status()
+        if dm_response.status_code >= 400:
+            logger.error(
+                f"Discord DM open failed for user {discord_user_id}: "
+                f"status={dm_response.status_code}, body={dm_response.text!r}"
+            )
+            dm_response.raise_for_status()
         channel_id = dm_response.json()["id"]
+        logger.info(f"Discord DM open ok: channel_id={channel_id} for user {discord_user_id}")
 
         chunks = _split_message(text)
         for i, chunk in enumerate(chunks, start=1):
@@ -90,7 +96,13 @@ class DiscordSender:
                 f"{DISCORD_API_BASE}/channels/{channel_id}/messages",
                 json={"content": chunk},
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                logger.error(
+                    f"Discord DM post failed for user {discord_user_id} "
+                    f"channel {channel_id} part {i}/{len(chunks)}: "
+                    f"status={response.status_code}, body={response.text!r}"
+                )
+                response.raise_for_status()
             logger.info(
                 f"Sent Discord DM part {i}/{len(chunks)} to user {discord_user_id}"
             )

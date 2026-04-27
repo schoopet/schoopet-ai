@@ -77,7 +77,10 @@ class TestCloudTasksClient:
         task = mock_client.create_task.call_args.kwargs["task"]
         assert task["name"] == mock_client.task_path.return_value
         assert task["dispatch_deadline"].seconds == 900
-        assert task["schedule_time"].value == schedule_time
+        if hasattr(task["schedule_time"], "value"):
+            assert task["schedule_time"].value == schedule_time
+        else:
+            assert task["schedule_time"].ToDatetime().replace(tzinfo=timezone.utc) == schedule_time
 
     def test_create_task_reuses_name_on_already_exists(self):
         mock_client = MagicMock()

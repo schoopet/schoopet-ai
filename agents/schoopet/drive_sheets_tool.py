@@ -3,9 +3,11 @@
 Uses the calling user's personal OAuth token (feature="google").
 """
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from google.adk.tools import ToolContext
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from .oauth_client import OAuthClient
 from .utils import require_user_id
 
@@ -14,6 +16,12 @@ logger = logging.getLogger(__name__)
 DRIVE_API_BASE = "https://www.googleapis.com/drive/v3"
 DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3"
 SHEETS_API_BASE = "https://sheets.googleapis.com/v4/spreadsheets"
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+DOCS_SCOPES = [
+    "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/drive",
+]
 
 
 class DriveTool:
@@ -22,21 +30,33 @@ class DriveTool:
     def __init__(self):
         self._oauth_client = OAuthClient()
 
-    def _get_token(self, user_id: str):
-        return self._oauth_client.get_tool_token(user_id)
+    def _get_service(self, user_id: str):
+        credentials = self._oauth_client.get_google_credentials(
+            user_id,
+            "google",
+            scopes=DRIVE_SCOPES,
+        )
+        if credentials is None:
+            return None, self._oauth_client.get_oauth_link(user_id)
+
+        service = build(
+            "drive",
+            "v3",
+            credentials=credentials,
+            cache_discovery=False,
+        )
+        return service, None
 
     # ── Private token-specific helpers ─────────────────────────────────────────
 
     def _save_file_with_token(
         self,
-        token: str,
+        service,
         filename: str,
         content: str,
         folder_id: str,
-    ) -> Optional[str]:
-        """Attempt to save a file using the given token. Returns None on 401/403."""
-        import httpx
-
+    ) -> str:
+        """Save a text file using the Google Drive service client."""
         metadata: dict = {
             "name": filename,
             "mimeType": "text/plain",
@@ -44,48 +64,35 @@ class DriveTool:
         if folder_id:
             metadata["parents"] = [folder_id]
 
-        boundary = "schoopet_boundary"
-        body = (
-            f"--{boundary}\r\n"
-            f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
-            + _json_dumps(metadata)
-            + f"\r\n--{boundary}\r\n"
-            f"Content-Type: text/plain; charset=UTF-8\r\n\r\n"
-            + content
-            + f"\r\n--{boundary}--"
+        from googleapiclient.http import MediaInMemoryUpload
+
+        media = MediaInMemoryUpload(
+            content.encode("utf-8"),
+            mimetype="text/plain",
+            resumable=False,
         )
-
-        with httpx.Client() as client:
-            resp = client.post(
-                f"{DRIVE_UPLOAD_BASE}/files?uploadType=multipart",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": f"multipart/related; boundary={boundary}",
-                },
-                content=body.encode("utf-8"),
+        data = (
+            service.files()
+            .create(
+                body=metadata,
+                media_body=media,
+                fields="id",
             )
-
-        if resp.status_code in (401, 403):
-            return None
-
-        resp.raise_for_status()
-        data = resp.json()
+            .execute()
+        )
         file_id = data.get("id", "")
         file_link = f"https://drive.google.com/file/d/{file_id}/view" if file_id else ""
         return f"Saved '{filename}' to Drive.{' Link: ' + file_link if file_link else ''}"
 
     def _save_binary_with_token(
         self,
-        token: str,
+        service,
         filename: str,
         raw_bytes: bytes,
         mime_type: str,
         folder_id: str,
-    ) -> Optional[str]:
-        """Attempt to save a binary file using the given token. Returns None on 401/403."""
-        import httpx
-        import json
-
+    ) -> str:
+        """Save a binary file using the Google Drive service client."""
         metadata: dict = {
             "name": filename,
             "mimeType": mime_type,
@@ -93,68 +100,49 @@ class DriveTool:
         if folder_id:
             metadata["parents"] = [folder_id]
 
-        boundary = b"schoopet_boundary"
-        body = (
-            b"--" + boundary + b"\r\n"
-            b"Content-Type: application/json; charset=UTF-8\r\n\r\n"
-            + json.dumps(metadata).encode("utf-8")
-            + b"\r\n--" + boundary + b"\r\n"
-            b"Content-Type: " + mime_type.encode("utf-8") + b"\r\n\r\n"
-            + raw_bytes
-            + b"\r\n--" + boundary + b"--"
+        from googleapiclient.http import MediaInMemoryUpload
+
+        media = MediaInMemoryUpload(
+            raw_bytes,
+            mimetype=mime_type,
+            resumable=False,
         )
-
-        boundary_str = boundary.decode("utf-8")
-        with httpx.Client() as client:
-            resp = client.post(
-                f"{DRIVE_UPLOAD_BASE}/files?uploadType=multipart",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": f"multipart/related; boundary={boundary_str}",
-                },
-                content=body,
+        data = (
+            service.files()
+            .create(
+                body=metadata,
+                media_body=media,
+                fields="id",
             )
-
-        if resp.status_code in (401, 403):
-            return None
-
-        resp.raise_for_status()
-        data = resp.json()
+            .execute()
+        )
         file_id = data.get("id", "")
         file_link = f"https://drive.google.com/file/d/{file_id}/view" if file_id else ""
         return f"Saved '{filename}' to Drive.{' Link: ' + file_link if file_link else ''}"
 
     def _list_files_with_token(
         self,
-        token: str,
+        service,
         folder_id: str,
         query: str,
         max_results: int,
-    ) -> Optional[str]:
-        """Attempt to list files using the given token. Returns None on 401/403."""
-        import httpx
-
+    ) -> str:
+        """List files using the Google Drive service client."""
         q = f"'{folder_id}' in parents and trashed=false"
         if query:
             q += f" and {query}"
 
-        with httpx.Client() as client:
-            resp = client.get(
-                f"{DRIVE_API_BASE}/files",
-                headers={"Authorization": f"Bearer {token}"},
-                params={
-                    "q": q,
-                    "pageSize": max_results,
-                    "fields": "files(id,name,mimeType,modifiedTime)",
-                    "orderBy": "modifiedTime desc",
-                },
+        result = (
+            service.files()
+            .list(
+                q=q,
+                pageSize=max_results,
+                fields="files(id,name,mimeType,modifiedTime)",
+                orderBy="modifiedTime desc",
             )
-
-        if resp.status_code in (401, 403):
-            return None
-
-        resp.raise_for_status()
-        files = resp.json().get("files", [])
+            .execute()
+        )
+        files = result.get("files", [])
 
         if not files:
             return "No files found in that folder."
@@ -194,16 +182,13 @@ class DriveTool:
         if err:
             return err
 
-        token, error = self._get_token(user_id)
-        if token is None:
+        service, error = self._get_service(user_id)
+        if service is None:
             return error
 
         try:
-            result = self._save_file_with_token(token, filename, content, folder_id)
-            if result is None:
-                return error
-            return result
-        except Exception as e:
+            return self._save_file_with_token(service, filename, content, folder_id)
+        except HttpError as e:
             return f"Error saving to Drive: {e}"
 
     async def save_attachment_to_drive(
@@ -243,18 +228,16 @@ class DriveTool:
         raw_bytes = artifact.inline_data.data
         mime_type = artifact.inline_data.mime_type or "application/octet-stream"
 
-        token, error = self._get_token(user_id)
-        if token is None:
+        service, error = self._get_service(user_id)
+        if service is None:
             return error
 
         try:
             result = self._save_binary_with_token(
-                token, drive_filename, raw_bytes, mime_type, folder_id
+                service, drive_filename, raw_bytes, mime_type, folder_id
             )
-            if result is None:
-                return error
             return result
-        except Exception as e:
+        except HttpError as e:
             return f"Error saving attachment to Drive: {e}"
 
     def list_drive_files(
@@ -284,16 +267,13 @@ class DriveTool:
         if err:
             return err
 
-        token, error = self._get_token(user_id)
-        if token is None:
+        service, error = self._get_service(user_id)
+        if service is None:
             return error
 
         try:
-            result = self._list_files_with_token(token, folder_id, query, max_results)
-            if result is None:
-                return error
-            return result
-        except Exception as e:
+            return self._list_files_with_token(service, folder_id, query, max_results)
+        except HttpError as e:
             return f"Error listing Drive files: {e}"
 
     def get_drive_status(
@@ -327,32 +307,127 @@ class SheetsTool:
     def __init__(self):
         self._oauth_client = OAuthClient()
 
-    def _get_token(self, user_id: str):
-        return self._oauth_client.get_tool_token(user_id)
+    def _get_service(self, user_id: str):
+        credentials = self._oauth_client.get_google_credentials(
+            user_id,
+            "google",
+            scopes=SHEETS_SCOPES,
+        )
+        if credentials is None:
+            return None, self._oauth_client.get_oauth_link(user_id)
+
+        service = build(
+            "sheets",
+            "v4",
+            credentials=credentials,
+            cache_discovery=False,
+        )
+        return service, None
 
     # ── Private token-specific helpers ─────────────────────────────────────────
 
+    def _get_sheet_values(
+        self,
+        service,
+        sheet_id: str,
+        range_name: str,
+    ) -> List[List[str]]:
+        result = (
+            service.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range=range_name)
+            .execute()
+        )
+        return result.get("values", [])
+
+    def _get_header_row(
+        self,
+        service,
+        sheet_id: str,
+        sheet_tab: str,
+    ) -> List[str]:
+        rows = self._get_sheet_values(service, sheet_id, f"{sheet_tab}!1:1")
+        return rows[0] if rows else []
+
+    def _create_spreadsheet_with_token(
+        self,
+        service,
+        title: str,
+        sheet_tab: str,
+        headers: List[str],
+    ) -> Dict[str, Any]:
+        body = {
+            "properties": {"title": title},
+            "sheets": [{"properties": {"title": sheet_tab}}],
+        }
+        result = (
+            service.spreadsheets()
+            .create(body=body)
+            .execute()
+        )
+
+        sheet_id = result.get("spreadsheetId", "")
+        spreadsheet_url = result.get("spreadsheetUrl", "")
+        if headers and sheet_id:
+            self._ensure_headers_with_token(service, sheet_id, headers, sheet_tab)
+
+        return {
+            "spreadsheet_id": sheet_id,
+            "spreadsheet_url": spreadsheet_url,
+            "title": title,
+            "sheet_tab": sheet_tab,
+            "headers": headers,
+        }
+
+    def _add_sheet_tab_with_token(
+        self,
+        service,
+        sheet_id: str,
+        sheet_tab: str,
+        headers: List[str],
+    ) -> Dict[str, Any]:
+        (
+            service.spreadsheets()
+            .batchUpdate(
+                spreadsheetId=sheet_id,
+                body={
+                    "requests": [
+                        {
+                            "addSheet": {
+                                "properties": {
+                                    "title": sheet_tab,
+                                }
+                            }
+                        }
+                    ]
+                },
+            )
+            .execute()
+        )
+        if headers:
+            self._ensure_headers_with_token(service, sheet_id, headers, sheet_tab)
+
+        return {
+            "spreadsheet_id": sheet_id,
+            "sheet_tab": sheet_tab,
+            "headers": headers,
+        }
+
     def _read_sheet_with_token(
         self,
-        token: str,
+        service,
         sheet_id: str,
         sheet_tab: str,
         max_rows: int,
-    ) -> Optional[str]:
-        """Attempt to read a sheet using the given token. Returns None on 401/403."""
-        import httpx
-
-        with httpx.Client() as client:
-            resp = client.get(
-                f"{SHEETS_API_BASE}/{sheet_id}/values/{sheet_tab}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-
-        if resp.status_code in (401, 403):
-            return None
-
-        resp.raise_for_status()
-        rows = resp.json().get("values", [])
+    ) -> str:
+        """Read a sheet using the Google Sheets service client."""
+        result = (
+            service.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range=sheet_tab)
+            .execute()
+        )
+        rows = result.get("values", [])
         if not rows:
             return "Sheet is empty."
 
@@ -369,108 +444,248 @@ class SheetsTool:
 
     def _append_row_with_token(
         self,
-        token: str,
+        service,
         values: List[str],
         sheet_id: str,
         sheet_tab: str,
-    ) -> Optional[str]:
-        """Attempt to append a row using the given token. Returns None on 401/403."""
-        import httpx
-
+    ) -> str:
+        """Append a row using the Google Sheets service client."""
         range_name = f"{sheet_tab}!A:Z"
-        with httpx.Client() as client:
-            resp = client.post(
-                f"{SHEETS_API_BASE}/{sheet_id}/values/{range_name}:append",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-                params={"valueInputOption": "USER_ENTERED"},
-                json={"values": [values]},
+        result = (
+            service.spreadsheets()
+            .values()
+            .append(
+                spreadsheetId=sheet_id,
+                range=range_name,
+                valueInputOption="USER_ENTERED",
+                body={"values": [values]},
             )
-
-        if resp.status_code in (401, 403):
-            return None
-
-        resp.raise_for_status()
-        data = resp.json()
+            .execute()
+        )
+        data = result
         updated_cells = data.get("updates", {}).get("updatedCells", len(values))
         return f"Row appended to sheet ({updated_cells} cells updated)."
 
     def _add_column_with_token(
         self,
-        token: str,
+        service,
         sheet_id: str,
         column_header: str,
         sheet_tab: str,
-    ) -> Optional[str]:
-        """Attempt to add a column using the given token. Returns None on 401/403."""
-        import httpx
-
-        with httpx.Client() as client:
-            resp = client.get(
-                f"{SHEETS_API_BASE}/{sheet_id}/values/{sheet_tab}!1:1",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-
-        if resp.status_code in (401, 403):
-            return None
-
-        resp.raise_for_status()
-        row1 = resp.json().get("values", [[]])[0] if resp.json().get("values") else []
+    ) -> str:
+        """Add a header cell using the Google Sheets service client."""
+        row1 = self._get_header_row(service, sheet_id, sheet_tab)
 
         next_col = len(row1) + 1
         col_letter = _col_to_letter(next_col)
         cell_range = f"{sheet_tab}!{col_letter}1"
 
-        with httpx.Client() as client:
-            resp = client.put(
-                f"{SHEETS_API_BASE}/{sheet_id}/values/{cell_range}",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-                params={"valueInputOption": "RAW"},
-                json={"values": [[column_header]]},
+        (
+            service.spreadsheets()
+            .values()
+            .update(
+                spreadsheetId=sheet_id,
+                range=cell_range,
+                valueInputOption="RAW",
+                body={"values": [[column_header]]},
             )
-
-        if resp.status_code in (401, 403):
-            return None
-
-        resp.raise_for_status()
+            .execute()
+        )
         return f"Column '{column_header}' added at {cell_range}."
 
     def _update_cell_with_token(
         self,
-        token: str,
+        service,
         sheet_id: str,
         row: int,
         column: int,
         value: str,
         sheet_tab: str,
-    ) -> Optional[str]:
-        """Attempt to update a cell using the given token. Returns None on 401/403."""
-        import httpx
-
+    ) -> str:
+        """Update a cell using the Google Sheets service client."""
         col_letter = _col_to_letter(column)
         cell_range = f"{sheet_tab}!{col_letter}{row}"
 
-        with httpx.Client() as client:
-            resp = client.put(
-                f"{SHEETS_API_BASE}/{sheet_id}/values/{cell_range}",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-                params={"valueInputOption": "RAW"},
-                json={"values": [[value]]},
+        (
+            service.spreadsheets()
+            .values()
+            .update(
+                spreadsheetId=sheet_id,
+                range=cell_range,
+                valueInputOption="RAW",
+                body={"values": [[value]]},
             )
-
-        if resp.status_code in (401, 403):
-            return None
-
-        resp.raise_for_status()
+            .execute()
+        )
         return f"Cell {cell_range} updated to '{value}'."
+
+    def _sheet_metadata_with_token(
+        self,
+        service,
+        sheet_id: str,
+        sheet_tab: str,
+    ) -> Dict[str, Any]:
+        rows = self._get_sheet_values(service, sheet_id, sheet_tab)
+        headers = rows[0] if rows else []
+        data_rows = rows[1:] if len(rows) > 1 else []
+        return {
+            "sheet_id": sheet_id,
+            "sheet_tab": sheet_tab,
+            "headers": headers,
+            "header_count": len(headers),
+            "row_count": len(rows),
+            "data_row_count": len(data_rows),
+        }
+
+    def _read_records_with_token(
+        self,
+        service,
+        sheet_id: str,
+        sheet_tab: str,
+        max_rows: int,
+    ) -> Dict[str, Any]:
+        rows = self._get_sheet_values(service, sheet_id, sheet_tab)
+        headers = rows[0] if rows else []
+        data_rows = rows[1:] if len(rows) > 1 else []
+        truncated_rows = data_rows[:max_rows]
+        records = [_row_to_record(headers, row) for row in truncated_rows]
+        return {
+            "sheet_id": sheet_id,
+            "sheet_tab": sheet_tab,
+            "headers": headers,
+            "records": records,
+            "returned_records": len(records),
+            "remaining_records": max(0, len(data_rows) - len(records)),
+        }
+
+    def _ensure_headers_with_token(
+        self,
+        service,
+        sheet_id: str,
+        headers: List[str],
+        sheet_tab: str,
+    ) -> Dict[str, Any]:
+        current_headers = self._get_header_row(service, sheet_id, sheet_tab)
+        missing_headers = [header for header in headers if header not in current_headers]
+        added_headers: List[str] = []
+
+        for header in missing_headers:
+            self._add_column_with_token(service, sheet_id, header, sheet_tab)
+            added_headers.append(header)
+            current_headers.append(header)
+
+        return {
+            "sheet_id": sheet_id,
+            "sheet_tab": sheet_tab,
+            "headers": current_headers,
+            "added_headers": added_headers,
+        }
+
+    def _append_record_with_token(
+        self,
+        service,
+        sheet_id: str,
+        record: Dict[str, Any],
+        sheet_tab: str,
+    ) -> Dict[str, Any]:
+        current_headers = self._get_header_row(service, sheet_id, sheet_tab)
+        if not current_headers:
+            current_headers = list(record.keys())
+            self._ensure_headers_with_token(service, sheet_id, current_headers, sheet_tab)
+        else:
+            self._ensure_headers_with_token(service, sheet_id, list(record.keys()), sheet_tab)
+            current_headers = self._get_header_row(service, sheet_id, sheet_tab)
+
+        values = [_stringify_cell(record.get(header, "")) for header in current_headers]
+        append_result = self._append_row_with_token(service, values, sheet_id, sheet_tab)
+        return {
+            "sheet_id": sheet_id,
+            "sheet_tab": sheet_tab,
+            "headers": current_headers,
+            "record": {header: _stringify_cell(record.get(header, "")) for header in current_headers},
+            "result": append_result,
+        }
+
+    def _find_rows_with_token(
+        self,
+        service,
+        sheet_id: str,
+        match_column: str,
+        match_value: str,
+        sheet_tab: str,
+        max_rows: int,
+    ) -> Dict[str, Any]:
+        rows = self._get_sheet_values(service, sheet_id, sheet_tab)
+        headers = rows[0] if rows else []
+        if not headers:
+            return {
+                "sheet_id": sheet_id,
+                "sheet_tab": sheet_tab,
+                "match_column": match_column,
+                "match_value": match_value,
+                "matches": [],
+                "returned_matches": 0,
+            }
+
+        if match_column not in headers:
+            raise ValueError(f"Column '{match_column}' not found. Headers: {', '.join(headers)}")
+
+        col_index = headers.index(match_column)
+        matches = []
+        for row_number, row in enumerate(rows[1:], start=2):
+            cell_value = row[col_index] if col_index < len(row) else ""
+            if str(cell_value) == str(match_value):
+                matches.append({
+                    "row_number": row_number,
+                    "record": _row_to_record(headers, row),
+                })
+
+        truncated = matches[:max_rows]
+        return {
+            "sheet_id": sheet_id,
+            "sheet_tab": sheet_tab,
+            "match_column": match_column,
+            "match_value": match_value,
+            "matches": truncated,
+            "returned_matches": len(truncated),
+            "remaining_matches": max(0, len(matches) - len(truncated)),
+        }
+
+    def _update_row_with_token(
+        self,
+        service,
+        sheet_id: str,
+        row: int,
+        updates: Dict[str, Any],
+        sheet_tab: str,
+    ) -> Dict[str, Any]:
+        headers = self._get_header_row(service, sheet_id, sheet_tab)
+        if not headers:
+            raise ValueError("Sheet has no header row.")
+
+        missing_headers = [header for header in updates if header not in headers]
+        if missing_headers:
+            raise ValueError(f"Unknown columns: {', '.join(missing_headers)}")
+
+        updated_cells = []
+        for header, value in updates.items():
+            col_number = headers.index(header) + 1
+            self._update_cell_with_token(
+                service,
+                sheet_id,
+                row,
+                col_number,
+                _stringify_cell(value),
+                sheet_tab,
+            )
+            updated_cells.append(f"{header}={_stringify_cell(value)}")
+
+        return {
+            "sheet_id": sheet_id,
+            "sheet_tab": sheet_tab,
+            "row": row,
+            "updated_cells": updated_cells,
+        }
 
     # ── Public methods ──────────────────────────────────────────────────────────
 
@@ -499,16 +714,13 @@ class SheetsTool:
         if err:
             return err
 
-        token, error = self._get_token(user_id)
-        if token is None:
+        service, error = self._get_service(user_id)
+        if service is None:
             return error
 
         try:
-            result = self._append_row_with_token(token, values, sheet_id, sheet_tab)
-            if result is None:
-                return error
-            return result
-        except Exception as e:
+            return self._append_row_with_token(service, values, sheet_id, sheet_tab)
+        except HttpError as e:
             return f"Error appending to Sheets: {e}"
 
     def read_sheet(
@@ -539,16 +751,13 @@ class SheetsTool:
         if err:
             return err
 
-        token, error = self._get_token(user_id)
-        if token is None:
+        service, error = self._get_service(user_id)
+        if service is None:
             return error
 
         try:
-            result = self._read_sheet_with_token(token, sheet_id, sheet_tab, max_rows)
-            if result is None:
-                return error
-            return result
-        except Exception as e:
+            return self._read_sheet_with_token(service, sheet_id, sheet_tab, max_rows)
+        except HttpError as e:
             return f"Error reading sheet: {e}"
 
     def add_sheet_column(
@@ -579,16 +788,13 @@ class SheetsTool:
         if err:
             return err
 
-        token, error = self._get_token(user_id)
-        if token is None:
+        service, error = self._get_service(user_id)
+        if service is None:
             return error
 
         try:
-            result = self._add_column_with_token(token, sheet_id, column_header, sheet_tab)
-            if result is None:
-                return error
-            return result
-        except Exception as e:
+            return self._add_column_with_token(service, sheet_id, column_header, sheet_tab)
+        except HttpError as e:
             return f"Error adding column: {e}"
 
     def update_sheet_cell(
@@ -620,18 +826,15 @@ class SheetsTool:
         if err:
             return err
 
-        token, error = self._get_token(user_id)
-        if token is None:
+        service, error = self._get_service(user_id)
+        if service is None:
             return error
 
         try:
-            result = self._update_cell_with_token(
-                token, sheet_id, row, column, value, sheet_tab
+            return self._update_cell_with_token(
+                service, sheet_id, row, column, value, sheet_tab
             )
-            if result is None:
-                return error
-            return result
-        except Exception as e:
+        except HttpError as e:
             return f"Error updating cell: {e}"
 
     def get_sheets_status(
@@ -648,6 +851,472 @@ class SheetsTool:
             Requires user_id from tool_context (phone number).
         """
         user_id, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
+
+        user_token_data = self._oauth_client.get_token_data(user_id, "google")
+        if user_token_data:
+            email = user_token_data.get("email", "Unknown")
+            return f"Workspace ({email}) is connected."
+        link = self._oauth_client.get_oauth_link(user_id)
+        return f"Workspace not connected. Authorize here:\n{link}"
+
+    def create_spreadsheet(
+        self,
+        title: str,
+        sheet_tab: str = "Sheet1",
+        headers: Optional[List[str]] = None,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Create a new spreadsheet and optionally initialize its headers."""
+        user_id, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
+
+        service, error = self._get_service(user_id)
+        if service is None:
+            return error
+
+        try:
+            return _json_dumps(
+                self._create_spreadsheet_with_token(
+                    service,
+                    title,
+                    sheet_tab,
+                    headers or [],
+                )
+            )
+        except HttpError as e:
+            return f"Error creating spreadsheet: {e}"
+
+    def add_sheet_tab(
+        self,
+        sheet_id: str,
+        sheet_tab: str,
+        headers: Optional[List[str]] = None,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Add a new tab to an existing spreadsheet and optionally initialize headers."""
+        user_id, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
+
+        service, error = self._get_service(user_id)
+        if service is None:
+            return error
+
+        try:
+            return _json_dumps(
+                self._add_sheet_tab_with_token(
+                    service,
+                    sheet_id,
+                    sheet_tab,
+                    headers or [],
+                )
+            )
+        except HttpError as e:
+            return f"Error adding sheet tab: {e}"
+
+    def get_sheet_schema(
+        self,
+        sheet_id: str,
+        sheet_tab: str = "Sheet1",
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Return sheet headers and row counts as JSON."""
+        user_id, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
+
+        service, error = self._get_service(user_id)
+        if service is None:
+            return error
+
+        try:
+            return _json_dumps(self._sheet_metadata_with_token(service, sheet_id, sheet_tab))
+        except HttpError as e:
+            return f"Error reading sheet schema: {e}"
+
+    def read_sheet_records(
+        self,
+        sheet_id: str,
+        sheet_tab: str = "Sheet1",
+        max_rows: int = 100,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Return sheet rows as JSON records keyed by header."""
+        user_id, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
+
+        service, error = self._get_service(user_id)
+        if service is None:
+            return error
+
+        try:
+            return _json_dumps(
+                self._read_records_with_token(service, sheet_id, sheet_tab, max_rows)
+            )
+        except HttpError as e:
+            return f"Error reading sheet records: {e}"
+
+    def ensure_sheet_headers(
+        self,
+        sheet_id: str,
+        headers: List[str],
+        sheet_tab: str = "Sheet1",
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Ensure the given headers exist in row 1 and return the final header list."""
+        user_id, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
+
+        service, error = self._get_service(user_id)
+        if service is None:
+            return error
+
+        try:
+            return _json_dumps(
+                self._ensure_headers_with_token(service, sheet_id, headers, sheet_tab)
+            )
+        except HttpError as e:
+            return f"Error ensuring sheet headers: {e}"
+
+    def append_record_to_sheet(
+        self,
+        record: Dict[str, Any],
+        sheet_id: str,
+        sheet_tab: str = "Sheet1",
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Append a record dict keyed by header name."""
+        user_id, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
+
+        service, error = self._get_service(user_id)
+        if service is None:
+            return error
+
+        try:
+            return _json_dumps(
+                self._append_record_with_token(service, sheet_id, record, sheet_tab)
+            )
+        except HttpError as e:
+            return f"Error appending record to sheet: {e}"
+
+    def find_sheet_rows(
+        self,
+        sheet_id: str,
+        match_column: str,
+        match_value: str,
+        sheet_tab: str = "Sheet1",
+        max_rows: int = 25,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Find rows where one header-mapped column equals the given value."""
+        user_id, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
+
+        service, error = self._get_service(user_id)
+        if service is None:
+            return error
+
+        try:
+            return _json_dumps(
+                self._find_rows_with_token(
+                    service, sheet_id, match_column, match_value, sheet_tab, max_rows
+                )
+            )
+        except (HttpError, ValueError) as e:
+            return f"Error finding sheet rows: {e}"
+
+    def update_sheet_row(
+        self,
+        sheet_id: str,
+        row: int,
+        updates: Dict[str, Any],
+        sheet_tab: str = "Sheet1",
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Update one row using a dict of header name to value."""
+        user_id, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
+
+        service, error = self._get_service(user_id)
+        if service is None:
+            return error
+
+        try:
+            return _json_dumps(
+                self._update_row_with_token(service, sheet_id, row, updates, sheet_tab)
+            )
+        except (HttpError, ValueError) as e:
+            return f"Error updating sheet row: {e}"
+
+
+class DocsTool:
+    """Tool for creating and editing Google Docs using personal OAuth token."""
+
+    def __init__(self):
+        self._oauth_client = OAuthClient()
+
+    def _get_services(self, user_id: str):
+        credentials = self._oauth_client.get_google_credentials(
+            user_id,
+            "google",
+            scopes=DOCS_SCOPES,
+        )
+        if credentials is None:
+            return None, None, self._oauth_client.get_oauth_link(user_id)
+
+        docs_service = build(
+            "docs",
+            "v1",
+            credentials=credentials,
+            cache_discovery=False,
+        )
+        drive_service = build(
+            "drive",
+            "v3",
+            credentials=credentials,
+            cache_discovery=False,
+        )
+        return docs_service, drive_service, None
+
+    def _create_google_doc_with_token(
+        self,
+        docs_service,
+        drive_service,
+        title: str,
+        content: str,
+        folder_id: str,
+    ) -> Dict[str, Any]:
+        file_metadata: Dict[str, Any] = {
+            "name": title,
+            "mimeType": "application/vnd.google-apps.document",
+        }
+        if folder_id:
+            file_metadata["parents"] = [folder_id]
+
+        file_result = (
+            drive_service.files()
+            .create(body=file_metadata, fields="id,webViewLink")
+            .execute()
+        )
+        document_id = file_result.get("id", "")
+        document_url = file_result.get("webViewLink", "")
+
+        if content and document_id:
+            self._append_to_google_doc_with_token(docs_service, document_id, content)
+
+        return {
+            "document_id": document_id,
+            "document_url": document_url,
+            "title": title,
+            "folder_id": folder_id,
+        }
+
+    def _extract_document_text(self, document: Dict[str, Any]) -> str:
+        pieces: List[str] = []
+        for element in document.get("body", {}).get("content", []):
+            paragraph = element.get("paragraph")
+            if not paragraph:
+                continue
+            for item in paragraph.get("elements", []):
+                text_run = item.get("textRun")
+                if text_run:
+                    pieces.append(text_run.get("content", ""))
+        return "".join(pieces)
+
+    def _read_google_doc_with_token(
+        self,
+        docs_service,
+        document_id: str,
+    ) -> Dict[str, Any]:
+        document = docs_service.documents().get(documentId=document_id).execute()
+        return {
+            "document_id": document_id,
+            "title": document.get("title", ""),
+            "text": self._extract_document_text(document),
+        }
+
+    def _append_to_google_doc_with_token(
+        self,
+        docs_service,
+        document_id: str,
+        content: str,
+    ) -> Dict[str, Any]:
+        document = docs_service.documents().get(documentId=document_id).execute()
+        end_index = max(1, document.get("body", {}).get("content", [{}])[-1].get("endIndex", 1) - 1)
+        (
+            docs_service.documents()
+            .batchUpdate(
+                documentId=document_id,
+                body={
+                    "requests": [
+                        {
+                            "insertText": {
+                                "location": {"index": end_index},
+                                "text": content,
+                            }
+                        }
+                    ]
+                },
+            )
+            .execute()
+        )
+        return {
+            "document_id": document_id,
+            "appended_characters": len(content),
+        }
+
+    def _replace_text_in_google_doc_with_token(
+        self,
+        docs_service,
+        document_id: str,
+        search_text: str,
+        replace_text: str,
+    ) -> Dict[str, Any]:
+        result = (
+            docs_service.documents()
+            .batchUpdate(
+                documentId=document_id,
+                body={
+                    "requests": [
+                        {
+                            "replaceAllText": {
+                                "containsText": {
+                                    "text": search_text,
+                                    "matchCase": True,
+                                },
+                                "replaceText": replace_text,
+                            }
+                        }
+                    ]
+                },
+            )
+            .execute()
+        )
+        occurrences_changed = (
+            result.get("replies", [{}])[0]
+            .get("replaceAllText", {})
+            .get("occurrencesChanged", 0)
+        )
+        return {
+            "document_id": document_id,
+            "search_text": search_text,
+            "replace_text": replace_text,
+            "occurrences_changed": occurrences_changed,
+        }
+
+    def create_google_doc(
+        self,
+        title: str,
+        content: str = "",
+        folder_id: str = "",
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Create a Google Doc and optionally seed it with text."""
+        user_id, err = require_user_id(tool_context, "docs")
+        if err:
+            return err
+
+        docs_service, drive_service, error = self._get_services(user_id)
+        if docs_service is None or drive_service is None:
+            return error
+
+        try:
+            return _json_dumps(
+                self._create_google_doc_with_token(
+                    docs_service,
+                    drive_service,
+                    title,
+                    content,
+                    folder_id,
+                )
+            )
+        except HttpError as e:
+            return f"Error creating Google Doc: {e}"
+
+    def read_google_doc(
+        self,
+        document_id: str,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Read a Google Doc and return its text."""
+        user_id, err = require_user_id(tool_context, "docs")
+        if err:
+            return err
+
+        docs_service, _, error = self._get_services(user_id)
+        if docs_service is None:
+            return error
+
+        try:
+            return _json_dumps(self._read_google_doc_with_token(docs_service, document_id))
+        except HttpError as e:
+            return f"Error reading Google Doc: {e}"
+
+    def append_to_google_doc(
+        self,
+        document_id: str,
+        content: str,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Append text to the end of a Google Doc."""
+        user_id, err = require_user_id(tool_context, "docs")
+        if err:
+            return err
+
+        docs_service, _, error = self._get_services(user_id)
+        if docs_service is None:
+            return error
+
+        try:
+            return _json_dumps(
+                self._append_to_google_doc_with_token(docs_service, document_id, content)
+            )
+        except HttpError as e:
+            return f"Error appending to Google Doc: {e}"
+
+    def replace_text_in_google_doc(
+        self,
+        document_id: str,
+        search_text: str,
+        replace_text: str,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Replace matching text throughout a Google Doc."""
+        user_id, err = require_user_id(tool_context, "docs")
+        if err:
+            return err
+
+        docs_service, _, error = self._get_services(user_id)
+        if docs_service is None:
+            return error
+
+        try:
+            return _json_dumps(
+                self._replace_text_in_google_doc_with_token(
+                    docs_service,
+                    document_id,
+                    search_text,
+                    replace_text,
+                )
+            )
+        except HttpError as e:
+            return f"Error replacing text in Google Doc: {e}"
+
+    def get_docs_status(
+        self,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Check if Google Docs is connected."""
+        user_id, err = require_user_id(tool_context, "docs")
         if err:
             return err
 
@@ -681,6 +1350,20 @@ def _mime_label(mime: str) -> str:
     return labels.get(mime, mime.split("/")[-1] if "/" in mime else mime)
 
 
+def _row_to_record(headers: List[str], row: List[Any]) -> Dict[str, str]:
+    record: Dict[str, str] = {}
+    for index, header in enumerate(headers):
+        value = row[index] if index < len(row) else ""
+        record[header] = _stringify_cell(value)
+    return record
+
+
+def _stringify_cell(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _json_dumps(obj: dict) -> str:
     import json
-    return json.dumps(obj)
+    return json.dumps(obj, ensure_ascii=True)

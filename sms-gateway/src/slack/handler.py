@@ -113,12 +113,11 @@ async def handle_slack_webhook(
 async def process_slack_message(user_id: str, message: str, team_id: str = "") -> None:
     """Process incoming Slack DM in the background.
 
-    Flow (no opt-in required for Slack workspace users):
-    1. Get or create user record
-    2. Auto opt-in on first message
-    3. Send immediate ack
-    4. Rate limit check
-    5. Forward to agent and update ack with response
+    Flow:
+    1. Send immediate ack.
+    2. Rate limit check.
+    3. Get or create agent session.
+    4. Forward to agent and update ack with response.
     """
     start_time = time.time()
     channel_id: str | None = None
@@ -132,14 +131,6 @@ async def process_slack_message(user_id: str, message: str, team_id: str = "") -
             await _slack_sender.send(user_id, text)
 
     try:
-        # Get or create user record
-        session_info = await _session_manager.get_or_create_user(user_id)
-
-        # Auto opt-in on first message (workspace-authorized users)
-        if session_info.is_new_user or not session_info.opted_in:
-            logger.info(f"Auto opt-in for Slack user {user_id}")
-            await _session_manager.set_opted_in(user_id, channel="slack")
-
         # Acknowledge immediately before any slow operations
         t_before_ack = time.time()
         channel_id, ack_ts = await _slack_sender.send_ack(user_id)

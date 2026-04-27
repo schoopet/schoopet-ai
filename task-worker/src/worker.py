@@ -245,6 +245,11 @@ class TaskWorker:
         Creates a session on the appropriate engine (personal/team),
         sends the prompt, and streams the result. The agent engine has
         full tool access (calendar, search, drive, sheets, memory, etc.).
+
+        Memory continuity:
+        - ADK handles memory reads inside the agent via built-in memory tools.
+        - Memory creation is handled inside the agent via ADK callbacks.
+        - After execution, the task session is deleted for cleanup.
         """
         engine_id = self._personal_engine_id
 
@@ -259,38 +264,51 @@ class TaskWorker:
             f"/reasoningEngines/{engine_id}"
         )
 
-        # Create a task-scoped session
         adk_app = client.agent_engines.get(name=engine_name)
-        session = await adk_app.async_create_session(user_id=task["user_id"])
+        user_id = task["user_id"]
+
+        # Create a task-scoped session
+        session = await adk_app.async_create_session(user_id=user_id)
         session_id = session["id"]
 
         logger.info(
             f"Created Agent Engine session {session_id} on engine {engine_id} "
-            f"for user {task['user_id']}"
+            f"for user {user_id}"
         )
 
-        # Stream the response
-        result_parts = []
-        async for event in adk_app.async_stream_query(
-            user_id=task["user_id"],
-            session_id=session_id,
-            message=prompt,
-        ):
-            if isinstance(event, dict):
-                content = event.get("content", {})
-                if isinstance(content, dict):
-                    for part in content.get("parts", []):
-                        if isinstance(part, dict) and "text" in part:
-                            result_parts.append(part["text"])
-            elif hasattr(event, "content") and event.content:
-                if hasattr(event.content, "parts"):
-                    for part in event.content.parts:
-                        if hasattr(part, "text") and part.text:
-                            result_parts.append(part.text)
+        try:
+            # Stream the response
+            result_parts = []
+            async for event in adk_app.async_stream_query(
+                user_id=user_id,
+                session_id=session_id,
+                message=prompt,
+            ):
+                if isinstance(event, dict):
+                    content = event.get("content", {})
+                    if isinstance(content, dict):
+                        for part in content.get("parts", []):
+                            if isinstance(part, dict) and "text" in part:
+                                result_parts.append(part["text"])
+                elif hasattr(event, "content") and event.content:
+                    if hasattr(event.content, "parts"):
+                        for part in event.content.parts:
+                            if hasattr(part, "text") and part.text:
+                                result_parts.append(part.text)
 
-        result = "".join(result_parts)
-        logger.info(f"Task execution complete: {len(result)} chars")
-        return result
+            result = "".join(result_parts)
+            logger.info(f"Task execution complete: {len(result)} chars")
+            return result
+        finally:
+            await self._retire_session(adk_app, user_id, session_id)
+
+    async def _retire_session(self, adk_app, user_id: str, session_id: str) -> None:
+        """Delete a finished task session."""
+        try:
+            await adk_app.async_delete_session(user_id=user_id, session_id=session_id)
+            logger.info(f"Deleted task session {session_id}")
+        except Exception as e:
+            logger.warning(f"Failed to delete task session {session_id}: {e}")
 
     def _build_task_prompt(self, task: Dict[str, Any]) -> str:
         """Build the execution prompt for the async agent."""

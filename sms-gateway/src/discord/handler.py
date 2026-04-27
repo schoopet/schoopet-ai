@@ -144,25 +144,14 @@ async def _handle_discord_message(
     response via the appropriate Discord mechanism.
 
     Flow:
-    1. Auto opt-in (no explicit consent needed for Discord).
-    2. Check rate limit.
-    3. Get or create agent session.
-    4. Query the agent.
-    5. Deliver reply via reply_fn.
+    1. Check rate limit.
+    2. Get or create agent session.
+    3. Query the agent.
+    4. Deliver reply via reply_fn.
     """
     start_time = time.time()
 
     try:
-        # Get or create user record
-        session_info = await _session_manager.get_or_create_user(user_id)
-
-        # Auto opt-in
-        if session_info.is_new_user or not session_info.opted_in:
-            logger.info(f"Auto opt-in for Discord user {user_id}")
-            await _session_manager.set_opted_in(user_id, channel="discord")
-            if session_info.is_new_user:
-                await reply_fn(WELCOME_MSG)
-
         # Check rate limit
         if _rate_limiter:
             is_allowed, count = await _rate_limiter.check_and_increment(user_id)
@@ -177,6 +166,8 @@ async def _handle_discord_message(
         session_info = await _session_manager.get_or_create_session(
             user_id, channel="discord"
         )
+        if session_info.is_new_user:
+            await reply_fn(WELCOME_MSG)
 
         logger.info(
             f"Forwarding to agent for Discord user {user_id}: "

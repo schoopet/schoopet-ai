@@ -1,5 +1,4 @@
 """Vertex AI Agent Engine client wrapper."""
-import asyncio
 import logging
 import time
 from typing import Optional, Union
@@ -74,6 +73,22 @@ class AgentEngineClient:
         session_id = session["id"]
         logger.info(f"Created session {session_id} for user {user_id}")
         return session_id
+
+    async def delete_session(self, user_id: str, session_id: str) -> None:
+        """Delete an Agent Engine session.
+
+        Best-effort — failures are logged and swallowed so they cannot
+        block downstream session creation.
+        """
+        try:
+            await self._adk_app.async_delete_session(
+                user_id=user_id, session_id=session_id
+            )
+            logger.info(f"Deleted session {session_id} for user {user_id}")
+        except Exception as e:
+            logger.warning(
+                f"Failed to delete session {session_id} for user {user_id}: {e}"
+            )
 
     async def send_message(
         self,
