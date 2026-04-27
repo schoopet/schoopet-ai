@@ -58,7 +58,7 @@ def _eml_to_gmail_payload(eml_path: Path) -> dict:
 
 
 def _make_tool() -> EmailTool:
-    tool = EmailTool("team")
+    tool = EmailTool()
     mock_oauth = MagicMock()
     mock_oauth.get_valid_access_token.return_value = "mock-token"
     tool._oauth_client = mock_oauth
@@ -79,7 +79,7 @@ def test_extract_pdf_bytes_from_eml():
     payload = _eml_to_gmail_payload(EML_PATH)
     tool = _make_tool()
     results: list[dict] = []
-    tool._walk_parts(payload, "eml-test", "mock-token", MagicMock(), results)
+    tool._walk_parts(payload, "eml-test", MagicMock(), results)
 
     pdf_results = [r for r in results if r["mime_type"] == "application/pdf"]
     assert len(pdf_results) == 1, f"Expected 1 PDF attachment, got: {results}"
@@ -95,7 +95,7 @@ def test_extracted_pdf_readable_by_pypdf(tmp_path):
     payload = _eml_to_gmail_payload(EML_PATH)
     tool = _make_tool()
     results: list[dict] = []
-    tool._walk_parts(payload, "eml-test", "mock-token", MagicMock(), results)
+    tool._walk_parts(payload, "eml-test", MagicMock(), results)
 
     pdf_att = next(r for r in results if r["mime_type"] == "application/pdf")
     pdf_bytes = pdf_att["bytes"]
