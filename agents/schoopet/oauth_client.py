@@ -143,16 +143,28 @@ class OAuthClient:
 
         return None
 
+    def _as_aware_utc(self, value: Any) -> Optional[datetime]:
+        """Normalize Firestore timestamps to timezone-aware UTC datetimes."""
+        if not isinstance(value, datetime):
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def _as_naive_utc(self, value: Any) -> Optional[datetime]:
+        """Convert datetimes to naive UTC for google-auth credential expiry."""
+        aware_value = self._as_aware_utc(value)
+        if aware_value is None:
+            return None
+        return aware_value.replace(tzinfo=None)
+
     def is_token_expired(self, token_data: Dict[str, Any]) -> bool:
         """Check if access token is expired."""
-        expires_at = token_data.get("expires_at")
+        expires_at = self._as_aware_utc(token_data.get("expires_at"))
         if not expires_at:
             return True
 
         now = datetime.now(timezone.utc)
-        if hasattr(expires_at, 'tzinfo') and expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-
         return now >= (expires_at - timedelta(seconds=60))
 
     def _get_refresh_token(self, user_id: str, feature: str) -> Optional[str]:
@@ -238,3 +250,37 @@ class OAuthClient:
 
         return access_token
 
+    def get_google_credentials(
+        self,
+        user_id: str,
+        feature: str = "google",
+        scopes: Optional[list[str]] = None,
+    ):
+        """Build google.oauth2.credentials.Credentials for a user token."""
+        from google.oauth2.credentials import Credentials
+
+        self._ensure_initialized()
+
+        token_data = self.get_token_data(user_id, feature)
+        if not token_data:
+            return None
+
+        access_token = self.get_valid_access_token(user_id, feature)
+        if not access_token:
+            return None
+
+        # Re-read after refresh so expiry reflects the latest stored token.
+        token_data = self.get_token_data(user_id, feature) or token_data
+        expires_at = self._as_naive_utc(token_data.get("expires_at"))
+
+        refresh_token = self._get_refresh_token(user_id, feature)
+
+        return Credentials(
+            token=access_token,
+            refresh_token=refresh_token,
+            token_uri=TOKEN_URL,
+            client_id=self._client_id,
+            client_secret=self._client_secret,
+            scopes=scopes,
+            expiry=expires_at,
+        )

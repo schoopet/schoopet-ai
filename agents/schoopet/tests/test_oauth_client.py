@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import MagicMock, patch, ANY
 from datetime import datetime, timezone, timedelta
 from agents.schoopet.oauth_client import OAuthClient
+from google.auth import _helpers
 
 # Sample data
 PHONE_NUMBER = "+14155551234"
@@ -130,6 +131,23 @@ class TestOAuthClient:
         # Expired (past)
         expired_past = {"expires_at": now - timedelta(minutes=10)}
         assert oauth_client.is_token_expired(expired_past)
+
+    def test_get_google_credentials_uses_naive_utc_expiry(self, oauth_client):
+        """Should normalize expiry for google-auth's naive UTC comparisons."""
+        aware_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+        token_data = {
+            "access_token": ACCESS_TOKEN,
+            "expires_at": aware_expiry,
+        }
+
+        with patch.object(oauth_client, "get_token_data", side_effect=[token_data, token_data]), \
+             patch.object(oauth_client, "get_valid_access_token", return_value=ACCESS_TOKEN), \
+             patch.object(oauth_client, "_get_refresh_token", return_value=REFRESH_TOKEN):
+            credentials = oauth_client.get_google_credentials(PHONE_NUMBER, "google")
+
+        assert credentials.expiry.tzinfo is None
+        assert not credentials.expired
+        assert credentials.expiry > _helpers.utcnow()
 
     def test_get_secret_fallback(self):
         """Should fetch secret from Secret Manager if missing from env."""
