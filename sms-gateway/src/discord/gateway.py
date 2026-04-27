@@ -15,10 +15,60 @@ import asyncio
 import logging
 
 import discord
+from google.genai import types
 
 from .handler import _handle_discord_message
 
 logger = logging.getLogger(__name__)
+
+MAX_INLINE_ATTACHMENT_BYTES = 10 * 1024 * 1024
+FALLBACK_MIME_TYPE = "application/octet-stream"
+
+
+async def _build_discord_message_content(
+    text: str,
+    attachments,
+) -> types.Content:
+    """Convert a Discord message into a multimodal agent payload."""
+    normalized_text = (text or "").strip()
+    parts: list[types.Part] = []
+    attachment_names: list[str] = []
+
+    for attachment in attachments:
+        filename = attachment.filename or "attachment"
+        attachment_names.append(filename)
+
+        if attachment.size > MAX_INLINE_ATTACHMENT_BYTES:
+            raise ValueError(
+                f"Attachment '{filename}' is too large ({attachment.size:,} bytes). "
+                f"Maximum supported size is {MAX_INLINE_ATTACHMENT_BYTES:,} bytes."
+            )
+
+        data = await attachment.read()
+        parts.append(
+            types.Part(
+                inline_data=types.Blob(
+                    mime_type=attachment.content_type or FALLBACK_MIME_TYPE,
+                    data=data,
+                )
+            )
+        )
+
+    if attachment_names:
+        if normalized_text:
+            prefix = normalized_text
+        else:
+            prefix = "The user sent attachment(s) with no accompanying text."
+        parts.insert(
+            0,
+            types.Part(
+                text=f"{prefix}\n\nAttachments: {', '.join(attachment_names)}"
+            ),
+        )
+    elif normalized_text:
+        parts.append(types.Part(text=normalized_text))
+
+    return types.Content(role="user", parts=parts)
 
 
 class SchoopetGateway(discord.Client):
@@ -58,14 +108,27 @@ class SchoopetGateway(discord.Client):
                 .strip()
             )
 
-        if not text:
+        if not text and not message.attachments:
             return
 
         user_id = str(message.author.id)
         logger.info(
             f"Discord gateway message: user={user_id} "
-            f"source={'DM' if is_dm else 'mention'} len={len(text)}"
+            f"source={'DM' if is_dm else 'mention'} len={len(text)} "
+            f"attachments={len(message.attachments)}"
         )
+
+        try:
+            content = await _build_discord_message_content(text, message.attachments)
+        except ValueError as e:
+            await message.channel.send(str(e))
+            return
+        except Exception as e:
+            logger.exception(f"Failed to read Discord attachments for user {user_id}: {e}")
+            await message.channel.send(
+                "I couldn't read one of your attachments. Please try again."
+            )
+            return
 
         # Show typing indicator while the agent thinks
         async with message.channel.typing():
@@ -74,7 +137,7 @@ class SchoopetGateway(discord.Client):
                 for chunk in _split_message(response_text):
                     await message.channel.send(chunk)
 
-            await _handle_discord_message(user_id, text, reply_fn)
+            await _handle_discord_message(user_id, content, reply_fn)
 
 
 async def start_gateway(bot_token: str, session_manager, agent_client, rate_limiter=None) -> SchoopetGateway:

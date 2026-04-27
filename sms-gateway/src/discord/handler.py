@@ -3,9 +3,11 @@ import asyncio
 import json
 import logging
 import time
+from typing import Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse
+from google.genai import types
 
 from ..config import get_settings
 from ..messages import RATE_LIMIT_MSG, WELCOME_MSG
@@ -117,7 +119,7 @@ async def handle_discord_webhook(
 
 async def process_discord_message(
     user_id: str,
-    text: str,
+    text: Union[str, types.Content],
     interaction_token: str,
 ) -> None:
     """Process a Discord /chat slash command in the background."""
@@ -132,7 +134,7 @@ async def process_discord_message(
 
 async def _handle_discord_message(
     user_id: str,
-    text: str,
+    message: Union[str, types.Content],
     reply_fn,
 ) -> None:
     """Shared processing pipeline for all Discord message sources.
@@ -187,7 +189,7 @@ async def _handle_discord_message(
             response = await _agent_client.send_message(
                 user_id=user_id,
                 session_id=session_info.agent_session_id,
-                message=text,
+                message=message,
             )
         except asyncio.TimeoutError:
             logger.error(f"Agent timeout for Discord user {user_id}")
