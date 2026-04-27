@@ -6,7 +6,6 @@
 # Usage:
 #   ./deploy.sh                        # Deploy to dev (default)
 #   ./deploy.sh --env=prod             # Deploy to prod environment
-#   ./deploy.sh --identity             # Deploy with Agent Identity enabled
 #   ./deploy.sh --from-tf              # Read engine ID from terraform output
 #
 # Environment variables (loaded from environments/<name>.env, then schoopet/.env):
@@ -61,17 +60,12 @@ else
 fi
 
 # Parse all arguments
-USE_IDENTITY=false
 CLI_ID=""
 FROM_TF=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --env=*)
-            shift
-            ;;
-        --identity)
-            USE_IDENTITY=true
             shift
             ;;
         --from-tf)
@@ -145,10 +139,7 @@ if [ -n "$ENGINE_ID" ]; then
     DEPLOY_CMD="$DEPLOY_CMD --id $ENGINE_ID"
 fi
 
-if [ "$USE_IDENTITY" = true ]; then
-    echo -e "Identity:    ${GREEN}Agent Identity enabled${NC}"
-    DEPLOY_CMD="$DEPLOY_CMD --agent-identity"
-fi
+echo -e "Identity:    ${GREEN}Agent Identity enabled${NC}"
 
 echo ""
 echo -e "${BLUE}Running deployment...${NC}"

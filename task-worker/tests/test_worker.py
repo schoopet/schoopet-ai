@@ -76,6 +76,7 @@ class TestTaskWorker:
         # Mock task document
         mock_doc = MagicMock()
         mock_doc.exists = True
+        mock_doc.update_time = object()
         mock_doc.to_dict.return_value = {
             "task_id": TASK_ID,
             "user_id": USER_ID,
@@ -102,7 +103,9 @@ class TestTaskWorker:
         # Verify status updates
         doc_ref = mock_firestore.collection.return_value.document.return_value
         # Should update to running
-        doc_ref.update.assert_any_call({"status": "running", "started_at": ANY})
+        running_update = doc_ref.update.call_args_list[0]
+        assert running_update.args[0] == {"status": "running", "started_at": ANY}
+        assert "option" in running_update.kwargs
         # Should update result
         doc_ref.update.assert_any_call({
             "status": "awaiting_review",
@@ -150,6 +153,7 @@ class TestTaskWorker:
         """Should handle execution failure."""
         mock_doc = MagicMock()
         mock_doc.exists = True
+        mock_doc.update_time = object()
         mock_doc.to_dict.return_value = {
             "task_id": TASK_ID,
             "user_id": USER_ID,
@@ -190,6 +194,7 @@ class TestTaskWorker:
         """Should execute revision with feedback in prompt."""
         mock_doc = MagicMock()
         mock_doc.exists = True
+        mock_doc.update_time = object()
         mock_doc.to_dict.return_value = {
             "task_id": TASK_ID,
             "user_id": USER_ID,
@@ -219,6 +224,7 @@ class TestTaskWorker:
         """Tasks without agent_type should default to personal engine."""
         mock_doc = MagicMock()
         mock_doc.exists = True
+        mock_doc.update_time = object()
         mock_doc.to_dict.return_value = {
             "task_id": TASK_ID,
             "user_id": USER_ID,
@@ -258,6 +264,7 @@ class TestTaskWorker:
 
         mock_doc = MagicMock()
         mock_doc.exists = True
+        mock_doc.update_time = object()
         mock_doc.to_dict.return_value = {
             "task_id": TASK_ID,
             "user_id": USER_ID,
@@ -276,29 +283,41 @@ class TestTaskWorker:
         assert "No engine ID configured" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_execute_task_routes_to_team_engine(self, task_worker, mock_firestore):
-        """Should route team agent_type tasks to the team engine."""
-        mock_doc = MagicMock()
-        mock_doc.exists = True
-        mock_doc.to_dict.return_value = {
+    async def test_execute_task_skips_lost_claim(self, task_worker, mock_firestore):
+        """Should skip execution if another worker claimed the task first."""
+        initial_doc = MagicMock()
+        initial_doc.exists = True
+        initial_doc.update_time = object()
+        initial_doc.to_dict.return_value = {
             "task_id": TASK_ID,
             "user_id": USER_ID,
             "status": "pending",
-            "task_type": "analysis",
-            "instruction": "Analyze data",
-            "agent_type": "team",
+            "task_type": "research",
+            "instruction": "Research AI",
+            "agent_type": "personal",
         }
-        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
-        mock_adk_app = _mock_adk_app_with_response("Team Result")
-        mock_vertex_client = MagicMock()
-        mock_vertex_client.agent_engines.get.return_value = mock_adk_app
-        task_worker._vertex_client = mock_vertex_client
+        claimed_doc = MagicMock()
+        claimed_doc.exists = True
+        claimed_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": USER_ID,
+            "status": "running",
+            "task_type": "research",
+            "instruction": "Research AI",
+            "agent_type": "personal",
+        }
 
+        doc_ref = mock_firestore.collection.return_value.document.return_value
+        doc_ref.get.side_effect = [initial_doc, claimed_doc]
+        doc_ref.update.side_effect = Exception("precondition failed")
+
+        task_worker._execute_task = AsyncMock()
         task_worker._notify_for_review = AsyncMock()
 
-        await task_worker.execute_task(TASK_ID)
+        result = await task_worker.execute_task(TASK_ID)
 
-        # Verify it called agent_engines.get with the team engine
-        engine_name = mock_vertex_client.agent_engines.get.call_args[1]["name"]
-        assert "team-engine-1" in engine_name
+        assert result["success"] is True
+        assert result["message"] == "Task already in status: running"
+        task_worker._execute_task.assert_not_awaited()
+        task_worker._notify_for_review.assert_not_awaited()

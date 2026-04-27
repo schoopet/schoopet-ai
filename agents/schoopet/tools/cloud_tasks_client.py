@@ -10,6 +10,7 @@ Security: All tasks use OIDC authentication for secure service-to-service calls.
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -77,11 +78,27 @@ class CloudTasksClient:
             return None
         return client.queue_path(self._project_id, self._location, self._queue_name)
 
+    def _build_task_name(self, prefix: str, suffix: str) -> Optional[str]:
+        """Build a deterministic Cloud Tasks resource name."""
+        client = self._get_client()
+        if not client or not self._project_id:
+            return None
+
+        normalized_suffix = re.sub(r"[^a-zA-Z0-9-]", "-", suffix).strip("-").lower()
+        task_id = f"{prefix}-{normalized_suffix}"[:500]
+        return client.task_path(
+            self._project_id,
+            self._location,
+            self._queue_name,
+            task_id,
+        )
+
     def create_task(
         self,
         task_id: str,
         user_id: str,
         schedule_time: Optional[datetime] = None,
+        task_suffix: str = "initial",
     ) -> Optional[str]:
         """Create a Cloud Task to execute an async task.
 
@@ -102,12 +119,16 @@ class CloudTasksClient:
 
         # Import here to avoid issues during pickling
         from google.cloud import tasks_v2
+        from google.api_core.exceptions import AlreadyExists
+        from google.protobuf import duration_pb2
         from google.protobuf import timestamp_pb2
 
         # Build the task payload
         payload = {"task_id": task_id, "user_id": user_id}
+        task_name = self._build_task_name("execute", f"{task_id}-{task_suffix}")
 
         task = {
+            "name": task_name,
             "http_request": {
                 "http_method": tasks_v2.HttpMethod.POST,
                 "url": f"{self._worker_url}/execute",
@@ -120,6 +141,8 @@ class CloudTasksClient:
                 },
             }
         }
+        # Match the worker's request budget explicitly so retry timing is predictable.
+        task["dispatch_deadline"] = duration_pb2.Duration(seconds=900)
 
         # Add schedule time if specified
         if schedule_time:
@@ -134,6 +157,9 @@ class CloudTasksClient:
             response = client.create_task(parent=self.queue_path, task=task)
             logger.info(f"Created Cloud Task: {response.name}")
             return response.name
+        except AlreadyExists:
+            logger.info(f"Cloud Task already exists, reusing name: {task_name}")
+            return task_name
         except Exception as e:
             logger.error(f"Failed to create Cloud Task: {e}")
             return None
@@ -142,6 +168,7 @@ class CloudTasksClient:
         self,
         task_id: str,
         user_id: str,
+        revision_number: int,
     ) -> Optional[str]:
         """Create a Cloud Task for task revision (after correction request).
 
@@ -154,7 +181,12 @@ class CloudTasksClient:
         Returns:
             Cloud Task name if successful, None otherwise
         """
-        return self.create_task(task_id=task_id, user_id=user_id, schedule_time=None)
+        return self.create_task(
+            task_id=task_id,
+            user_id=user_id,
+            schedule_time=None,
+            task_suffix=f"rev-{revision_number}",
+        )
 
     def create_notification_task(
         self,
@@ -194,6 +226,8 @@ class CloudTasksClient:
 
         # Import here to avoid issues during pickling
         from google.cloud import tasks_v2
+        from google.api_core.exceptions import AlreadyExists
+        from google.protobuf import duration_pb2
         from google.protobuf import timestamp_pb2
 
         # Build the notification payload
@@ -203,8 +237,11 @@ class CloudTasksClient:
             "message": message,
             "channel": channel,
         }
+        name_suffix = f"{task_id}-{channel}-{int(schedule_time.timestamp())}"
+        task_name = self._build_task_name("notify", name_suffix)
 
         task = {
+            "name": task_name,
             "http_request": {
                 "http_method": tasks_v2.HttpMethod.POST,
                 "url": f"{sms_gateway_url}/internal/user-notify",
@@ -217,6 +254,7 @@ class CloudTasksClient:
                 },
             }
         }
+        task["dispatch_deadline"] = duration_pb2.Duration(seconds=300)
 
         # Add schedule time
         timestamp = timestamp_pb2.Timestamp()
@@ -229,6 +267,9 @@ class CloudTasksClient:
             response = client.create_task(parent=self.queue_path, task=task)
             logger.info(f"Created notification Cloud Task: {response.name}")
             return response.name
+        except AlreadyExists:
+            logger.info(f"Notification Cloud Task already exists, reusing name: {task_name}")
+            return task_name
         except Exception as e:
             logger.error(f"Failed to create notification Cloud Task: {e}")
             return None

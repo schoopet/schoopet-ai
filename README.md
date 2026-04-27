@@ -6,13 +6,12 @@ A multi-component AI assistant system built on Google Vertex AI Agent Engine.
 
 | Component | Path | Description |
 |-----------|------|-------------|
-| Personal Agent | `agents/schoopet/` | Google ADK agent for SMS/WhatsApp/Telegram — uses user's personal OAuth tokens |
-| Team Agent | `agents/schoopet/` | Same codebase, `access_mode="team"` — for Slack/Email, uses system workspace token + BigQuery/email tools |
-| SMS Gateway | `sms-gateway/` | FastAPI Cloud Run service routing each channel to the correct agent |
+| Agent | `agents/schoopet/` | Google ADK agent — handles all channels via personal OAuth tokens |
+| SMS Gateway | `sms-gateway/` | FastAPI Cloud Run service routing all channels to the agent |
 | Task Worker | `task-worker/` | Async task executor for long-running agent operations |
-| Website | `web/` | Static Vite landing page |
+| Website | `website/` | Static Vite landing page |
 
-Both agents are built from `agents/schoopet/root_agent.py` via `create_agent(access_mode)` and deployed as separate Vertex AI reasoning engines.
+All channels (SMS, WhatsApp, Telegram, Discord, Slack, Email) route to the single personal agent using `PERSONAL_AGENT_ENGINE_ID`. The agent is deployed as a Vertex AI reasoning engine and managed via Terraform.
 
 ## Environments
 
@@ -23,18 +22,13 @@ Project settings live in `environments/` (checked in, no secrets):
 | `environments/dev.env` | `schoopet-dev` | Development |
 | `environments/prod.env` | `schoopet-prod` | Production |
 
-Secrets and local overrides go in component-level `.env` files (gitignored):
-- `agents/schoopet/.env`
-- `sms-gateway/.env`
+Secrets go in `environments/<name>.secrets.env` (gitignored). The deploy scripts load both files automatically.
 
 ## Deploying
 
 ```bash
-# Team agent (Slack/Email) — --agent-type is required
-./agents/deploy.sh --agent-type=team --env=prod
-
-# Personal agent (SMS/WhatsApp/Telegram)
-./agents/deploy.sh --agent-type=personal --env=prod
+# Agent (updates existing engine — engine must be created via Terraform first)
+./agents/deploy.sh --env=prod
 
 # SMS Gateway
 ./sms-gateway/scripts/deploy.sh --env=prod
@@ -43,28 +37,29 @@ Secrets and local overrides go in component-level `.env` files (gitignored):
 ./task-worker/deploy.sh --env=prod
 ```
 
-Each script loads `environments/<name>.env` first, then the component `.env` for secrets.
-Pass `--new` to `agents/deploy.sh` to create a fresh Agent Engine instead of updating.
-
 ## First-time setup for a new environment
 
 ### 1. Create the env file
 
 Create `environments/<name>.env` with at minimum `GOOGLE_CLOUD_PROJECT` set. Use `environments/prod.env` as a reference.
 
-### 2. Deploy the agents
-
-Deploy the team agent first (it serves Slack/Email), then the personal agent:
+### 2. Create infrastructure via Terraform
 
 ```bash
-./agents/deploy.sh --agent-type=team --env=<name> --new
-# Copy printed engine ID → environments/<name>.env as TEAM_AGENT_ENGINE_ID
-
-./agents/deploy.sh --agent-type=personal --env=<name> --new
-# Copy printed engine ID → environments/<name>.env as PERSONAL_AGENT_ENGINE_ID
+cd terraform
+terraform init -backend-config="bucket=<state-bucket>" -backend-config="prefix=<env>"
+terraform apply -var-file=environments/<name>.tfvars
 ```
 
-### 3. Domain and networking setup
+This creates the Agent Engine (reasoning engine), Cloud Run services, Cloud Tasks queue, Pub/Sub topics, and all required IAM bindings. After applying, copy the printed `personal_agent_resource_name` output into `environments/<name>.env` as `PERSONAL_AGENT_ENGINE_ID`.
+
+### 3. Deploy the agent
+
+```bash
+./agents/deploy.sh --env=<name>
+```
+
+### 4. Domain and networking setup
 
 The SMS Gateway needs a public HTTPS URL for OAuth callbacks and messaging webhooks. There are two options:
 
@@ -77,22 +72,22 @@ Skip custom DNS entirely. After deploying the SMS Gateway, set `OAUTH_BASE_URL` 
 Add a DNS record pointing the subdomain to Cloud Run:
 
 ```
-CNAME  dev   ghs.googlehosted.com.
+CNAME  api   ghs.googlehosted.com.
 ```
 
-Then create a domain mapping in the new GCP project:
+Then create a domain mapping in the GCP project:
 
 ```bash
 gcloud beta run domain-mappings create \
   --service shoopet-sms-gateway \
-  --domain dev.schoopet.com \
+  --domain api.schoopet.com \
   --region us-central1 \
   --project <GOOGLE_CLOUD_PROJECT>
 ```
 
-Note: GCP requires domain ownership verification **per project**, even if the same Google account owns all projects. Verify via [Search Console](https://search.google.com/search-console) (an HTML file or meta tag on the domain). The same Google account can verify the same domain in multiple projects.
+Note: GCP requires domain ownership verification **per project**, even if the same Google account owns all projects. Verify via [Search Console](https://search.google.com/search-console).
 
-### 4. Register the OAuth redirect URI
+### 5. Register the OAuth redirect URI
 
 `GOOGLE_OAUTH_REDIRECT_URI` is automatically set to `${OAUTH_BASE_URL}/oauth/google/callback` by the deploy script. This exact URI must be registered in the Google Cloud Console OAuth 2.0 client before users can authorize.
 
@@ -101,23 +96,17 @@ Go to **APIs & Services → Credentials → OAuth 2.0 Client** and add:
 https://<your-gateway-url>/oauth/google/callback
 ```
 
-**Two approaches for the OAuth client itself:**
-
-- **Shared client** (simpler): Add the new redirect URI to the existing client in `mmontan-ml`. Copy the same `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` values into the new project's Secret Manager under the secret names `google-oauth-client-id` and `google-oauth-client-secret`.
-- **Per-project client** (cleaner isolation): Create a new OAuth client in the new GCP project. Store its credentials in that project's Secret Manager under the same secret names. The agent's `oauth_client.py` picks them up automatically via the Secret Manager fallback.
-
-### 5. Store secrets in the new project's Secret Manager
+### 6. Store secrets in Secret Manager
 
 The SMS Gateway reads these secrets at runtime:
 
 ```bash
-# Run setup_secrets.sh or create them manually:
 ./sms-gateway/scripts/setup_secrets.sh
 ```
 
 Required secrets: `twilio-account-sid`, `twilio-auth-token`, `twilio-phone-number`, `twilio-whatsapp-number`, `google-oauth-client-id`, `google-oauth-client-secret`, `telegram-bot-token`, `slack-bot-token`, `slack-signing-secret`.
 
-### 6. Deploy SMS Gateway and Task Worker
+### 7. Deploy SMS Gateway and Task Worker
 
 ```bash
 ./sms-gateway/scripts/deploy.sh --env=<name>
@@ -126,9 +115,9 @@ Required secrets: `twilio-account-sid`, `twilio-auth-token`, `twilio-phone-numbe
 
 Update `environments/<name>.env` with the Task Worker URL printed after deploy.
 
-### 7. Configure messaging webhooks
+### 8. Configure messaging webhooks
 
-Each environment needs its webhooks pointed at its own gateway URL. These are platform-side settings — there is no code change:
+Each environment needs its webhooks pointed at its own gateway URL. These are platform-side settings — no code change required:
 
 | Integration | Where to configure | Setting |
 |---|---|---|
@@ -139,17 +128,12 @@ Each environment needs its webhooks pointed at its own gateway URL. These are pl
 
 **Adding the Discord bot to a server**
 
-Use this invite link to add Schoopet to a Discord server:
+Use this invite link to add the bot to a Discord server:
 
 ```
 https://discord.com/oauth2/authorize?client_id=1495984034268975275&scope=bot+applications.commands&permissions=2048
 ```
 
-Once added, users can talk to the agent by:
-- DMing the bot directly
-- @mentioning it in any channel
-- Using the `/chat` slash command
+Once added, users can talk to the agent by DMing the bot directly, @mentioning it in any channel, or using the `/chat` slash command.
 
 > **Note:** Enable **Message Content Intent** in the Discord Developer Portal under Bot → Privileged Gateway Intents, otherwise the bot cannot read message text.
-
-For `dev`, the pragmatic approach is to use a separate Twilio test number and separate Telegram/Slack apps. Sharing a single number/bot across environments is not recommended as webhooks can only point to one URL at a time.

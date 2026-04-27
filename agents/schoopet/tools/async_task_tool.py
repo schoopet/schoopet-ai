@@ -643,6 +643,7 @@ class AsyncTaskTool:
             cloud_task_name = cloud_tasks.create_revision_task(
                 task_id=task_id,
                 user_id=task_user,
+                revision_number=task.review_attempts + 1,
             )
 
             if cloud_task_name:

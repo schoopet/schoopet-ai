@@ -259,4 +259,9 @@ class TestAsyncTaskTool:
             "revision_feedback": "Make it better",
             "review_attempts": 1
         })
+        mock_cloud_tasks.create_revision_task.assert_called_once_with(
+            task_id=TASK_ID,
+            user_id=USER_ID,
+            revision_number=1,
+        )
         mock_cloud_tasks.create_revision_task.assert_called_once()

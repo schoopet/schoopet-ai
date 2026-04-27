@@ -12,12 +12,14 @@ import uuid
 from typing import Optional
 
 from google.adk.tools import ToolContext
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from .utils import require_user_id
 
 logger = logging.getLogger(__name__)
 
-GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
+GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
 # Unified email rules collection for all users.
 # NOTE: sms-gateway/src/email/gmail_client.py defines the same constant — must stay in sync.
@@ -79,9 +81,13 @@ class EmailTool:
 
     # ── Token helpers ──────────────────────────────────────────────────────
 
-    def _get_token(self, phone: str) -> Optional[str]:
-        """Return a valid access token for this user."""
-        return self._get_oauth_client().get_valid_access_token(phone, "google")
+    def _get_gmail_service(self, phone: str):
+        credentials = self._get_oauth_client().get_google_credentials(
+            phone, "google", scopes=GMAIL_SCOPES
+        )
+        if credentials is None:
+            return None
+        return build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
     def _token_missing_message(self, phone: str) -> str:
         """Return the auth-link message when no token exists."""
@@ -115,40 +121,37 @@ class EmailTool:
 
     # ── Gmail helpers ──────────────────────────────────────────────────────
 
-    def _gmail_search(self, query: str, max_results: int, token: str) -> list[dict]:
-        import httpx
-        with httpx.Client() as client:
-            resp = client.get(
-                f"{GMAIL_API_BASE}/messages",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"q": query, "maxResults": max_results},
-            )
-            resp.raise_for_status()
-            return resp.json().get("messages", [])
+    def _gmail_search(self, service, query: str, max_results: int) -> list[dict]:
+        response = (
+            service.users()
+            .messages()
+            .list(userId="me", q=query, maxResults=max_results)
+            .execute()
+        )
+        return response.get("messages", [])
 
-    def _gmail_fetch(self, message_id: str, token: str) -> Optional[dict]:
+    def _gmail_fetch(self, service, message_id: str) -> Optional[dict]:
         """Fetch a single message with full body and attachment parts."""
-        import httpx
-        with httpx.Client() as client:
-            resp = client.get(
-                f"{GMAIL_API_BASE}/messages/{message_id}",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"format": "full"},
-            )
-            resp.raise_for_status()
-            return resp.json()
+        return (
+            service.users()
+            .messages()
+            .get(userId="me", id=message_id, format="full")
+            .execute()
+        )
 
-    def _gmail_fetch_metadata(self, message_id: str, token: str) -> Optional[dict]:
+    def _gmail_fetch_metadata(self, service, message_id: str) -> Optional[dict]:
         """Fetch a single message with metadata headers only (lighter)."""
-        import httpx
-        with httpx.Client() as client:
-            resp = client.get(
-                f"{GMAIL_API_BASE}/messages/{message_id}",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]},
+        return (
+            service.users()
+            .messages()
+            .get(
+                userId="me",
+                id=message_id,
+                format="metadata",
+                metadataHeaders=["From", "Subject", "Date"],
             )
-            resp.raise_for_status()
-            return resp.json()
+            .execute()
+        )
 
     @staticmethod
     def _decode_body(part: dict) -> str:
@@ -194,17 +197,15 @@ class EmailTool:
         }
 
     def _collect_attachments(
-        self, payload: dict, message_id: str, token: str
+        self, payload: dict, message_id: str, service
     ) -> list[dict]:
         """Recursively walk the MIME tree and collect attachment data."""
-        import httpx
         results: list[dict] = []
-        with httpx.Client() as client:
-            self._walk_parts(payload, message_id, token, client, results)
+        self._walk_parts(payload, message_id, service, results)
         return results
 
     def _walk_parts(
-        self, part: dict, message_id: str, token: str, client, results: list
+        self, part: dict, message_id: str, service, results: list
     ) -> None:
         mime_type = part.get("mimeType", "")
 
@@ -213,7 +214,7 @@ class EmailTool:
 
         if mime_type.startswith("multipart/"):
             for sub in part.get("parts", []):
-                self._walk_parts(sub, message_id, token, client, results)
+                self._walk_parts(sub, message_id, service, results)
             return
 
         filename = part.get("filename", "")
@@ -223,7 +224,7 @@ class EmailTool:
 
         attachment_bytes: Optional[bytes] = None
         if mime_type in GEMINI_SUPPORTED_MIME_TYPES:
-            attachment_bytes = self._fetch_attachment_bytes(part, message_id, token, client)
+            attachment_bytes = self._fetch_attachment_bytes(part, message_id, service)
 
         results.append(
             {
@@ -234,7 +235,7 @@ class EmailTool:
         )
 
     def _fetch_attachment_bytes(
-        self, part: dict, message_id: str, token: str, client
+        self, part: dict, message_id: str, service
     ) -> Optional[bytes]:
         """Decode or download attachment bytes for a single MIME part."""
         body = part.get("body", {})
@@ -251,12 +252,14 @@ class EmailTool:
             return None
 
         try:
-            resp = client.get(
-                f"{GMAIL_API_BASE}/messages/{message_id}/attachments/{attachment_id}",
-                headers={"Authorization": f"Bearer {token}"},
+            response = (
+                service.users()
+                .messages()
+                .attachments()
+                .get(userId="me", messageId=message_id, id=attachment_id)
+                .execute()
             )
-            resp.raise_for_status()
-            data = resp.json().get("data", "")
+            data = response.get("data", "")
             if data:
                 return base64.urlsafe_b64decode(data + "==")
         except Exception as e:
@@ -286,14 +289,16 @@ class EmailTool:
         if err:
             return err
 
-        token = self._get_token(phone)
-        if not token:
+        service = self._get_gmail_service(phone)
+        if not service:
             return self._token_missing_message(phone)
 
         full_query = query or "in:inbox"
 
         try:
-            messages = self._gmail_search(full_query, max_results, token)
+            messages = self._gmail_search(service, full_query, max_results)
+        except HttpError as e:
+            return f"Error searching emails: {e}"
         except Exception as e:
             return f"Error searching emails: {e}"
 
@@ -303,7 +308,7 @@ class EmailTool:
         results = []
         for m in messages:
             try:
-                raw = self._gmail_fetch_metadata(m["id"], token)
+                raw = self._gmail_fetch_metadata(service, m["id"])
                 if not raw:
                     continue
                 headers_list = raw.get("payload", {}).get("headers", [])
@@ -353,18 +358,20 @@ class EmailTool:
         user_id, err = require_user_id(tool_context, "email")
         if err:
             return err
-        token = self._get_token(user_id)
-        if not token:
+        service = self._get_gmail_service(user_id)
+        if not service:
             return self._token_missing_message(user_id or "")
 
         try:
-            raw = self._gmail_fetch(message_id, token)
+            raw = self._gmail_fetch(service, message_id)
+        except HttpError as e:
+            return f"Error fetching email {message_id}: {e}"
         except Exception as e:
             return f"Error fetching email {message_id}: {e}"
 
         parsed = self._parse_message(raw)
         payload = raw.get("payload", {})
-        attachments = self._collect_attachments(payload, message_id, token)
+        attachments = self._collect_attachments(payload, message_id, service)
 
         artifact_keys: list[tuple[str, str]] = []
         unsupported_files: list[str] = []

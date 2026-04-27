@@ -1,5 +1,5 @@
 locals {
-  task_worker_image = coalesce(var.task_worker_image, "gcr.io/${var.project_id}/schoopet-task-worker:latest")
+  task_worker_image = coalesce(var.task_worker_image, "us-docker.pkg.dev/${var.project_id}/schoopet/schoopet-task-worker:latest")
 }
 
 resource "google_cloud_run_v2_service" "task_worker" {

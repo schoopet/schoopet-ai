@@ -9,7 +9,6 @@ location='global', which causes the genai library to use the global
 base URL automatically.
 """
 import os
-from functools import cached_property
 
 from google.adk.models.google_llm import Gemini as _BaseGemini
 from google.genai import types
@@ -18,7 +17,7 @@ from google.genai import types
 class GlobalGemini(_BaseGemini):
     """Gemini model that routes requests to the global Vertex AI endpoint."""
 
-    @cached_property
+    @property
     def api_client(self):
         from google.genai import Client
 

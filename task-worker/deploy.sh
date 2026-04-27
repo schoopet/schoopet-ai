@@ -39,7 +39,7 @@ set +a
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT}"
 REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 SERVICE_NAME="schoopet-task-worker"
-IMAGE="gcr.io/$PROJECT_ID/$SERVICE_NAME"
+IMAGE="us-docker.pkg.dev/$PROJECT_ID/schoopet/$SERVICE_NAME"
 
 if [ -z "$PROJECT_ID" ]; then
     echo "Error: GOOGLE_CLOUD_PROJECT is not set. Check environments/${ENV_NAME}.env"
@@ -69,7 +69,7 @@ echo "Image pushed: $IMAGE"
 # Resolve the exact digest so Terraform always sees a changed image value
 # and creates a new Cloud Run revision — avoids the :latest staleness problem.
 echo "Resolving image digest..."
-DIGEST=$(gcloud container images describe "$IMAGE" \
+DIGEST=$(gcloud artifacts docker images describe "$IMAGE" \
     --project "$PROJECT_ID" \
     --format="value(image_summary.digest)" 2>/dev/null)
 if [ -z "$DIGEST" ]; then

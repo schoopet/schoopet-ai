@@ -1,0 +1,123 @@
+Title
+python-genai async Vertex mTLS path caches a non-refreshing bearer token via StaticCredentials, causing long-lived Agent Engine clients to fail after token expiry
+
+Summary
+In the async Vertex AI + mTLS code path, python-genai creates an AsyncAuthorizedSession with google.auth.aio.credentials.StaticCredentials(token=...). Because StaticCredentials never refreshes, a long-lived google.genai.Client can continue sending an expired bearer token even though the process is healthy and client certs remain valid.
+
+This is especially visible in long-lived runtimes like Vertex AI Agent Engine / Cloud Run, where the client may work for about an hour and then start failing with 401 UNAUTHENTICATED until the process is restarted.
+
+Impact
+Long-lived async clients using Vertex AI with mTLS can fail after access token expiry.
+
+Observed behavior:
+- Agent works normally for a while
+- Later model calls fail with 401 UNAUTHENTICATED
+- Restarting the process restores functionality temporarily
+
+This appears to affect the async mTLS path specifically, not the plain non-mTLS async path.
+
+Suspected Root Cause
+In google/genai/_api_client.py, the async mTLS session is initialized with a static token:
+
+    async_creds = StaticCredentials(token=self._access_token())
+    self._aiohttp_session = AsyncAuthorizedSession(async_creds)
+
+Because StaticCredentials never refreshes, the underlying AsyncAuthorizedSession keeps applying that original token on subsequent requests.
+
+StaticCredentials docs/code explicitly say it never refreshes:
+- google.auth.aio.credentials.StaticCredentials
+
+Also, AsyncAuthorizedSession.request() calls before_request(), which reapplies the session credential's token to the request headers, overwriting any fresher header set earlier.
+
+Why this is a bug in python-genai
+google-auth-aio appears to be behaving as designed:
+- StaticCredentials is intentionally non-refreshing
+
+The problem is that python-genai uses StaticCredentials for a long-lived async authorized session in the mTLS path.
+
+Relevant Code
+python-genai:
+- google/genai/_api_client.py
+- async mTLS path selection around _use_google_auth_async()
+- session creation around:
+
+    async_creds = StaticCredentials(token=self._access_token())
+    self._aiohttp_session = AsyncAuthorizedSession(async_creds)
+
+google-auth-aio:
+- google/auth/aio/credentials.py
+- StaticCredentials explicitly never refreshes
+
+Environment
+Observed in:
+- google-genai==1.73.1
+- google-cloud-aiplatform==1.148.1
+- Vertex AI Agent Engine runtime
+- Agent Identity / mTLS environment
+
+Observed Runtime Behavior
+From inside the runtime:
+- Plain call to https://aiplatform.googleapis.com/...:generateContent returns 401 UNAUTHENTICATED
+- Explicit mTLS call to https://aiplatform.mtls.googleapis.com/...:generateContent succeeds
+- After the process has been up for some time, model calls start failing with auth errors consistent with expired access token usage
+
+One observed error:
+- 401 UNAUTHENTICATED
+- ACCESS_TOKEN_EXPIRED
+- method: google.cloud.aiplatform.v1beta1.PredictionService.GenerateContent
+
+Expected Behavior
+A long-lived async Vertex client using mTLS should continue working across bearer token refresh cycles.
+
+The mTLS session should use refreshable credentials, or otherwise avoid pinning a single access token for the life of the session.
+
+Actual Behavior
+The first token is effectively pinned into the async mTLS session and reused until process restart.
+
+Minimal Repro Logic
+Deterministic mechanism repro:
+
+1. Create AsyncAuthorizedSession(StaticCredentials("token-A"))
+2. Prepare request headers with Authorization: Bearer token-B
+3. Call before_request()
+4. Observe that headers are overwritten back to token-A
+
+This demonstrates that the session credential can override a newer token.
+
+Local Repro Script
+Standalone repro script:
+
+agents/schoopet/scripts/repro_async_mtls_static_token.py
+
+It has:
+- a deterministic offline proof of header overwrite behavior
+- an optional live inspection mode for a Vertex-like runtime
+
+How to Run
+Deterministic local proof:
+
+    ./.venv/bin/python agents/schoopet/scripts/repro_async_mtls_static_token.py
+
+Optional live inspection in an Agent Engine / Cloud Run environment:
+
+    GOOGLE_GENAI_USE_VERTEXAI=true \
+    GOOGLE_CLOUD_PROJECT=your-project \
+    GOOGLE_CLOUD_LOCATION=us-central1 \
+    ./.venv/bin/python agents/schoopet/scripts/repro_async_mtls_static_token.py --inspect-live-client
+
+Suggested Fix
+python-genai should not create a long-lived async mTLS authorized session with StaticCredentials(token=...).
+
+Possible fixes:
+- use refreshable async credentials instead of StaticCredentials
+- rebuild the async authorized session when the token expires
+- avoid having AsyncAuthorizedSession overwrite fresher request headers with a stale static token
+- align async mTLS auth behavior with the sync path's refresh semantics
+
+Notes
+This does not appear to be a permission/IAM issue.
+
+We verified separately that:
+- the same runtime can successfully call Vertex AI over explicit mTLS
+- plain non-mTLS Vertex calls fail
+- the failure pattern is consistent with stale bearer token reuse in a working mTLS environment

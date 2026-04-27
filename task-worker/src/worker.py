@@ -28,7 +28,6 @@ class TaskWorker:
         self._project_id = None
         self._location = None
         self._personal_engine_id = None
-        self._team_engine_id = None
         self._sms_gateway_url = None
 
     def _ensure_initialized(self):
@@ -41,14 +40,11 @@ class TaskWorker:
         self._personal_engine_id = (
             os.getenv("PERSONAL_AGENT_ENGINE_ID") or os.getenv("AGENT_ENGINE_ID")
         )
-        self._team_engine_id = (
-            os.getenv("TEAM_AGENT_ENGINE_ID") or os.getenv("AGENT_ENGINE_ID")
-        )
         self._sms_gateway_url = os.getenv("SMS_GATEWAY_URL")
 
         self._initialized = True
 
-        if not self._project_id or not (self._personal_engine_id or self._team_engine_id):
+        if not self._project_id or not self._personal_engine_id:
             logger.error("Missing required environment variables")
 
     def _get_firestore_client(self):
@@ -90,23 +86,21 @@ class TaskWorker:
         """
         self._ensure_initialized()
 
-        # Get task from Firestore
-        task = await self._get_task(task_id)
-        if not task:
+        # Atomically claim the task before executing it so Cloud Tasks retries
+        # or duplicate deliveries cannot run the same Firestore task twice.
+        claim = await self._claim_task_for_execution(task_id)
+        if claim is None:
             return {"success": False, "error": f"Task {task_id} not found"}
 
-        # Check if task can be executed
-        status = task.get("status")
-        if status not in ["pending", "scheduled", "revision_requested"]:
-            logger.info(f"Task {task_id} already processed: {status}")
-            return {"success": True, "message": f"Task already in status: {status}"}
-
-        # Update status to running
-        await self._update_task_status(task_id, "running")
+        task = claim["task"]
+        prior_status = claim["prior_status"]
+        if not claim["claimed"]:
+            logger.info(f"Task {task_id} already processed: {prior_status}")
+            return {"success": True, "message": f"Task already in status: {prior_status}"}
 
         try:
             # Execute via deployed Agent Engine (full tool access)
-            if status == "revision_requested":
+            if prior_status == "revision_requested":
                 prompt = self._build_revision_prompt(task)
             else:
                 prompt = self._build_task_prompt(task)
@@ -159,6 +153,48 @@ class TaskWorker:
             return doc.to_dict()
         return None
 
+    async def _claim_task_for_execution(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Claim a task for execution with an optimistic concurrency check."""
+        firestore_client = self._get_firestore_client()
+        if not firestore_client:
+            return None
+
+        from google.cloud import firestore
+
+        doc_ref = firestore_client.collection("async_tasks").document(task_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            return None
+
+        task = doc.to_dict()
+        status = task.get("status")
+        if status not in ["pending", "scheduled", "revision_requested"]:
+            return {"claimed": False, "prior_status": status, "task": task}
+
+        started_at = datetime.now(timezone.utc)
+        try:
+            doc_ref.update(
+                {
+                    "status": "running",
+                    "started_at": started_at,
+                },
+                option=firestore.LastUpdateOption(doc.update_time),
+            )
+        except Exception as exc:
+            logger.info(f"Task {task_id} claim lost due to concurrent update: {exc}")
+            latest = doc_ref.get()
+            latest_task = latest.to_dict() if latest.exists else task
+            latest_status = latest_task.get("status") if latest_task else status
+            return {
+                "claimed": False,
+                "prior_status": latest_status,
+                "task": latest_task,
+            }
+
+        task["status"] = "running"
+        task["started_at"] = started_at
+        return {"claimed": True, "prior_status": status, "task": task}
+
     async def _update_task_status(self, task_id: str, status: str):
         """Update task status in Firestore."""
         firestore_client = self._get_firestore_client()
@@ -210,16 +246,11 @@ class TaskWorker:
         sends the prompt, and streams the result. The agent engine has
         full tool access (calendar, search, drive, sheets, memory, etc.).
         """
-        agent_type = task.get("agent_type", "personal")
-        engine_id = (
-            self._team_engine_id if agent_type == "team"
-            else self._personal_engine_id
-        )
+        engine_id = self._personal_engine_id
 
         if not engine_id:
             raise ValueError(
-                f"No engine ID configured for agent_type={agent_type}. "
-                f"Set {'TEAM' if agent_type == 'team' else 'PERSONAL'}_AGENT_ENGINE_ID."
+                "No engine ID configured. Set PERSONAL_AGENT_ENGINE_ID."
             )
 
         client = self._get_vertex_client()

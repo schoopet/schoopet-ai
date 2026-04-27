@@ -4,13 +4,11 @@ uvicorn[standard]>=0.27.0
 pydantic>=2.0.0
 
 # Google Cloud
+google-adk[eval]==1.31.1
+google-genai==1.73.1
+google-cloud-aiplatform==1.148.1
 google-cloud-firestore>=2.14.0
-google-cloud-aiplatform>=1.38.0
 google-auth>=2.25.0
-vertexai>=1.38.0
-
-# Agent Framework
-google-adk[eval]>=0.1.0
 
 # HTTP client
 aiohttp>=3.9.0

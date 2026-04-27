@@ -1,19 +1,10 @@
-"""Unit tests for EmailTool.fetch_email.
-
-Strategy:
-- Wire tool_context.save_artifact to an InMemoryArtifactService so we can
-  verify stored artifacts without GCS credentials.
-- Mock httpx.Client to simulate Gmail API responses.
-- Mock _oauth_client.get_valid_access_token to avoid live OAuth calls.
-"""
+"""Unit tests for EmailTool."""
 import base64
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import pytest_asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from google.adk.artifacts import InMemoryArtifactService
-from google.genai import types
 
 from agents.schoopet.email_tool import EmailTool
 
@@ -24,14 +15,9 @@ PDF_BYTES = b"%PDF-1.4 fake pdf content"
 PDF_B64 = base64.urlsafe_b64encode(PDF_BYTES).decode()
 BODY_TEXT = "Please find the resume attached."
 BODY_B64 = base64.urlsafe_b64encode(BODY_TEXT.encode()).decode()
-SYSTEM_TOKEN = "sys-access-token"
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 
 def _make_full_msg(attachments_payload: list[dict]) -> dict:
-    """Build a minimal Gmail API 'full' message dict."""
     return {
         "id": MSG_ID,
         "snippet": BODY_TEXT,
@@ -42,13 +28,7 @@ def _make_full_msg(attachments_payload: list[dict]) -> dict:
                 {"name": "Date", "value": "Mon, 01 Jan 2025 10:00:00 +0000"},
             ],
             "mimeType": "multipart/mixed",
-            "parts": [
-                {
-                    "mimeType": "text/plain",
-                    "body": {"data": BODY_B64},
-                },
-                *attachments_payload,
-            ],
+            "parts": [{"mimeType": "text/plain", "body": {"data": BODY_B64}}, *attachments_payload],
         },
     }
 
@@ -66,10 +46,63 @@ _ZIP_PART = {
 }
 
 
-async def _make_artifact_service_with_save(
-    user_id: str = PHONE,
-) -> tuple[InMemoryArtifactService, AsyncMock]:
-    """Return (service, tool_context) with save_artifact wired to the service."""
+class _FakeRequest:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def execute(self):
+        return self._payload
+
+
+class _FakeAttachmentsResource:
+    def __init__(self, attachment_payloads=None):
+        self.attachment_payloads = attachment_payloads or {}
+        self.calls = []
+
+    def get(self, **kwargs):
+        self.calls.append(kwargs)
+        payload = self.attachment_payloads.get(kwargs["id"], {})
+        return _FakeRequest(payload)
+
+
+class _FakeMessagesResource:
+    def __init__(self, list_payload=None, message_payloads=None, attachment_payloads=None):
+        self.list_payload = list_payload or {"messages": []}
+        self.message_payloads = message_payloads or {}
+        self.list_calls = []
+        self.get_calls = []
+        self._attachments = _FakeAttachmentsResource(attachment_payloads)
+
+    def list(self, **kwargs):
+        self.list_calls.append(kwargs)
+        return _FakeRequest(self.list_payload)
+
+    def get(self, **kwargs):
+        self.get_calls.append(kwargs)
+        payload = self.message_payloads[(kwargs["id"], kwargs["format"])]
+        return _FakeRequest(payload)
+
+    def attachments(self):
+        return self._attachments
+
+
+class _FakeUsersResource:
+    def __init__(self, messages_resource):
+        self._messages = messages_resource
+
+    def messages(self):
+        return self._messages
+
+
+class _FakeGmailService:
+    def __init__(self, messages_resource):
+        self._users = _FakeUsersResource(messages_resource)
+
+    def users(self):
+        return self._users
+
+
+async def _make_artifact_service_with_save(user_id: str = PHONE):
     svc = InMemoryArtifactService()
     ctx = AsyncMock()
     ctx.user_id = user_id
@@ -97,42 +130,24 @@ async def _make_artifact_service_with_save(
     return svc, ctx
 
 
-def _make_email_tool(token: str = SYSTEM_TOKEN) -> EmailTool:
-    tool = EmailTool("team")
-    mock_oauth = MagicMock()
-    mock_oauth.get_valid_access_token.return_value = token
-    tool._oauth_client = mock_oauth
+def _make_email_tool(service=None) -> EmailTool:
+    tool = EmailTool()
+    tool._oauth_client = MagicMock()
     tool._firestore_client = None
+    tool._get_gmail_service = MagicMock(return_value=service)
     return tool
-
-
-def _mock_httpx_get(json_response: dict):
-    """Return a context manager mock for httpx.Client whose get() returns json_response."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = json_response
-
-    mock_client = MagicMock()
-    mock_client.get.return_value = mock_resp
-
-    mock_cls = MagicMock()
-    mock_cls.return_value.__enter__.return_value = mock_client
-    mock_cls.return_value.__exit__.return_value = False
-    return mock_cls
-
-
-# ── Tests ─────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_fetch_email_stores_pdf_artifact():
-    """Artifact is stored at {msg_id}_resume.pdf with correct bytes and MIME type."""
     svc, ctx = await _make_artifact_service_with_save()
-    tool = _make_email_tool()
     full_msg = _make_full_msg([_PDF_PART])
+    messages = _FakeMessagesResource(
+        message_payloads={(MSG_ID, "full"): full_msg},
+    )
+    tool = _make_email_tool(_FakeGmailService(messages))
 
-    with patch("httpx.Client", _mock_httpx_get(full_msg)):
-        await tool.fetch_email(message_id=MSG_ID, tool_context=ctx)
+    await tool.fetch_email(message_id=MSG_ID, tool_context=ctx)
 
     stored = await svc.load_artifact(
         app_name="coordinator",
@@ -147,33 +162,33 @@ async def test_fetch_email_stores_pdf_artifact():
 
 @pytest.mark.asyncio
 async def test_fetch_email_returns_artifact_section():
-    """Return string contains artifact key and save_attachment_to_drive."""
-    svc, ctx = await _make_artifact_service_with_save()
-    tool = _make_email_tool()
+    _, ctx = await _make_artifact_service_with_save()
     full_msg = _make_full_msg([_PDF_PART])
+    messages = _FakeMessagesResource(
+        message_payloads={(MSG_ID, "full"): full_msg},
+    )
+    tool = _make_email_tool(_FakeGmailService(messages))
 
-    with patch("httpx.Client", _mock_httpx_get(full_msg)):
-        result = await tool.fetch_email(message_id=MSG_ID, tool_context=ctx)
+    result = await tool.fetch_email(message_id=MSG_ID, tool_context=ctx)
 
     assert f'artifact: "{MSG_ID}_resume.pdf"' in result
     assert "application/pdf" in result
     assert "save_attachment_to_drive" in result
-    # Email headers also present
     assert "boss@company.com" in result
     assert "Resume" in result
 
 
 @pytest.mark.asyncio
 async def test_fetch_email_skips_unsupported_types():
-    """ZIP attachment is not stored; appears as unsupported note."""
     svc, ctx = await _make_artifact_service_with_save()
-    tool = _make_email_tool()
     full_msg = _make_full_msg([_ZIP_PART])
+    messages = _FakeMessagesResource(
+        message_payloads={(MSG_ID, "full"): full_msg},
+    )
+    tool = _make_email_tool(_FakeGmailService(messages))
 
-    with patch("httpx.Client", _mock_httpx_get(full_msg)):
-        result = await tool.fetch_email(message_id=MSG_ID, tool_context=ctx)
+    result = await tool.fetch_email(message_id=MSG_ID, tool_context=ctx)
 
-    # Nothing stored for ZIP
     stored = await svc.load_artifact(
         app_name="coordinator",
         user_id=PHONE,
@@ -181,58 +196,50 @@ async def test_fetch_email_skips_unsupported_types():
         filename=f"{MSG_ID}_archive.zip",
     )
     assert stored is None
-
-    # ZIP shows as unsupported note
     assert "archive.zip" in result
     assert "not supported" in result
-    # No artifact key for the ZIP
     assert f'artifact: "{MSG_ID}_archive.zip"' not in result
 
 
 @pytest.mark.asyncio
 async def test_fetch_email_no_tool_context():
-    """tool_context=None still returns email text without crashing."""
-    tool = _make_email_tool()
     full_msg = _make_full_msg([_PDF_PART])
+    messages = _FakeMessagesResource(
+        message_payloads={(MSG_ID, "full"): full_msg},
+    )
+    tool = _make_email_tool(_FakeGmailService(messages))
 
-    with patch("httpx.Client", _mock_httpx_get(full_msg)):
-        result = await tool.fetch_email(message_id=MSG_ID, tool_context=None)
+    result = await tool.fetch_email(message_id=MSG_ID, tool_context=None)
 
-    # Email content present
-    assert "boss@company.com" in result
-    assert "Resume" in result
-    # No artifact section (nothing was saved)
-    assert "artifact:" not in result
+    assert "no user_id" in result.lower()
 
 
 @pytest.mark.asyncio
 async def test_fetch_email_artifact_service_failure():
-    """save_artifact raising still returns email text (warning logged)."""
-    svc, ctx = await _make_artifact_service_with_save()
+    _, ctx = await _make_artifact_service_with_save()
 
-    # Override save_artifact to raise
     async def failing_save(filename, artifact):
         raise Exception("storage failure")
 
     ctx.save_artifact = failing_save
-
-    tool = _make_email_tool()
     full_msg = _make_full_msg([_PDF_PART])
+    messages = _FakeMessagesResource(
+        message_payloads={(MSG_ID, "full"): full_msg},
+    )
+    tool = _make_email_tool(_FakeGmailService(messages))
 
-    with patch("httpx.Client", _mock_httpx_get(full_msg)):
-        result = await tool.fetch_email(message_id=MSG_ID, tool_context=ctx)
+    result = await tool.fetch_email(message_id=MSG_ID, tool_context=ctx)
 
-    # Email text still returned
     assert "boss@company.com" in result
-    # No artifact section (save failed)
     assert "artifact:" not in result
 
 
 @pytest.mark.asyncio
 async def test_fetch_email_no_system_token():
-    """Returns 'not connected' error when system token is unavailable."""
-    tool = _make_email_tool(token=None)
+    _, ctx = await _make_artifact_service_with_save()
+    tool = _make_email_tool(None)
+    tool._get_oauth_client().get_oauth_link.return_value = "https://example.com/oauth"
 
-    result = await tool.fetch_email(message_id=MSG_ID, tool_context=None)
+    result = await tool.fetch_email(message_id=MSG_ID, tool_context=ctx)
 
     assert "not connected" in result.lower()

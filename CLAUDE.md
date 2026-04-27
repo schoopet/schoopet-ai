@@ -52,7 +52,6 @@ The project uses a two-layer environment system:
 environments/
   dev.env             ← GOOGLE_CLOUD_PROJECT=schoopet-dev
   prod.env            ← GOOGLE_CLOUD_PROJECT=schoopet-prod
-  wib-boss-finder.env ← GOOGLE_CLOUD_PROJECT=mmontan-ml (current production)
 ```
 
 Each file contains:
@@ -109,16 +108,14 @@ python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r schoopet/requirements.txt
 
-# Deploy agent to Vertex AI Agent Engine
-./deploy.sh --env=wib-boss-finder           # update existing agent
-./deploy.sh --env=wib-boss-finder --new     # create a brand-new agent engine
-# After --new: copy the printed engine ID into environments/<name>.env as PERSONAL_AGENT_ENGINE_ID
+# Deploy agent to Vertex AI Agent Engine (engine must already exist — create via Terraform)
+./deploy.sh --env=prod           # update existing agent
 
 # Deploy SMS Gateway
-./sms-gateway/scripts/deploy.sh --env=wib-boss-finder
+./sms-gateway/scripts/deploy.sh --env=prod
 
 # Deploy Task Worker
-./task-worker/deploy.sh --env=wib-boss-finder
+./task-worker/deploy.sh --env=prod
 
 # Chat with deployed remote agent (recommended)
 # Use the agent-engine-cli (e.g., npx agent-engine-cli chat)
@@ -127,7 +124,7 @@ pip install -r schoopet/requirements.txt
 
 # Run agent locally with CLI (for development/testing)
 # Source the env file first so GOOGLE_CLOUD_PROJECT etc. are set
-set -a && source environments/wib-boss-finder.env && set +a
+set -a && source environments/prod.env && set +a
 cd agents && python -m schoopet.main
 
 # Run ADK web interface for testing
@@ -193,8 +190,8 @@ The agent uses Vertex AI Native Memory Bank with automatic persistence:
 ### Agent Engine Management
 
 - One engine ID per environment: `PERSONAL_AGENT_ENGINE_ID` in `environments/<name>.env`
-- `deploy.sh --env=<name>` reads the ID automatically; if unset, creates a new engine
-- After first deploy with `--new`, copy the printed engine ID into the env file as `PERSONAL_AGENT_ENGINE_ID`
+- `deploy.sh --env=<name>` reads the ID and updates the existing engine; exits with an error if no ID is set
+- New engines must be created via Terraform (`terraform apply`), then copy the printed resource name ID into `environments/<name>.env`
 - Updates modify the agent code and memory bank config on the existing engine
 - Resource naming: `projects/{project}/locations/{location}/reasoningEngines/{id}`
 - `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` are auto-injected by Agent Engine at runtime — no need to include them in `deploy.py` `env_vars`

@@ -1,5 +1,5 @@
 locals {
-  sms_gateway_image        = coalesce(var.sms_gateway_image, "us-docker.pkg.dev/${var.project_id}/gcr/shoopet-sms-gateway:latest")
+  sms_gateway_image        = coalesce(var.sms_gateway_image, "us-docker.pkg.dev/${var.project_id}/schoopet/shoopet-sms-gateway:latest")
   personal_agent_engine_id = regex("[^/]+$", google_vertex_ai_reasoning_engine.personal_agent.name)
 }
 

@@ -7,12 +7,12 @@ python-multipart>=0.0.6
 twilio>=8.13.0
 
 # Google Cloud
-google-adk>=1.26.0
+google-adk==1.31.1
+google-genai==1.73.1
+google-cloud-aiplatform==1.148.1
 google-cloud-firestore>=2.14.0
-google-cloud-aiplatform>=1.111.0
 google-cloud-secret-manager>=2.16.0
 google-cloud-storage>=2.14.0
-vertexai>=1.0.0
 
 # HTTP Client
 httpx>=0.26.0

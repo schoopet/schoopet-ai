@@ -35,7 +35,6 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Task Worker...")
     logger.info(f"Project: {os.getenv('GOOGLE_CLOUD_PROJECT')}")
     logger.info(f"Personal Agent Engine: {os.getenv('PERSONAL_AGENT_ENGINE_ID') or '(not configured)'}")
-    logger.info(f"Team Agent Engine: {os.getenv('TEAM_AGENT_ENGINE_ID') or '(not configured)'}")
     logger.info(f"SMS Gateway: {os.getenv('SMS_GATEWAY_URL')}")
 
     # Initialize worker

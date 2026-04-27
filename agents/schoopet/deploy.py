@@ -18,20 +18,13 @@ from .memory_config import get_memory_bank_config
 from .root_agent import create_adk_agent
 
 
-def _create_client(project_id: str, location: str, use_agent_identity: bool):
-    """Create Vertex AI client with optional agent identity support."""
-    if use_agent_identity:
-        print("🔐 Agent Identity enabled (requires v1beta1 API)")
-        return Client(
-            project=project_id,
-            location=location,
-            http_options=dict(api_version="v1beta1")
-        )
-    else:
-        return Client(project=project_id, location=location)
+def _create_client(project_id: str, location: str):
+    """Create Vertex AI client with Agent Identity support."""
+    print("🔐 Agent Identity enabled")
+    return Client(project=project_id, location=location)
 
 
-def _build_config(project_id: str, location: str, staging_bucket: str, requirements_file: str, use_agent_identity: bool, display_name: str = "schoopet-agent-engine"):
+def _build_config(project_id: str, location: str, staging_bucket: str, requirements_file: str, display_name: str = "schoopet-agent-engine"):
     """Build deployment configuration."""
     # Capture current environment variables to pass to the deployed agent
     # Note: Empty values cause deployment errors, so we filter them out
@@ -65,8 +58,7 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
         }
     }
 
-    if use_agent_identity:
-        config["identity_type"] = types.IdentityType.AGENT_IDENTITY
+    config["identity_type"] = types.IdentityType.AGENT_IDENTITY
 
     return config
 
@@ -89,7 +81,7 @@ def _display_result(remote_agent, agent_engine_id: str = None):
     return agent_engine_id
 
 
-def deploy(project_id: str, location: str, staging_bucket: str = None, agent_engine_id: str = None, use_agent_identity: bool = False):
+def deploy(project_id: str, location: str, staging_bucket: str = None, agent_engine_id: str = None):
     """
     Updates an existing agent on Vertex AI Reasoning Engines.
 
@@ -101,7 +93,6 @@ def deploy(project_id: str, location: str, staging_bucket: str = None, agent_eng
         location: GCP Region
         staging_bucket: GCS bucket for staging artifacts (optional, will use default if not provided)
         agent_engine_id: Existing Agent Engine ID to update (required).
-        use_agent_identity: Enable Agent Identity for least-privilege access (requires IAM setup)
     """
     if not agent_engine_id:
         print("❌ No agent engine ID provided.")
@@ -135,7 +126,7 @@ def deploy(project_id: str, location: str, staging_bucket: str = None, agent_eng
 
     # Build configuration
     print("📋 Building deployment configuration...")
-    config = _build_config(project_id, location, staging_bucket, requirements_file, use_agent_identity, display_name)
+    config = _build_config(project_id, location, staging_bucket, requirements_file, display_name)
 
     print(f"🔄 Updating existing Agent Engine: {agent_engine_id}")
 
@@ -146,7 +137,7 @@ def deploy(project_id: str, location: str, staging_bucket: str = None, agent_eng
         resource_name = agent_engine_id
 
     try:
-        client = _create_client(project_id, location, use_agent_identity)
+        client = _create_client(project_id, location)
 
         print("🚀 Deploying updated agent object...")
         remote_agent = client.agent_engines.update(
@@ -169,8 +160,6 @@ def main():
     parser.add_argument("--location", help="Google Cloud Region", default=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
     parser.add_argument("--staging-bucket", help="GCS Staging Bucket (optional)", default=os.getenv("GCS_STAGING_BUCKET"))
     parser.add_argument("--id", help="Existing Agent Engine ID to update (overrides env vars)", default=None)
-    parser.add_argument("--agent-identity", action="store_true", help="Enable Agent Identity for least-privilege access")
-
     args = parser.parse_args()
 
     if not args.project:
@@ -185,7 +174,6 @@ def main():
         location=args.location,
         staging_bucket=args.staging_bucket,
         agent_engine_id=engine_id,
-        use_agent_identity=args.agent_identity
     )
 
 if __name__ == "__main__":

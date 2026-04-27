@@ -21,13 +21,13 @@ variable "project_editors" {
 }
 
 variable "sms_gateway_image" {
-  description = "Container image for the SMS Gateway Cloud Run service. Defaults to gcr.io/{project_id}/shoopet-sms-gateway:latest"
+  description = "Container image for the SMS Gateway Cloud Run service. Defaults to us-docker.pkg.dev/{project_id}/schoopet/shoopet-sms-gateway:latest"
   type        = string
   default     = null
 }
 
 variable "task_worker_image" {
-  description = "Container image for the Task Worker Cloud Run service. Defaults to gcr.io/{project_id}/schoopet-task-worker:latest"
+  description = "Container image for the Task Worker Cloud Run service. Defaults to us-docker.pkg.dev/{project_id}/schoopet/schoopet-task-worker:latest"
   type        = string
   default     = null
 }
