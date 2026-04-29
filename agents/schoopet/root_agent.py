@@ -249,48 +249,48 @@ def create_agent(
     # Async task tools
     create_async_task = FunctionTool(func=async_task_tool.create_async_task)
     check_task_status = FunctionTool(func=async_task_tool.check_task_status)
-    cancel_task = FunctionTool(func=async_task_tool.cancel_task)
+    cancel_task = FunctionTool(func=async_task_tool.cancel_task, require_confirmation=True)
     list_pending_tasks = FunctionTool(func=async_task_tool.list_pending_tasks)
     review_task_result = FunctionTool(func=async_task_tool.review_task_result)
-    approve_task = FunctionTool(func=async_task_tool.approve_task)
-    request_correction = FunctionTool(func=async_task_tool.request_correction)
+    approve_task = FunctionTool(func=async_task_tool.approve_task, require_confirmation=True)
+    request_correction = FunctionTool(func=async_task_tool.request_correction, require_confirmation=True)
 
     # Calendar tools
     list_events_tool = FunctionTool(func=calendar_tool.list_calendar_events)
-    create_event_tool = FunctionTool(func=calendar_tool.create_calendar_event)
-    update_event_tool = FunctionTool(func=calendar_tool.update_calendar_event)
+    create_event_tool = FunctionTool(func=calendar_tool.create_calendar_event, require_confirmation=True)
+    update_event_tool = FunctionTool(func=calendar_tool.update_calendar_event, require_confirmation=True)
     calendar_status_tool = FunctionTool(func=calendar_tool.get_calendar_status)
 
     # Drive tools
-    save_to_drive_tool = FunctionTool(func=drive_tool.save_file_to_drive)
-    save_attachment_to_drive_tool = FunctionTool(func=drive_tool.save_attachment_to_drive)
+    save_to_drive_tool = FunctionTool(func=drive_tool.save_file_to_drive, require_confirmation=True)
+    save_attachment_to_drive_tool = FunctionTool(func=drive_tool.save_attachment_to_drive, require_confirmation=True)
     list_drive_files_tool = FunctionTool(func=drive_tool.list_drive_files)
     drive_status_tool = FunctionTool(func=drive_tool.get_drive_status)
 
     # Docs tools
-    create_google_doc_tool = FunctionTool(func=docs_tool.create_google_doc)
+    create_google_doc_tool = FunctionTool(func=docs_tool.create_google_doc, require_confirmation=True)
     read_google_doc_tool = FunctionTool(func=docs_tool.read_google_doc)
-    append_to_google_doc_tool = FunctionTool(func=docs_tool.append_to_google_doc)
-    replace_text_in_google_doc_tool = FunctionTool(func=docs_tool.replace_text_in_google_doc)
+    append_to_google_doc_tool = FunctionTool(func=docs_tool.append_to_google_doc, require_confirmation=True)
+    replace_text_in_google_doc_tool = FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=True)
     docs_status_tool = FunctionTool(func=docs_tool.get_docs_status)
 
     # Sheets tools
-    create_spreadsheet_tool = FunctionTool(func=sheets_tool.create_spreadsheet)
-    add_sheet_tab_tool = FunctionTool(func=sheets_tool.add_sheet_tab)
+    create_spreadsheet_tool = FunctionTool(func=sheets_tool.create_spreadsheet, require_confirmation=True)
+    add_sheet_tab_tool = FunctionTool(func=sheets_tool.add_sheet_tab, require_confirmation=True)
     sheet_schema_tool = FunctionTool(func=sheets_tool.get_sheet_schema)
     read_sheet_records_tool = FunctionTool(func=sheets_tool.read_sheet_records)
-    ensure_sheet_headers_tool = FunctionTool(func=sheets_tool.ensure_sheet_headers)
-    append_record_to_sheet_tool = FunctionTool(func=sheets_tool.append_record_to_sheet)
+    ensure_sheet_headers_tool = FunctionTool(func=sheets_tool.ensure_sheet_headers, require_confirmation=True)
+    append_record_to_sheet_tool = FunctionTool(func=sheets_tool.append_record_to_sheet, require_confirmation=True)
     find_sheet_rows_tool = FunctionTool(func=sheets_tool.find_sheet_rows)
-    update_sheet_row_tool = FunctionTool(func=sheets_tool.update_sheet_row)
-    append_to_sheet_tool = FunctionTool(func=sheets_tool.append_row_to_sheet)
+    update_sheet_row_tool = FunctionTool(func=sheets_tool.update_sheet_row, require_confirmation=True)
+    append_to_sheet_tool = FunctionTool(func=sheets_tool.append_row_to_sheet, require_confirmation=True)
     read_sheet_tool = FunctionTool(func=sheets_tool.read_sheet)
-    add_column_tool = FunctionTool(func=sheets_tool.add_sheet_column)
-    update_cell_tool = FunctionTool(func=sheets_tool.update_sheet_cell)
+    add_column_tool = FunctionTool(func=sheets_tool.add_sheet_column, require_confirmation=True)
+    update_cell_tool = FunctionTool(func=sheets_tool.update_sheet_cell, require_confirmation=True)
     sheets_status_tool = FunctionTool(func=sheets_tool.get_sheets_status)
 
     # Preferences tools
-    set_timezone_tool = FunctionTool(func=preferences_tool.set_timezone)
+    set_timezone_tool = FunctionTool(func=preferences_tool.set_timezone, require_confirmation=True)
     get_timezone_tool = FunctionTool(func=preferences_tool.get_timezone)
     current_time_tool = FunctionTool(func=time_tool.get_current_time)
     convert_time_tool = FunctionTool(func=time_tool.convert_time)
@@ -381,10 +381,10 @@ def create_agent(
         FunctionTool(func=email_tool.list_artifacts),
         FunctionTool(func=email_tool.read_artifact),
         FunctionTool(func=email_tool.get_gmail_status),
-        FunctionTool(func=email_tool.add_email_rule),
+        FunctionTool(func=email_tool.add_email_rule, require_confirmation=True),
         FunctionTool(func=email_tool.list_email_rules),
-        FunctionTool(func=email_tool.update_email_rule),
-        FunctionTool(func=email_tool.remove_email_rule),
+        FunctionTool(func=email_tool.update_email_rule, require_confirmation=True),
+        FunctionTool(func=email_tool.remove_email_rule, require_confirmation=True),
     ]
 
     # Structured Notes subagent (BigQuery) for tracking structured data

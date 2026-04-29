@@ -20,6 +20,7 @@ class SessionDocument(BaseModel):
     opt_in_requested_at: Optional[datetime] = Field(default=None, description="When opt-in was first requested")
     channel: str = Field(default="sms", description="Last used channel: sms, whatsapp, slack, etc.")
     slack_team_id: Optional[str] = Field(default=None, description="Slack workspace team_id")
+    pending_confirmation: Optional[dict] = Field(default=None, description="Pending ADK confirmation state")
 
     def to_firestore(self) -> dict:
         """Convert to Firestore-compatible dictionary."""
@@ -36,6 +37,8 @@ class SessionDocument(BaseModel):
             data["opt_in_requested_at"] = self.opt_in_requested_at
         if self.slack_team_id:
             data["slack_team_id"] = self.slack_team_id
+        if self.pending_confirmation:
+            data["pending_confirmation"] = self.pending_confirmation
         return data
 
     @classmethod
@@ -52,6 +55,7 @@ class SessionDocument(BaseModel):
             opt_in_requested_at=data.get("opt_in_requested_at"),
             channel=data.get("channel", "sms"),
             slack_team_id=data.get("slack_team_id"),
+            pending_confirmation=data.get("pending_confirmation"),
         )
 
 

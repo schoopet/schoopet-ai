@@ -1,10 +1,12 @@
 """Vertex AI Agent Engine client wrapper."""
 import asyncio
+from dataclasses import dataclass
 import logging
 import time
-from typing import Optional, Union
+from typing import Any, Union
 
 import vertexai
+from google.adk.events import Event
 from google.genai import types
 
 logger = logging.getLogger(__name__)
@@ -12,6 +14,48 @@ logger = logging.getLogger(__name__)
 
 class _TokenExpiredError(Exception):
     """Internal signal that the Vertex AI access token expired mid-stream."""
+
+
+@dataclass(frozen=True)
+class AdkConfirmationRequest:
+    """Native ADK confirmation request extracted from an event stream."""
+
+    function_call_id: str
+    original_function_call: dict[str, Any]
+    tool_confirmation: dict[str, Any]
+
+    @property
+    def tool_name(self) -> str:
+        return str(self.original_function_call.get("name") or "unknown_tool")
+
+    @property
+    def tool_args(self) -> dict[str, Any]:
+        args = self.original_function_call.get("args")
+        return args if isinstance(args, dict) else {}
+
+    @property
+    def original_function_call_id(self) -> str:
+        return str(self.original_function_call.get("id") or "")
+
+    @property
+    def hint(self) -> str:
+        return str(self.tool_confirmation.get("hint") or "")
+
+    @property
+    def payload(self) -> Any:
+        return self.tool_confirmation.get("payload")
+
+    def to_firestore(self) -> dict[str, Any]:
+        return {
+            "function_call_id": self.function_call_id,
+            "original_function_call": self.original_function_call,
+            "tool_confirmation": self.tool_confirmation,
+            "tool_name": self.tool_name,
+            "tool_args": self.tool_args,
+            "original_function_call_id": self.original_function_call_id,
+            "hint": self.hint,
+            "payload": self.payload,
+        }
 
 
 class AgentEngineClient:
@@ -114,9 +158,19 @@ class AgentEngineClient:
         Raises:
             asyncio.TimeoutError: If the agent doesn't respond within timeout.
         """
+        events = await self.send_message_events(user_id, session_id, message)
+        return self.extract_text(events)
+
+    async def send_message_events(
+        self,
+        user_id: str,
+        session_id: str,
+        message: Union[str, types.Content],
+    ) -> list[Event]:
+        """Send a message to the agent and return native ADK events."""
         logger.info(f"Sending message to agent: user={user_id}, session={session_id}")
 
-        full_response = []
+        events: list[Event] = []
         t_start = time.monotonic()
         ttft_ms: float | None = None
 
@@ -132,50 +186,38 @@ class AgentEngineClient:
                     logger.warning("Access token expired — reinitializing Vertex AI client")
                     self._init_client()
                     raise _TokenExpiredError()
-                # Debug: log raw event
                 logger.debug(f"Event type: {type(event).__name__}, event: {event}")
 
-                # Handle dict events (from async_stream_query)
                 if isinstance(event, dict):
-                    # Check for error events from Agent Engine
                     if "code" in event and "message" in event:
                         logger.error(
                             f"Agent Engine error: code={event['code']}, "
                             f"message={event['message']}"
                         )
                         continue
-
-                    content = event.get("content", {})
-                    if isinstance(content, dict):
-                        parts = content.get("parts", [])
-                        for part in parts:
-                            if isinstance(part, dict) and "text" in part:
-                                if ttft_ms is None:
-                                    ttft_ms = (time.monotonic() - t_start) * 1000
-                                full_response.append(part["text"])
+                    parsed_event = self._coerce_event(event)
+                    events.append(parsed_event)
+                    if ttft_ms is None and self.extract_text([parsed_event]):
+                        ttft_ms = (time.monotonic() - t_start) * 1000
                     continue
 
-                # Handle object events (fallback)
-                if hasattr(event, "content") and event.content:
-                    if hasattr(event.content, "parts"):
-                        for part in event.content.parts:
-                            if hasattr(part, "text") and part.text:
-                                if ttft_ms is None:
-                                    ttft_ms = (time.monotonic() - t_start) * 1000
-                                full_response.append(part.text)
+                parsed_event = event if isinstance(event, Event) else Event.model_validate(event)
+                events.append(parsed_event)
+                if ttft_ms is None and self.extract_text([parsed_event]):
+                    ttft_ms = (time.monotonic() - t_start) * 1000
 
         # Apply timeout to the streaming operation; retry once on token expiry
         try:
             await asyncio.wait_for(stream_response(), timeout=self._timeout)
         except _TokenExpiredError:
             logger.info("Retrying stream after token refresh")
-            full_response.clear()
+            events.clear()
             ttft_ms = None
             t_start = time.monotonic()
             await asyncio.wait_for(stream_response(), timeout=self._timeout)
 
         total_ms = (time.monotonic() - t_start) * 1000
-        response_text = "".join(full_response)
+        response_text = self.extract_text(events)
         logger.info(
             f"Agent response: {len(response_text)} chars "
             f"[ttft={ttft_ms:.0f}ms, total={total_ms:.0f}ms]"
@@ -183,4 +225,74 @@ class AgentEngineClient:
             else f"Agent response: {len(response_text)} chars [no text received, total={total_ms:.0f}ms]"
         )
 
-        return response_text
+        return events
+
+    async def send_confirmation_response(
+        self,
+        user_id: str,
+        session_id: str,
+        confirmation_function_call_id: str,
+        confirmed: bool,
+    ) -> list[Event]:
+        """Resolve an ADK confirmation request with a native function response."""
+        content = types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        name="adk_request_confirmation",
+                        id=confirmation_function_call_id,
+                        response={"confirmed": confirmed},
+                    )
+                )
+            ],
+        )
+        return await self.send_message_events(user_id, session_id, content)
+
+    @staticmethod
+    def extract_text(events: list[Event]) -> str:
+        """Extract concatenated text parts from ADK events."""
+        chunks: list[str] = []
+        for event in events:
+            content = getattr(event, "content", None)
+            for part in getattr(content, "parts", []) or []:
+                text = getattr(part, "text", None)
+                if text:
+                    chunks.append(text)
+        return "".join(chunks)
+
+    @staticmethod
+    def extract_confirmation_requests(events: list[Event]) -> list[AdkConfirmationRequest]:
+        """Extract native ADK confirmation function calls from events."""
+        confirmations: list[AdkConfirmationRequest] = []
+        for event in events:
+            for function_call in event.get_function_calls() or []:
+                if function_call.name != "adk_request_confirmation":
+                    continue
+                args = function_call.args or {}
+                original = args.get("originalFunctionCall") or args.get("original_function_call") or {}
+                tool_confirmation = args.get("toolConfirmation") or args.get("tool_confirmation") or {}
+                confirmations.append(
+                    AdkConfirmationRequest(
+                        function_call_id=str(function_call.id or ""),
+                        original_function_call=original if isinstance(original, dict) else {},
+                        tool_confirmation=(
+                            tool_confirmation if isinstance(tool_confirmation, dict) else {}
+                        ),
+                    )
+                )
+        return confirmations
+
+    @staticmethod
+    def _coerce_event(event: dict) -> Event:
+        """Validate a stream dict into an ADK Event, with a legacy text fallback."""
+        try:
+            return Event.model_validate(event)
+        except Exception:
+            content = event.get("content")
+            if isinstance(content, dict):
+                return Event(
+                    author=str(event.get("author") or "agent"),
+                    content=types.Content.model_validate(content),
+                )
+            raise

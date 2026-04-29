@@ -210,6 +210,63 @@ class TestSessionManager:
         assert result.personal_agent_session_id == "session-123"
 
     @pytest.mark.asyncio
+    async def test_pending_confirmation_round_trip(self, mock_firestore, session_manager):
+        """Should store, read, and clear pending confirmation state."""
+        from datetime import timezone
+        _, doc_ref = mock_firestore
+
+        confirmation = MagicMock()
+        confirmation.to_firestore.return_value = {
+            "function_call_id": "confirm-1",
+            "original_function_call": {
+                "id": "tool-1",
+                "name": "send_email",
+                "args": {"to": "x@example.com"},
+            },
+            "original_function_call_id": "tool-1",
+            "tool_name": "send_email",
+            "tool_args": {"to": "x@example.com"},
+            "hint": "Send email?",
+            "payload": {"kind": "email"},
+        }
+
+        pending = await session_manager.set_pending_confirmation(
+            user_id="+14155551234",
+            confirmation=confirmation,
+            session_id="session-123",
+            channel="discord",
+        )
+
+        assert pending["id"]
+        assert pending["adk_confirmation_function_call_id"] == "confirm-1"
+        assert pending["tool_name"] == "send_email"
+        doc_ref.update.assert_called()
+
+        existing_data = {
+            "phone_number": "+14155551234",
+            "personal_agent_session_id": "session-123",
+            "created_at": datetime.now(timezone.utc),
+            "last_activity": datetime.now(timezone.utc),
+            "message_count": 3,
+            "opted_in": True,
+            "pending_confirmation": pending,
+        }
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = existing_data
+        doc_ref.get.return_value = mock_doc
+
+        assert await session_manager.get_pending_confirmation(
+            "+14155551234", pending["id"]
+        ) == pending
+        assert await session_manager.get_pending_confirmation(
+            "+14155551234", "wrong-id"
+        ) is None
+
+        await session_manager.clear_pending_confirmation("+14155551234")
+        assert doc_ref.update.call_args[0][0] == {"pending_confirmation": None}
+
+    @pytest.mark.asyncio
     async def test_get_session_not_exists(self, mock_firestore, session_manager):
         """Should return None if session doesn't exist."""
         _, doc_ref = mock_firestore

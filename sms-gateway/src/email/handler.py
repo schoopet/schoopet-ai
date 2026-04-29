@@ -43,6 +43,13 @@ _discord_sender = None
 _NOTIFICATION_WRAPPER = """\
 INCOMING_EMAIL_NOTIFICATION
 
+OFFLINE EVENT SAFETY: This email notification is offline, background-triggered
+processing. Do not create, modify, delete, send, or otherwise change external
+system state unless you ask the user first and they explicitly approve it.
+
+If no user-visible reminder or summary is needed, start your response with:
+<SUPPRESS RESPONSE>
+
 A new email has arrived. It may contain attachments with important information
 that you must read before processing.
 
@@ -60,7 +67,12 @@ Your active email rules:
 If a rule matches, follow its instructions exactly. If no rule matches, use smart defaults:
 - Calendar invites / flight or hotel confirmations / appointments → create_calendar_event + notify
 - Invoices / deadlines / deliveries / action required → create_async_task + notify
-- Newsletters / promotions / automated digests → silently ignore (do NOT notify)"""
+- Newsletters / promotions / automated digests → respond with <SUPPRESS RESPONSE>"""
+
+
+def _should_suppress_response(message: str) -> bool:
+    """Return True when the agent explicitly marks an email response as suppressed."""
+    return message.lstrip().startswith("<SUPPRESS RESPONSE>")
 
 
 def init_email_services(
@@ -323,14 +335,33 @@ async def _route_email_to_agent(
             rules=rules_text,
         )
 
-        response = await _agent_client.send_message(
+        events = await _agent_client.send_message_events(
             user_id=user_id,
             session_id=session_info.agent_session_id,
             message=prompt,
         )
         logger.info(f"Email routed to agent session {session_info.agent_session_id}")
 
+        confirmations = _agent_client.extract_confirmation_requests(events)
+        if confirmations:
+            tool_names = [confirmation.tool_name for confirmation in confirmations]
+            logger.warning(
+                f"Rejecting offline ADK confirmations for {user_id[:4]}****: {tool_names}"
+            )
+            for confirmation in confirmations:
+                await _agent_client.send_confirmation_response(
+                    user_id=user_id,
+                    session_id=session_info.agent_session_id,
+                    confirmation_function_call_id=confirmation.function_call_id,
+                    confirmed=False,
+                )
+            return
+
+        response = _agent_client.extract_text(events)
         if response:
+            if _should_suppress_response(response):
+                logger.info(f"Email response suppressed for {user_id[:4]}****")
+                return
             await _send_response(user_id, channel, response)
     except Exception as e:
         logger.error(f"Failed to route email for {user_id[:4]}****: {e}")

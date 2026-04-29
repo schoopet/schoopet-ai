@@ -1,5 +1,6 @@
 """Session management with Firestore storage."""
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -289,6 +290,59 @@ class SessionManager:
         if doc.exists:
             return SessionDocument.from_firestore(doc.to_dict())
         return None
+
+    async def set_pending_confirmation(
+        self,
+        user_id: str,
+        confirmation,
+        session_id: str,
+        channel: str,
+    ) -> dict:
+        """Store one pending ADK confirmation for a user session."""
+        doc_id = normalize_user_id(user_id)
+        doc_ref = self._collection.document(doc_id)
+        pending_id = secrets.token_urlsafe(9)
+        confirmation_data = (
+            confirmation.to_firestore()
+            if hasattr(confirmation, "to_firestore")
+            else dict(confirmation)
+        )
+        pending = {
+            "id": pending_id,
+            "user_id": user_id,
+            "agent_session_id": session_id,
+            "adk_confirmation_function_call_id": confirmation_data.get("function_call_id", ""),
+            "original_function_call": confirmation_data.get("original_function_call", {}),
+            "original_function_call_id": confirmation_data.get("original_function_call_id", ""),
+            "tool_name": confirmation_data.get("tool_name", "unknown_tool"),
+            "tool_args": confirmation_data.get("tool_args", {}),
+            "hint": confirmation_data.get("hint", ""),
+            "payload": confirmation_data.get("payload"),
+            "created_at": datetime.now(timezone.utc),
+            "channel": channel,
+        }
+        await doc_ref.update({"pending_confirmation": pending})
+        return pending
+
+    async def get_pending_confirmation(
+        self,
+        user_id: str,
+        pending_id: str | None = None,
+    ) -> Optional[dict]:
+        """Return the pending confirmation for a user, optionally matching ID."""
+        session = await self.get_session(user_id)
+        if not session or not session.pending_confirmation:
+            return None
+        pending = session.pending_confirmation
+        if pending_id and pending.get("id") != pending_id:
+            return None
+        return pending
+
+    async def clear_pending_confirmation(self, user_id: str) -> None:
+        """Clear pending ADK confirmation state for a user."""
+        doc_id = normalize_user_id(user_id)
+        doc_ref = self._collection.document(doc_id)
+        await doc_ref.update({"pending_confirmation": None})
 
     # ========== Supervisor Session Methods ==========
 
