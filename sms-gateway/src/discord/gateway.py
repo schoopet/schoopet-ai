@@ -255,21 +255,17 @@ class SchoopetGateway(discord.Client):
 
             confirmations = self._agent_client.extract_confirmation_requests(events)
             if confirmations:
-                if len(confirmations) > 1:
-                    logger.warning(
-                        f"Multiple ADK confirmations returned for Discord user {user_id}; prompting for first"
+                for confirmation in confirmations:
+                    pending = await self._session_manager.set_pending_confirmation(
+                        user_id=user_id,
+                        confirmation=confirmation,
+                        session_id=session_info.agent_session_id,
+                        channel="discord",
                     )
-                confirmation = confirmations[0]
-                pending = await self._session_manager.set_pending_confirmation(
-                    user_id=user_id,
-                    confirmation=confirmation,
-                    session_id=session_info.agent_session_id,
-                    channel="discord",
-                )
-                await channel.send(
-                    _format_confirmation_prompt(confirmation),
-                    view=_ConfirmationView(self, user_id, pending["id"]),
-                )
+                    await channel.send(
+                        _format_confirmation_prompt(confirmation),
+                        view=_ConfirmationView(self, user_id, pending["id"]),
+                    )
                 await self._session_manager.update_last_activity(user_id, channel="discord")
                 return
 
@@ -324,14 +320,28 @@ class SchoopetGateway(discord.Client):
                 confirmation_function_call_id=pending["adk_confirmation_function_call_id"],
                 confirmed=confirmed,
             )
-            await self._session_manager.clear_pending_confirmation(user_id)
+            await self._session_manager.clear_pending_confirmation(user_id, pending_id)
             view.disable_buttons()
             await interaction.response.edit_message(view=view)
 
-            response = self._agent_client.extract_text(events)
-            if response:
-                for chunk in _split_message(response):
-                    await interaction.followup.send(chunk)
+            new_confirmations = self._agent_client.extract_confirmation_requests(events)
+            if new_confirmations:
+                for conf in new_confirmations:
+                    new_pending = await self._session_manager.set_pending_confirmation(
+                        user_id=user_id,
+                        confirmation=conf,
+                        session_id=pending["agent_session_id"],
+                        channel="discord",
+                    )
+                    await interaction.followup.send(
+                        _format_confirmation_prompt(conf),
+                        view=_ConfirmationView(self, user_id, new_pending["id"]),
+                    )
+            else:
+                response = self._agent_client.extract_text(events)
+                if response:
+                    for chunk in _split_message(response):
+                        await interaction.followup.send(chunk)
             await self._session_manager.update_last_activity(user_id, channel="discord")
         except Exception as e:
             logger.exception(f"Failed to resolve Discord confirmation for {user_id}: {e}")

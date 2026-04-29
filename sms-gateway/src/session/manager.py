@@ -298,7 +298,7 @@ class SessionManager:
         session_id: str,
         channel: str,
     ) -> dict:
-        """Store one pending ADK confirmation for a user session."""
+        """Append one pending ADK confirmation to the user's confirmation list."""
         doc_id = normalize_user_id(user_id)
         doc_ref = self._collection.document(doc_id)
         pending_id = secrets.token_urlsafe(9)
@@ -321,28 +321,32 @@ class SessionManager:
             "created_at": datetime.now(timezone.utc),
             "channel": channel,
         }
-        await doc_ref.update({"pending_confirmation": pending})
+        await doc_ref.update({"pending_confirmations": firestore.ArrayUnion([pending])})
         return pending
 
     async def get_pending_confirmation(
         self,
         user_id: str,
-        pending_id: str | None = None,
+        pending_id: str,
     ) -> Optional[dict]:
-        """Return the pending confirmation for a user, optionally matching ID."""
+        """Return the pending confirmation matching pending_id, or None."""
         session = await self.get_session(user_id)
-        if not session or not session.pending_confirmation:
+        if not session:
             return None
-        pending = session.pending_confirmation
-        if pending_id and pending.get("id") != pending_id:
-            return None
-        return pending
+        return next(
+            (c for c in session.pending_confirmations if c.get("id") == pending_id),
+            None,
+        )
 
-    async def clear_pending_confirmation(self, user_id: str) -> None:
-        """Clear pending ADK confirmation state for a user."""
+    async def clear_pending_confirmation(self, user_id: str, pending_id: str) -> None:
+        """Remove one pending confirmation by ID from the user's confirmation list."""
+        session = await self.get_session(user_id)
+        if not session:
+            return
+        remaining = [c for c in session.pending_confirmations if c.get("id") != pending_id]
         doc_id = normalize_user_id(user_id)
         doc_ref = self._collection.document(doc_id)
-        await doc_ref.update({"pending_confirmation": None})
+        await doc_ref.update({"pending_confirmations": remaining})
 
     # ========== Supervisor Session Methods ==========
 

@@ -249,7 +249,7 @@ class TestSessionManager:
             "last_activity": datetime.now(timezone.utc),
             "message_count": 3,
             "opted_in": True,
-            "pending_confirmation": pending,
+            "pending_confirmations": [pending],
         }
         mock_doc = MagicMock()
         mock_doc.exists = True
@@ -263,8 +263,65 @@ class TestSessionManager:
             "+14155551234", "wrong-id"
         ) is None
 
-        await session_manager.clear_pending_confirmation("+14155551234")
-        assert doc_ref.update.call_args[0][0] == {"pending_confirmation": None}
+        await session_manager.clear_pending_confirmation("+14155551234", pending["id"])
+        assert doc_ref.update.call_args[0][0] == {"pending_confirmations": []}
+
+    @pytest.mark.asyncio
+    async def test_multiple_pending_confirmations(self, mock_firestore, session_manager):
+        """Should append and selectively clear individual pending confirmations."""
+        from datetime import timezone
+        _, doc_ref = mock_firestore
+
+        def _make_confirmation(name: str, call_id: str):
+            c = MagicMock()
+            c.to_firestore.return_value = {
+                "function_call_id": call_id,
+                "original_function_call": {"id": call_id, "name": name, "args": {}},
+                "original_function_call_id": call_id,
+                "tool_name": name,
+                "tool_args": {},
+                "hint": "",
+                "payload": None,
+            }
+            return c
+
+        pending_a = await session_manager.set_pending_confirmation(
+            user_id="+14155551234",
+            confirmation=_make_confirmation("create_event", "cid-a"),
+            session_id="session-123",
+            channel="discord",
+        )
+        pending_b = await session_manager.set_pending_confirmation(
+            user_id="+14155551234",
+            confirmation=_make_confirmation("save_file", "cid-b"),
+            session_id="session-123",
+            channel="discord",
+        )
+
+        assert pending_a["tool_name"] == "create_event"
+        assert pending_b["tool_name"] == "save_file"
+        assert doc_ref.update.call_count >= 2
+
+        # Simulate Firestore state with both pending
+        existing_data = {
+            "phone_number": "+14155551234",
+            "personal_agent_session_id": "session-123",
+            "created_at": datetime.now(timezone.utc),
+            "last_activity": datetime.now(timezone.utc),
+            "message_count": 1,
+            "opted_in": True,
+            "pending_confirmations": [pending_a, pending_b],
+        }
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = existing_data
+        doc_ref.get.return_value = mock_doc
+
+        # Clearing pending_a leaves only pending_b
+        await session_manager.clear_pending_confirmation("+14155551234", pending_a["id"])
+        updated = doc_ref.update.call_args[0][0]["pending_confirmations"]
+        assert len(updated) == 1
+        assert updated[0]["id"] == pending_b["id"]
 
     @pytest.mark.asyncio
     async def test_get_session_not_exists(self, mock_firestore, session_manager):

@@ -37,7 +37,39 @@ def _text_events(text: str) -> list[Event]:
     ]
 
 
-def _confirmation_events() -> list[Event]:
+def _confirmation_events(
+    name: str = "send_email",
+    call_id: str = "confirm-1",
+    tool_id: str = "tool-1",
+) -> list[Event]:
+    return [
+        Event(
+            author="agent",
+            content=types.Content(
+                role="model",
+                parts=[
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            name="adk_request_confirmation",
+                            id=call_id,
+                            args={
+                                "originalFunctionCall": {
+                                    "id": tool_id,
+                                    "name": name,
+                                    "args": {"to": "x@example.com", "subject": "Hi"},
+                                },
+                                "toolConfirmation": {"hint": "Approve?"},
+                            },
+                        )
+                    )
+                ],
+            ),
+        )
+    ]
+
+
+def _two_confirmation_events() -> list[Event]:
+    """Two adk_request_confirmation calls in a single event stream."""
     return [
         Event(
             author="agent",
@@ -51,13 +83,27 @@ def _confirmation_events() -> list[Event]:
                             args={
                                 "originalFunctionCall": {
                                     "id": "tool-1",
-                                    "name": "send_email",
-                                    "args": {"to": "x@example.com", "subject": "Hi"},
+                                    "name": "create_calendar_event",
+                                    "args": {"title": "Meeting"},
                                 },
-                                "toolConfirmation": {"hint": "Send email?"},
+                                "toolConfirmation": {"hint": "Create event?"},
                             },
                         )
-                    )
+                    ),
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            name="adk_request_confirmation",
+                            id="confirm-2",
+                            args={
+                                "originalFunctionCall": {
+                                    "id": "tool-2",
+                                    "name": "save_file_to_drive",
+                                    "args": {"filename": "notes.txt"},
+                                },
+                                "toolConfirmation": {"hint": "Save file?"},
+                            },
+                        )
+                    ),
                 ],
             ),
         )
@@ -182,6 +228,26 @@ async def test_gateway_confirmation_request_stores_pending_and_sends_button_view
 
 
 @pytest.mark.asyncio
+async def test_gateway_multiple_confirmations_shows_all_buttons(gateway_services):
+    gateway, session_manager, agent_client = gateway_services
+    agent_client.send_message_events = AsyncMock(return_value=_two_confirmation_events())
+    session_manager.set_pending_confirmation = AsyncMock(
+        side_effect=[{"id": "pending-1"}, {"id": "pending-2"}]
+    )
+    channel = SimpleNamespace(send=AsyncMock())
+
+    await gateway._handle_gateway_message("user-123", "do both", channel)
+
+    assert session_manager.set_pending_confirmation.await_count == 2
+    assert channel.send.await_count == 2
+    for call in channel.send.await_args_list:
+        assert isinstance(call.kwargs["view"], _ConfirmationView)
+    session_manager.update_last_activity.assert_awaited_once_with(
+        "user-123", channel="discord"
+    )
+
+
+@pytest.mark.asyncio
 async def test_approve_callback_sends_confirmation_clears_pending_and_sends_result(
     gateway_services,
 ):
@@ -217,7 +283,7 @@ async def test_approve_callback_sends_confirmation_clears_pending_and_sends_resu
         confirmation_function_call_id="confirm-1",
         confirmed=True,
     )
-    session_manager.clear_pending_confirmation.assert_awaited_once_with("user-123")
+    session_manager.clear_pending_confirmation.assert_awaited_once_with("user-123", "pending-123")
     interaction.response.edit_message.assert_awaited_once_with(view=view)
     interaction.followup.send.assert_awaited_once_with("Done.")
     assert all(item.disabled for item in view.children)
@@ -251,7 +317,7 @@ async def test_reject_callback_sends_false_confirmation(gateway_services):
     )
 
     assert agent_client.send_confirmation_response.await_args.kwargs["confirmed"] is False
-    session_manager.clear_pending_confirmation.assert_awaited_once_with("user-123")
+    session_manager.clear_pending_confirmation.assert_awaited_once_with("user-123", "pending-123")
     interaction.followup.send.assert_not_awaited()
 
 

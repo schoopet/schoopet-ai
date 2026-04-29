@@ -121,5 +121,5 @@ async def test_process_component_confirmation_sends_adk_response_and_followup(
         confirmation_function_call_id="confirm-1",
         confirmed=True,
     )
-    session_manager.clear_pending_confirmation.assert_awaited_once_with("user-123")
+    session_manager.clear_pending_confirmation.assert_awaited_once_with("user-123", "pending-123")
     discord_sender.send_followup.assert_awaited_once_with("interaction-token", "Done.")

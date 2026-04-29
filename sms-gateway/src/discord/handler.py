@@ -217,7 +217,7 @@ async def process_discord_confirmation_component(
             confirmation_function_call_id=pending["adk_confirmation_function_call_id"],
             confirmed=confirmed,
         )
-        await _session_manager.clear_pending_confirmation(user_id)
+        await _session_manager.clear_pending_confirmation(user_id, pending_id)
 
         response = _agent_client.extract_text(events)
         if response:
