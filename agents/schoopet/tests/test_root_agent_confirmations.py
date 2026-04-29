@@ -3,18 +3,25 @@ import ast
 from pathlib import Path
 
 
-REQUIRE_CONFIRMATION = {
+# Tools that keep require_confirmation=True (one-shot, non-repeatable)
+REQUIRE_CONFIRMATION_BOOL = {
     "cancel_task",
     "approve_task",
     "request_correction",
     "create_calendar_event",
     "update_calendar_event",
     "save_file_to_drive",
-    "save_attachment_to_drive",
     "create_google_doc",
-    "append_to_google_doc",
-    "replace_text_in_google_doc",
     "create_spreadsheet",
+    "set_timezone",
+    "add_email_rule",
+    "update_email_rule",
+    "remove_email_rule",
+}
+
+# Tools that use make_resource_confirmation(...) for per-resource bulk approval
+REQUIRE_CONFIRMATION_CALLABLE = {
+    # Sheet tools — approve once per sheet_id
     "add_sheet_tab",
     "ensure_sheet_headers",
     "append_record_to_sheet",
@@ -22,10 +29,11 @@ REQUIRE_CONFIRMATION = {
     "append_row_to_sheet",
     "add_sheet_column",
     "update_sheet_cell",
-    "set_timezone",
-    "add_email_rule",
-    "update_email_rule",
-    "remove_email_rule",
+    # Doc tools — approve once per document_id
+    "append_to_google_doc",
+    "replace_text_in_google_doc",
+    # Drive tools — approve once per folder_id
+    "save_attachment_to_drive",
 }
 
 NO_CONFIRMATION = {
@@ -62,11 +70,14 @@ NO_CONFIRMATION = {
     "list_email_rules",
 }
 
+# "bool" | "callable" | False
+_ConfirmationKind = str | bool
 
-def _function_tool_confirmations() -> dict[str, bool]:
+
+def _function_tool_confirmations() -> dict[str, _ConfirmationKind]:
     root_agent_path = Path(__file__).parents[1] / "root_agent.py"
     tree = ast.parse(root_agent_path.read_text())
-    confirmations: dict[str, bool] = {}
+    confirmations: dict[str, _ConfirmationKind] = {}
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -75,7 +86,7 @@ def _function_tool_confirmations() -> dict[str, bool]:
             continue
 
         func_name = None
-        require_confirmation = False
+        kind: _ConfirmationKind = False
         for keyword in node.keywords:
             if keyword.arg == "func":
                 if isinstance(keyword.value, ast.Attribute):
@@ -83,32 +94,39 @@ def _function_tool_confirmations() -> dict[str, bool]:
                 elif isinstance(keyword.value, ast.Name):
                     func_name = keyword.value.id
             if keyword.arg == "require_confirmation":
-                require_confirmation = (
-                    isinstance(keyword.value, ast.Constant)
-                    and keyword.value.value is True
-                )
+                if isinstance(keyword.value, ast.Constant) and keyword.value.value is True:
+                    kind = "bool"
+                elif isinstance(keyword.value, ast.Call):
+                    kind = "callable"
+                elif isinstance(keyword.value, ast.Name):
+                    # variable holding a callable returned by make_resource_confirmation
+                    kind = "callable"
 
         if func_name:
-            confirmations[func_name] = require_confirmation
+            confirmations[func_name] = kind
 
     return confirmations
 
 
-def test_approved_mutating_tools_require_confirmation():
+def test_bool_confirmation_tools():
     confirmations = _function_tool_confirmations()
-
-    missing = REQUIRE_CONFIRMATION - confirmations.keys()
-    assert not missing
-    assert {
-        name for name in REQUIRE_CONFIRMATION if not confirmations[name]
-    } == set()
+    missing = REQUIRE_CONFIRMATION_BOOL - confirmations.keys()
+    assert not missing, f"Tools missing from root_agent.py: {missing}"
+    wrong = {name for name in REQUIRE_CONFIRMATION_BOOL if confirmations[name] != "bool"}
+    assert not wrong, f"Expected require_confirmation=True for: {wrong}"
 
 
-def test_approved_non_mutating_tools_do_not_require_confirmation():
+def test_callable_confirmation_tools():
     confirmations = _function_tool_confirmations()
+    missing = REQUIRE_CONFIRMATION_CALLABLE - confirmations.keys()
+    assert not missing, f"Tools missing from root_agent.py: {missing}"
+    wrong = {name for name in REQUIRE_CONFIRMATION_CALLABLE if confirmations[name] != "callable"}
+    assert not wrong, f"Expected require_confirmation=make_resource_confirmation(...) for: {wrong}"
 
+
+def test_non_mutating_tools_have_no_confirmation():
+    confirmations = _function_tool_confirmations()
     missing = NO_CONFIRMATION - confirmations.keys()
-    assert not missing
-    assert {
-        name for name in NO_CONFIRMATION if confirmations[name]
-    } == set()
+    assert not missing, f"Tools missing from root_agent.py: {missing}"
+    wrong = {name for name in NO_CONFIRMATION if confirmations[name]}
+    assert not wrong, f"Expected no require_confirmation for: {wrong}"

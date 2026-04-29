@@ -129,6 +129,17 @@ echo -e "${GREEN}Activating virtual environment: $VENV_PATH${NC}"
 source "$VENV_PATH/bin/activate"
 PYTHON_CMD="$VENV_PATH/bin/python"
 
+PYTHON_VERSION="$($PYTHON_CMD -c 'import platform; print(platform.python_version())')"
+case "$PYTHON_VERSION" in
+    3.13.*)
+        ;;
+    *)
+        echo -e "${RED}Error: deployment venv uses Python $PYTHON_VERSION, but Agent Engine requires Python 3.13.${NC}"
+        echo "Recreate $VENV_PATH with Python 3.13 before deploying."
+        exit 1
+        ;;
+esac
+
 # Build deployment command
 DEPLOY_CMD="$PYTHON_CMD -m schoopet.deploy"
 DEPLOY_CMD="$DEPLOY_CMD --project $GOOGLE_CLOUD_PROJECT"

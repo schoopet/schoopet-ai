@@ -3,6 +3,7 @@ import sys
 import argparse
 import logging
 import traceback
+import platform
 from pathlib import Path
 
 import dotenv
@@ -16,6 +17,9 @@ from vertexai import Client, types
 
 from .memory_config import get_memory_bank_config
 from .root_agent import create_adk_agent
+
+
+AGENT_ENGINE_PYTHON_VERSION = "3.13"
 
 
 def _create_client(project_id: str, location: str):
@@ -53,6 +57,7 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
         "env_vars": env_vars,
         "display_name": display_name,
         "description": "Schoopet Agent with Memory and Structured Notes",
+        "python_version": AGENT_ENGINE_PYTHON_VERSION,
         "context_spec": {
             "memory_bank_config": memory_config
         }
@@ -98,6 +103,21 @@ def deploy(project_id: str, location: str, staging_bucket: str = None, agent_eng
         print("❌ No agent engine ID provided.")
         print("   Set PERSONAL_AGENT_ENGINE_ID in your environment or pass --id <engine-id>.")
         print("   To create a new engine, use Terraform.")
+        sys.exit(1)
+
+    local_python = platform.python_version()
+    local_python_minor = ".".join(local_python.split(".")[:2])
+    if local_python_minor != AGENT_ENGINE_PYTHON_VERSION:
+        print(
+            "❌ Incompatible deployment Python version: "
+            f"{local_python}. Agent Engine is configured for Python "
+            f"{AGENT_ENGINE_PYTHON_VERSION}."
+        )
+        print(
+            "   Deploy from a Python 3.13 virtualenv. Deploying from another "
+            "minor version can produce cloudpickle objects that the Agent "
+            "Engine runtime cannot load."
+        )
         sys.exit(1)
 
     display_name = "schoopet-agent"

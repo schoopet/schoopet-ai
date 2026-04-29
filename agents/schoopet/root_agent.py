@@ -19,6 +19,7 @@ from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.load_memory_tool import LoadMemoryTool
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from google.adk.tools.agent_tool import AgentTool
+from .resource_confirmation import make_resource_confirmation
 
 
 def _personal_prompt() -> str:
@@ -262,31 +263,34 @@ def create_agent(
     calendar_status_tool = FunctionTool(func=calendar_tool.get_calendar_status)
 
     # Drive tools
+    _drive_confirm = make_resource_confirmation("folder_id", "drive_folder")
     save_to_drive_tool = FunctionTool(func=drive_tool.save_file_to_drive, require_confirmation=True)
-    save_attachment_to_drive_tool = FunctionTool(func=drive_tool.save_attachment_to_drive, require_confirmation=True)
+    save_attachment_to_drive_tool = FunctionTool(func=drive_tool.save_attachment_to_drive, require_confirmation=_drive_confirm)
     list_drive_files_tool = FunctionTool(func=drive_tool.list_drive_files)
     drive_status_tool = FunctionTool(func=drive_tool.get_drive_status)
 
     # Docs tools
+    _doc_confirm = make_resource_confirmation("document_id", "doc")
     create_google_doc_tool = FunctionTool(func=docs_tool.create_google_doc, require_confirmation=True)
     read_google_doc_tool = FunctionTool(func=docs_tool.read_google_doc)
-    append_to_google_doc_tool = FunctionTool(func=docs_tool.append_to_google_doc, require_confirmation=True)
-    replace_text_in_google_doc_tool = FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=True)
+    append_to_google_doc_tool = FunctionTool(func=docs_tool.append_to_google_doc, require_confirmation=_doc_confirm)
+    replace_text_in_google_doc_tool = FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=_doc_confirm)
     docs_status_tool = FunctionTool(func=docs_tool.get_docs_status)
 
     # Sheets tools
+    _sheet_confirm = make_resource_confirmation("sheet_id", "sheet")
     create_spreadsheet_tool = FunctionTool(func=sheets_tool.create_spreadsheet, require_confirmation=True)
-    add_sheet_tab_tool = FunctionTool(func=sheets_tool.add_sheet_tab, require_confirmation=True)
+    add_sheet_tab_tool = FunctionTool(func=sheets_tool.add_sheet_tab, require_confirmation=_sheet_confirm)
     sheet_schema_tool = FunctionTool(func=sheets_tool.get_sheet_schema)
     read_sheet_records_tool = FunctionTool(func=sheets_tool.read_sheet_records)
-    ensure_sheet_headers_tool = FunctionTool(func=sheets_tool.ensure_sheet_headers, require_confirmation=True)
-    append_record_to_sheet_tool = FunctionTool(func=sheets_tool.append_record_to_sheet, require_confirmation=True)
+    ensure_sheet_headers_tool = FunctionTool(func=sheets_tool.ensure_sheet_headers, require_confirmation=_sheet_confirm)
+    append_record_to_sheet_tool = FunctionTool(func=sheets_tool.append_record_to_sheet, require_confirmation=_sheet_confirm)
     find_sheet_rows_tool = FunctionTool(func=sheets_tool.find_sheet_rows)
-    update_sheet_row_tool = FunctionTool(func=sheets_tool.update_sheet_row, require_confirmation=True)
-    append_to_sheet_tool = FunctionTool(func=sheets_tool.append_row_to_sheet, require_confirmation=True)
+    update_sheet_row_tool = FunctionTool(func=sheets_tool.update_sheet_row, require_confirmation=_sheet_confirm)
+    append_to_sheet_tool = FunctionTool(func=sheets_tool.append_row_to_sheet, require_confirmation=_sheet_confirm)
     read_sheet_tool = FunctionTool(func=sheets_tool.read_sheet)
-    add_column_tool = FunctionTool(func=sheets_tool.add_sheet_column, require_confirmation=True)
-    update_cell_tool = FunctionTool(func=sheets_tool.update_sheet_cell, require_confirmation=True)
+    add_column_tool = FunctionTool(func=sheets_tool.add_sheet_column, require_confirmation=_sheet_confirm)
+    update_cell_tool = FunctionTool(func=sheets_tool.update_sheet_cell, require_confirmation=_sheet_confirm)
     sheets_status_tool = FunctionTool(func=sheets_tool.get_sheets_status)
 
     # Preferences tools
