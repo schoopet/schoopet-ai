@@ -63,6 +63,20 @@ class DiscordSender:
             response.raise_for_status()
             logger.info(f"Sent Discord interaction followup part {i}/{len(chunks)}")
 
+    async def send_followup(self, interaction_token: str, text: str) -> None:
+        """Send one or more follow-up messages for an interaction token."""
+        if not text:
+            text = "(empty response)"
+
+        followup_url = (
+            f"{DISCORD_API_BASE}/webhooks/{self._application_id}/{interaction_token}"
+        )
+        chunks = _split_message(text)
+        for i, chunk in enumerate(chunks, start=1):
+            response = await self._client.post(followup_url, json={"content": chunk})
+            response.raise_for_status()
+            logger.info(f"Sent Discord interaction followup message {i}/{len(chunks)}")
+
     async def send(self, discord_user_id: str, text: str) -> None:
         """Send a direct message to a Discord user.
 

@@ -19,10 +19,15 @@ router = APIRouter()
 # Discord interaction types
 INTERACTION_PING = 1
 INTERACTION_APPLICATION_COMMAND = 2
+INTERACTION_MESSAGE_COMPONENT = 3
 
 # Discord interaction response types
 RESPONSE_PONG = 1
+RESPONSE_CHANNEL_MESSAGE = 4
 RESPONSE_DEFERRED_CHANNEL_MESSAGE = 5
+RESPONSE_UPDATE_MESSAGE = 7
+
+EPHEMERAL_FLAG = 64
 
 # Global references to services (initialized by main.py)
 _validator = None
@@ -113,6 +118,64 @@ async def handle_discord_webhook(
         )
         return JSONResponse({"type": RESPONSE_DEFERRED_CHANNEL_MESSAGE})
 
+    # Component clicks (Approve/Reject confirmation buttons)
+    if interaction_type == INTERACTION_MESSAGE_COMPONENT:
+        custom_id = str(data.get("data", {}).get("custom_id", ""))
+        user_data = (data.get("member") or {}).get("user") or data.get("user") or {}
+        user_id = str(user_data.get("id", ""))
+        interaction_token = data.get("token", "")
+
+        if not user_id or ":" not in custom_id:
+            return JSONResponse({
+                "type": RESPONSE_CHANNEL_MESSAGE,
+                "data": {
+                    "content": "That approval request is invalid.",
+                    "flags": EPHEMERAL_FLAG,
+                },
+            })
+
+        pending_id, action = custom_id.split(":", 1)
+        if action not in ("approve", "reject"):
+            return JSONResponse({
+                "type": RESPONSE_CHANNEL_MESSAGE,
+                "data": {
+                    "content": "That approval action is invalid.",
+                    "flags": EPHEMERAL_FLAG,
+                },
+            })
+
+        pending = await _session_manager.get_pending_confirmation(user_id, pending_id)
+        if not pending:
+            return JSONResponse({
+                "type": RESPONSE_CHANNEL_MESSAGE,
+                "data": {
+                    "content": "That approval is no longer pending, or it is not for you.",
+                    "flags": EPHEMERAL_FLAG,
+                },
+            })
+
+        confirmed = action == "approve"
+        logger.info(
+            f"Discord confirmation component: user={user_id}, "
+            f"pending={pending_id}, confirmed={confirmed}"
+        )
+        background_tasks.add_task(
+            process_discord_confirmation_component,
+            user_id=user_id,
+            pending_id=pending_id,
+            interaction_token=interaction_token,
+            confirmed=confirmed,
+        )
+
+        content = "Approved. Working on it..." if confirmed else "Rejected. Working on it..."
+        return JSONResponse({
+            "type": RESPONSE_UPDATE_MESSAGE,
+            "data": {
+                "content": content,
+                "components": [],
+            },
+        })
+
     # All other interaction types — acknowledge silently
     return JSONResponse({"type": RESPONSE_PONG})
 
@@ -130,6 +193,45 @@ async def process_discord_message(
             logger.error(f"Failed to send Discord followup to {user_id}: {e}")
 
     await _handle_discord_message(user_id, text, _reply)
+
+
+async def process_discord_confirmation_component(
+    user_id: str,
+    pending_id: str,
+    interaction_token: str,
+    confirmed: bool,
+) -> None:
+    """Resolve an ADK confirmation from a Discord component webhook."""
+    try:
+        pending = await _session_manager.get_pending_confirmation(user_id, pending_id)
+        if not pending:
+            await _discord_sender.send_followup(
+                interaction_token,
+                "That approval is no longer pending.",
+            )
+            return
+
+        events = await _agent_client.send_confirmation_response(
+            user_id=user_id,
+            session_id=pending["agent_session_id"],
+            confirmation_function_call_id=pending["adk_confirmation_function_call_id"],
+            confirmed=confirmed,
+        )
+        await _session_manager.clear_pending_confirmation(user_id)
+
+        response = _agent_client.extract_text(events)
+        if response:
+            await _discord_sender.send_followup(interaction_token, response)
+        await _session_manager.update_last_activity(user_id, channel="discord")
+    except Exception as e:
+        logger.exception(f"Failed to resolve Discord component confirmation for {user_id}: {e}")
+        try:
+            await _discord_sender.send_followup(
+                interaction_token,
+                "I couldn't resolve that approval. Please try again.",
+            )
+        except Exception as send_err:
+            logger.error(f"Failed to send Discord confirmation error followup: {send_err}")
 
 
 async def _handle_discord_message(
