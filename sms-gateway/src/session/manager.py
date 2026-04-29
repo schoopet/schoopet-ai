@@ -156,7 +156,7 @@ class SessionManager:
         """
         await self._agent_client.delete_session(user_id, session_id)
 
-    async def get_or_create_session(self, phone_number: str, channel: str | None = None) -> SessionInfo:
+    async def get_or_create_session(self, phone_number: str, channel: str) -> SessionInfo:
         """Get existing session or create a new one.
 
         Creates a new Agent Engine session if:
@@ -254,7 +254,7 @@ class SessionManager:
             is_new_user=is_new_user,
         )
 
-    async def update_last_activity(self, phone_number: str, channel: str = "sms", slack_team_id: str = "") -> None:
+    async def update_last_activity(self, phone_number: str, channel: str, slack_team_id: str = "") -> None:
         """Update session's last activity timestamp, channel, and increment message count.
 
         Args:

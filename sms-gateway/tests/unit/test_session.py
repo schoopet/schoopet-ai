@@ -105,13 +105,13 @@ class TestSessionManager:
         # doc_ref.get is an AsyncMock, so we set its return_value to the mock_doc
         doc_ref.get.return_value = mock_doc
 
-        result = await session_manager.get_or_create_session("+14155551234")
+        result = await session_manager.get_or_create_session("+14155551234", channel="sms")
 
         # The session manager creates a new session with opted_in=True
         assert result.opted_in is True
         assert result.is_new_session is True
         mock_agent_client.create_session.assert_called_once_with(
-            user_id="+14155551234", state={}
+            user_id="+14155551234", state={"channel": "sms"}
         )
 
     @pytest.mark.asyncio
@@ -137,7 +137,7 @@ class TestSessionManager:
         mock_doc.to_dict.return_value = existing_data
         doc_ref.get.return_value = mock_doc
 
-        result = await session_manager.get_or_create_session("+14155551234")
+        result = await session_manager.get_or_create_session("+14155551234", channel="sms")
 
         assert result.agent_session_id == "existing-session"
         assert result.is_new_session is False
@@ -166,7 +166,7 @@ class TestSessionManager:
         mock_doc.to_dict.return_value = stale_data
         doc_ref.get.return_value = mock_doc
 
-        result = await session_manager.get_or_create_session("+14155551234")
+        result = await session_manager.get_or_create_session("+14155551234", channel="sms")
 
         assert result.agent_session_id == "new-session-123"
         assert result.is_new_session is True
@@ -177,7 +177,7 @@ class TestSessionManager:
         """Should update timestamp and increment message count."""
         _, doc_ref = mock_firestore
 
-        await session_manager.update_last_activity("+14155551234")
+        await session_manager.update_last_activity("+14155551234", channel="sms")
 
         doc_ref.update.assert_called_once()
         call_args = doc_ref.update.call_args[0][0]

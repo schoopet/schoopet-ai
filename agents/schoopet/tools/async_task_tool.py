@@ -73,8 +73,9 @@ class AsyncTaskTool:
         return None
 
     def _get_channel(self, tool_context: Optional[ToolContext]) -> str:
-        """Extract notification channel from session state, defaulting to 'sms'."""
+        """Extract notification channel from session state."""
         if not tool_context:
+            logger.warning("_get_channel called without tool_context; defaulting to 'sms'")
             return "sms"
         try:
             state = tool_context.state
@@ -84,6 +85,12 @@ class AsyncTaskTool:
                     return channel
         except Exception:
             pass
+        user_id = getattr(tool_context, "user_id", "unknown")
+        logger.warning(
+            "No valid channel in session state for user %s; defaulting to 'sms'. "
+            "Session may have been created without a channel in agent state.",
+            user_id,
+        )
         return "sms"
 
     def _get_agent_type(self, tool_context: Optional[ToolContext]) -> str:
