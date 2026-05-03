@@ -227,7 +227,7 @@ def _personal_prompt() -> str:
 
 
 def create_agent(
-    model_name: str = "gemini-3-flash-preview",
+    model_name: str = "gemini-3.1-pro-preview",
     project: str = None,
     location: str = None
 ):
