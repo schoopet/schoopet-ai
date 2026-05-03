@@ -66,6 +66,13 @@ class AsyncTaskDocument(BaseModel):
         default="sms", description="Channel to notify user on completion: sms, discord, slack, etc."
     )
 
+    # Pre-authorized resources for offline execution (no user confirmation required)
+    # Keys are resource_confirmation state_prefix values: "sheet", "doc", "drive_folder"
+    allowed_resource_ids: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="Resource IDs pre-authorized for offline access, keyed by type",
+    )
+
     # Session tracking
     user_session_id: Optional[str] = Field(
         default=None, description="Original user session for context/notification"
@@ -127,6 +134,9 @@ class AsyncTaskDocument(BaseModel):
             "created_at": self.created_at,
         }
 
+        if self.allowed_resource_ids:
+            data["allowed_resource_ids"] = self.allowed_resource_ids
+
         # Add optional fields if set
         if self.scheduled_at:
             data["scheduled_at"] = self.scheduled_at
@@ -164,6 +174,7 @@ class AsyncTaskDocument(BaseModel):
             task_type=data["task_type"],
             instruction=data["instruction"],
             context=data.get("context", {}),
+            allowed_resource_ids=data.get("allowed_resource_ids", {}),
             scheduled_at=data.get("scheduled_at"),
             cloud_task_name=data.get("cloud_task_name"),
             agent_type=data.get("agent_type", "personal"),

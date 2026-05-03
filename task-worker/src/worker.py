@@ -14,6 +14,21 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 
+def _build_allowed_resource_state(allowed_resource_ids: dict) -> dict:
+    """Build initial ADK session state that pre-approves specific resource IDs.
+
+    The resource_confirmation callbacks in the agent check session state for
+    _resource_confirmed_{state_prefix}_{resource_id}. Pre-populating these keys
+    lets the task run without prompting the user for resources they already approved
+    at scheduling time.
+    """
+    state = {}
+    for resource_type, ids in allowed_resource_ids.items():
+        for resource_id in ids:
+            state[f"_resource_confirmed_{resource_type}_{resource_id}"] = True
+    return state
+
+
 class TaskWorker:
     """Executes async tasks by delegating to the deployed Agent Engine."""
 
@@ -267,8 +282,13 @@ class TaskWorker:
         adk_app = client.agent_engines.get(name=engine_name)
         user_id = task["user_id"]
 
-        # Create a task-scoped session
-        session = await adk_app.async_create_session(user_id=user_id)
+        # Pre-authorize resource IDs so require_confirmation callbacks skip prompts
+        # for resources the user approved at task scheduling time.
+        # Keys map to resource_confirmation state_prefix values ("sheet", "doc", "drive_folder").
+        initial_state = _build_allowed_resource_state(task.get("allowed_resource_ids", {}))
+
+        # Create a task-scoped session, seeding state with pre-authorized resources
+        session = await adk_app.async_create_session(user_id=user_id, state=initial_state)
         session_id = session["id"]
 
         logger.info(
