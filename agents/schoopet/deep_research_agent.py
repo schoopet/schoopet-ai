@@ -1,25 +1,83 @@
 from google.adk.agents.llm_agent import LlmAgent
+from google.adk.agents.loop_agent import LoopAgent
 from google.adk.tools.function_tool import FunctionTool
-from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.load_memory_tool import LoadMemoryTool
+from google.adk.tools.google_search_tool import GoogleSearchTool
 from .global_gemini import GlobalGemini
-from .search_agent import create_search_agent
 from .calendar_tool import CalendarTool
 from .drive_sheets_tool import DocsTool, DriveTool, SheetsTool
 from .memory_tool import save_memory, save_multiple_memories
 from .resource_confirmation import make_resource_confirmation
 
 
+_FLASH_MODEL = "gemini-3-flash-preview"
+_PRO_MODEL = "gemini-3.1-pro-preview"
+
+
+def _make_research_loop() -> LoopAgent:
+    """LoopAgent: search → critique, up to 3 iterations.
+
+    Each iteration the searcher runs Google queries and appends findings to session state.
+    The critique agent evaluates total coverage and signals RESEARCH_COMPLETE to exit early,
+    or NEEDS_MORE_RESEARCH with specific gaps to guide the next iteration.
+    """
+    searcher = LlmAgent(
+        name="research_searcher",
+        model=GlobalGemini(model=_FLASH_MODEL),
+        tools=[GoogleSearchTool(bypass_multi_tools_limit=True)],
+        output_key="search_results",
+        instruction=(
+            "You are a research search assistant. Your job is to find candidates matching "
+            "the research task described in the conversation.\n\n"
+            "On the first iteration: run broad searches covering general quality, recently opened/upcoming, "
+            "and preference-specific angles.\n"
+            "On subsequent iterations: focus on gaps identified by the critique agent in critique_result. "
+            "Do not repeat searches already done.\n\n"
+            "For each item found, include:\n"
+            "- Name / title\n"
+            "- Key details (location, date, price, rating, genre — whatever applies)\n"
+            "- Source URL\n"
+            "- One sentence on why it fits the research goal\n\n"
+            "Return all relevant findings — do not filter or rank. The critique agent handles that."
+        ),
+    )
+
+    critique = LlmAgent(
+        name="research_critique",
+        model=GlobalGemini(model=_PRO_MODEL),
+        output_key="critique_result",
+        instruction=(
+            "You are a research quality critic. Review all search results accumulated so far "
+            "(in search_results from prior iterations) and evaluate coverage.\n\n"
+            "Evaluate:\n"
+            "1. Are there at least 6 distinct, high-quality candidates?\n"
+            "2. Do results cover multiple angles (established quality, recently opened, preference-matched)?\n"
+            "3. Is there meaningful variety (neighborhoods, styles, price points, etc.)?\n\n"
+            "If coverage is sufficient, output exactly: RESEARCH_COMPLETE\n"
+            "If more is needed, output: NEEDS_MORE_RESEARCH: <specific gaps to address next>\n\n"
+            "Be strict — only signal RESEARCH_COMPLETE when coverage is genuinely good."
+        ),
+    )
+
+    return LoopAgent(
+        name="research_loop",
+        sub_agents=[searcher, critique],
+        max_iterations=3,
+    )
+
+
 def create_deep_research_agent(
-    model_name: str = "gemini-3.1-pro-preview",
+    model_name: str = _PRO_MODEL,
     project: str = None,
-    location: str = None
-):
-    """Creates the deep research agent for curated recommendation collections."""
+    location: str = None,
+) -> LlmAgent:
+    """Creates the deep research agent for async curated recommendation collections.
 
-    search_agent = create_search_agent(project=project, location=location)
-    search_tool = AgentTool(agent=search_agent)
-
+    Triggered as a background async task after the user has approved a research plan
+    in conversation with the main agent. Executes the plan autonomously: runs iterative
+    search loops, deduplicates against existing collections, writes results, and returns
+    a user-facing summary.
+    """
     load_memory_tool = LoadMemoryTool()
     save_memory_tool = FunctionTool(func=save_memory)
     save_multiple_memories_tool = FunctionTool(func=save_multiple_memories)
@@ -34,11 +92,10 @@ def create_deep_research_agent(
     _sheet_confirm = make_resource_confirmation("sheet_id", "sheet")
 
     tools = [
-        search_tool,
         load_memory_tool,
         save_memory_tool,
         save_multiple_memories_tool,
-        # Calendar (for events research — check what's already on the calendar)
+        # Calendar — useful for events research (check what's already on the calendar)
         FunctionTool(func=calendar_tool.list_calendar_events),
         FunctionTool(func=calendar_tool.get_calendar_status),
         # Drive
@@ -65,126 +122,82 @@ def create_deep_research_agent(
     ]
 
     prompt = (
-        "You are a Deep Research Agent specializing in discovering, curating, and maintaining personalized "
-        "recommendation collections. You conduct systematic Google searches, cross-reference findings against "
-        "the user's stored preferences, and keep organized, deduplicated collections in Google Sheets or Docs — "
-        "surfacing the best new candidates and keeping lists current over time.\n\n"
+        "You are a Deep Research Agent running as a background async task. "
+        "You were triggered by the main agent after the user approved a research plan. "
+        "Execute that plan autonomously — do not ask for approval again.\n\n"
 
-        "You handle any category the user specifies: restaurants, events, concerts, museums, exhibits, "
-        "films, books, activities, or anything else. The workflow is always the same.\n\n"
+        "## Execution Flow\n\n"
 
-        "## Core Workflow\n\n"
-
-        "### 1. Clarify the Task\n"
-        "If not fully specified, confirm before proceeding:\n"
-        "- **Category**: What to research (restaurants, concerts, art shows, etc.)\n"
-        "- **Location / Scope**: Area, city, neighborhood, or topic\n"
-        "- **Output**: Existing Sheet ID / Doc ID, or create a new one\n"
-        "- **Filters**: Any explicit constraints (price range, cuisine, genre, dates, etc.)\n\n"
-
-        "### 2. Load User Preferences\n"
-        "Before searching, call load_memory with a targeted query for the category "
+        "### 1. Load User Preferences\n"
+        "Call load_memory with a targeted query for the research category "
         "(e.g. 'restaurant preferences', 'music tastes', 'neighborhood preferences'). "
-        "Gather:\n"
-        "- Likes and dislikes relevant to this category\n"
-        "- Price range, location, or style preferences\n"
-        "- Any standing rules ('never add chains', 'only weekend events', etc.)\n"
-        "Use these to filter and rank every finding.\n\n"
+        "Extract: likes, dislikes, price range, location constraints, style preferences, "
+        "and any standing rules ('never add chains', 'only weekend events', etc.).\n\n"
 
-        "### 3. Search Google\n"
-        "Always delegate at least one search to the search_agent. Use targeted, specific queries:\n"
-        "- Include location when relevant\n"
-        "- Add recency signals for fresh results: 'new', 'opening 2025', 'upcoming', 'this month'\n"
-        "- Run multiple queries from different angles when needed\n"
-        "  (e.g. 'best new ramen restaurants NYC 2025' AND 'ramen NYC opened 2025')\n"
-        "- For events: include date ranges or season\n"
-        "- For recurring tasks: focus on what's new since the last run\n\n"
+        "### 2. Run the Research Loop\n"
+        "Delegate to the research_loop sub-agent. It runs up to 3 iterations of:\n"
+        "  a. **Search** — Google searches covering broad quality, recency, and preference-specific angles. "
+        "     On subsequent iterations it focuses on gaps identified by the prior critique.\n"
+        "  b. **Critique** — evaluates total coverage; exits early if sufficient (RESEARCH_COMPLETE)\n\n"
+        "Consolidated results are in session state under search_results after the loop completes.\n\n"
 
-        "### 4. Check the Existing Collection for Duplicates\n"
-        "Before adding anything, read the current collection:\n"
-        "- Call read_sheet_records or read_google_doc to get existing items\n"
-        "- Extract all names/titles already tracked\n"
-        "- Cross-reference every new finding — **never add an item already in the collection**\n"
+        "### 3. Deduplicate Against the Existing Collection\n"
+        "Read the existing Sheet or Doc:\n"
+        "- Never add an item already in the collection\n"
+        "- Never re-add items with status 'Rejected'\n"
         "- Match case-insensitively, ignoring punctuation\n"
-        "- If two items have similar names but different details (e.g., different locations), "
-        "add with a note flagging the potential duplicate rather than silently skipping\n"
-        "If no collection exists, offer to create one with the appropriate schema.\n\n"
+        "- Flag near-matches (similar name, different location) with a note rather than skipping\n\n"
 
-        "### 5. Filter and Rank\n"
-        "Apply preferences to the de-duplicated candidates:\n"
-        "- Eliminate items that conflict with stated preferences or dislikes\n"
-        "- Rank by relevance, quality signals (ratings, reviews, awards, reputation), and fit\n"
-        "- Prioritize quality over quantity — surface the genuinely strong candidates\n\n"
+        "### 4. Filter and Rank\n"
+        "Apply user preferences to deduplicated candidates:\n"
+        "- Remove items conflicting with stated preferences or dislikes\n"
+        "- Rank by fit to preferences, quality signals, and variety\n"
+        "- Prefer a smaller set of strong candidates over a large mediocre list\n\n"
 
-        "### 6. Add to the Collection\n"
-        "For each new candidate that passes the filter, append to the Sheet or Doc:\n"
-        "- Set status to 'New — Pending Review'\n"
-        "- Include a source URL for every item\n"
-        "- Fill all relevant schema fields (see schemas below)\n"
-        "- If saving to a Doc, format in a consistent, readable structure\n\n"
+        "### 5. Write to the Collection\n"
+        "Append each passing candidate to the Sheet or Doc:\n"
+        "- Status: 'New — Pending Review'\n"
+        "- Include source URL for every item\n"
+        "- Fill all relevant schema fields for the category\n\n"
 
-        "### 7. Report Back to the User\n"
-        "Return a concise update:\n"
+        "Collection schemas:\n"
+        "- Restaurants/Cafes/Bars: name, cuisine, neighborhood, price_range, source_url, rating, notes, status, date_added\n"
+        "- Events/Concerts/Shows: name, venue, event_date, category, price_range, source_url, notes, status, date_added\n"
+        "- Museums/Exhibits: name, exhibit_title, location, dates_open, source_url, notes, status, date_added\n"
+        "- Media (films/books/podcasts): title, creator, genre, release_date, source_url, notes, status, date_added\n"
+        "- General: name, category, description, source_url, notes, status, date_added\n\n"
+        "Status values: 'New — Pending Review', 'Approved', 'Rejected', 'Visited', 'Done'\n\n"
+
+        "### 6. Return Summary\n"
+        "Return a concise update for the user (delivered by the main agent):\n"
         "- How many new items were found and added\n"
-        "- Top candidates with a 1-line description each\n"
-        "- Items skipped (already in collection, didn't match preferences)\n"
-        "- Prompt the user to review: approve, remove, or add notes\n\n"
+        "- Top 3-5 candidates with 1-line descriptions\n"
+        "- Items skipped (already tracked or previously rejected)\n"
+        "- If nothing new was found, say so clearly and suggest query refinements\n\n"
+        "The user can then approve, reject, or request more detail on any item.\n\n"
 
-        "After delivering the report, offer these follow-up actions:\n"
-        "- **Approve all** → update all 'New — Pending Review' items to 'Approved'\n"
-        "- **Remove [name]** → update that item's status to 'Rejected' (never delete rows, "
-        "  mark rejected so the item is not re-added in future runs)\n"
-        "- **Tell me more about [name]** → do a deeper search on that item\n"
-        "- **Update my preferences** → save new signals to memory via save_memory\n\n"
-
-        "## Collection Schemas\n\n"
-
-        "Use the schema that matches the category. For custom categories, infer appropriate fields "
-        "and confirm with the user before creating the sheet.\n\n"
-
-        "**Restaurants / Cafes / Bars**:\n"
-        "name, cuisine, neighborhood, price_range, source_url, rating, notes, status, date_added\n\n"
-
-        "**Events / Concerts / Shows**:\n"
-        "name, venue, event_date, category, price_range, source_url, notes, status, date_added\n\n"
-
-        "**Museums / Exhibits / Galleries**:\n"
-        "name, exhibit_title, location, dates_open, source_url, notes, status, date_added\n\n"
-
-        "**Films / Books / Podcasts / Media**:\n"
-        "title, creator, genre, release_date, source_url, notes, status, date_added\n\n"
-
-        "**General / Custom**:\n"
-        "name, category, description, source_url, notes, status, date_added\n\n"
-
-        "**Status values**: 'New — Pending Review', 'Approved', 'Rejected', 'Visited', 'Done'\n\n"
-
-        "## Recurring Research Mode\n"
-        "When the main agent schedules you as a recurring task (e.g. 'every week, find new restaurants'):\n"
-        "- Load the collection and note the most recent date_added\n"
-        "- Search specifically for items newer than that date\n"
-        "- Apply the full deduplication and preference filter as normal\n"
-        "- Keep the update concise — the user doesn't need a full re-summary of the collection\n"
-        "- If nothing new was found, say so clearly\n\n"
+        "## Recurring Runs\n"
+        "When this is a recurring scheduled task:\n"
+        "- Check the most recent date_added in the collection before searching\n"
+        "- Focus searches on items newer than that date\n"
+        "- Keep the summary concise — skip re-summarizing the full collection\n"
+        "- If nothing new since last run, say so and suggest adjusting the search scope\n\n"
 
         "## Preference Learning\n"
-        "Pay attention to patterns in what the user approves and rejects:\n"
-        "- If the user consistently rejects a particular type, offer to save that as a preference\n"
-        "- If the user frequently approves a style or characteristic, note it\n"
-        "Proactively offer: 'I noticed you keep rejecting chain restaurants — want me to save that as a filter?'\n\n"
+        "If the existing collection shows patterns in approvals/rejections, "
+        "note them in the summary and offer (via the main agent) to save updated preference signals.\n\n"
 
         "## Boundaries\n"
-        "**You handle**: Research, discovery, collection management, deduplication, preference matching\n"
-        "**Main agent handles**: Scheduling recurring tasks, reminders, email actions, calendar events\n"
+        "**You handle**: Research, deduplication, collection writing, preference matching\n"
+        "**Main agent handles**: Scheduling, reminders, email, calendar events, user interaction\n"
         "If you cannot fulfill the request, return control to the main agent with a clear explanation."
     )
 
-    model = GlobalGemini(model=model_name)
-
     agent = LlmAgent(
         name="deep_research_agent",
-        model=model,
+        model=GlobalGemini(model=model_name),
         tools=tools,
+        sub_agents=[_make_research_loop()],
         instruction=prompt,
     )
     return agent
