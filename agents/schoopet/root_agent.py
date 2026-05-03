@@ -13,13 +13,14 @@ from .tools.async_task_tool import AsyncTaskTool
 from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
 from .code_executor_agent import create_code_executor_agent
+from .deep_research_agent import create_deep_research_agent
 from google.adk.agents.llm_agent import LlmAgent
 from .global_gemini import GlobalGemini
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.load_memory_tool import LoadMemoryTool
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from google.adk.tools.agent_tool import AgentTool
-from .resource_confirmation import make_resource_confirmation
+from .resource_confirmation import doc_confirmation, sheet_confirmation, drive_folder_confirmation
 
 
 def _personal_prompt() -> str:
@@ -69,6 +70,39 @@ def _personal_prompt() -> str:
         "- code_executor: Delegate to this subagent for Python execution\n"
         "Use for: date calculations ('next Monday', 'in 3 weeks'), math, data transformations.\n"
         "For calendar operations: calculate exact dates here first, then call calendar tools.\n\n"
+
+        "## Deep Research\n\n"
+
+        "### Async execution (no user present)\n"
+        "If the incoming message starts with DEEP_RESEARCH_TASK:, an async task worker is delivering "
+        "a pre-approved research plan — there is no user in the conversation. "
+        "Immediately delegate to deep_research_agent with the full message content. Do not summarize, "
+        "rewrite, or ask for confirmation.\n\n"
+
+        "### Interactive flow (user is present)\n"
+        "When the user asks for recommendations, discovery, or ongoing tracking of any category "
+        "(restaurants, events, concerts, museums, books, etc.), do NOT execute the research inline. "
+        "Instead:\n\n"
+        "1. **Draft a research plan** and present it to the user. The plan must include:\n"
+        "   - Category and any subcategory (e.g. 'Italian restaurants', 'jazz concerts')\n"
+        "   - Location or scope\n"
+        "   - Output destination: existing Sheet ID + tab, or Doc ID, or offer to create one\n"
+        "   - Filters and preferences (retrieve from memory first)\n"
+        "   - For recurring plans: instruction to check the collection for the most recent date_added "
+        "     and only surface items not already tracked or previously rejected\n\n"
+        "2. **Refine with the user** until the plan is approved. The plan becomes the async task instruction.\n\n"
+        "3. **Schedule as an async task** using create_async_task with:\n"
+        "   - task_type: 'research'\n"
+        "   - instruction: the approved plan, prefixed with DEEP_RESEARCH_TASK:\n"
+        "   - allowed_resource_ids: dict of pre-authorized resource IDs, e.g. "
+        '{"sheet": ["sheet-id"], "doc": ["doc-id"], "drive_folder": ["folder-id"]}\n'
+        "   - Always pass the relevant resource IDs — this lets the task write to those resources "
+        "     without prompting the user again during background execution.\n"
+        "   - For immediate one-off: no schedule delay\n"
+        "   - For recurring: schedule_at the first occurrence; the plan should include the recurrence "
+        "     rule so the deep_research_agent can schedule the next occurrence when it completes\n\n"
+        "The deep_research_agent runs autonomously and returns a summary when done. "
+        "You will receive it as an INTERNAL_TASK_COMPLETE event — review and deliver it to the user.\n\n"
 
         "## User Preferences\n"
         "- set_timezone(timezone_str): Save the user's timezone (e.g., 'America/Los_Angeles')\n"
@@ -263,34 +297,31 @@ def create_agent(
     calendar_status_tool = FunctionTool(func=calendar_tool.get_calendar_status)
 
     # Drive tools
-    _drive_confirm = make_resource_confirmation("folder_id", "drive_folder")
     save_to_drive_tool = FunctionTool(func=drive_tool.save_file_to_drive, require_confirmation=True)
-    save_attachment_to_drive_tool = FunctionTool(func=drive_tool.save_attachment_to_drive, require_confirmation=_drive_confirm)
+    save_attachment_to_drive_tool = FunctionTool(func=drive_tool.save_attachment_to_drive, require_confirmation=drive_folder_confirmation)
     list_drive_files_tool = FunctionTool(func=drive_tool.list_drive_files)
     drive_status_tool = FunctionTool(func=drive_tool.get_drive_status)
 
     # Docs tools
-    _doc_confirm = make_resource_confirmation("document_id", "doc")
     create_google_doc_tool = FunctionTool(func=docs_tool.create_google_doc, require_confirmation=True)
     read_google_doc_tool = FunctionTool(func=docs_tool.read_google_doc)
-    append_to_google_doc_tool = FunctionTool(func=docs_tool.append_to_google_doc, require_confirmation=_doc_confirm)
-    replace_text_in_google_doc_tool = FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=_doc_confirm)
+    append_to_google_doc_tool = FunctionTool(func=docs_tool.append_to_google_doc, require_confirmation=doc_confirmation)
+    replace_text_in_google_doc_tool = FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=doc_confirmation)
     docs_status_tool = FunctionTool(func=docs_tool.get_docs_status)
 
     # Sheets tools
-    _sheet_confirm = make_resource_confirmation("sheet_id", "sheet")
     create_spreadsheet_tool = FunctionTool(func=sheets_tool.create_spreadsheet, require_confirmation=True)
-    add_sheet_tab_tool = FunctionTool(func=sheets_tool.add_sheet_tab, require_confirmation=_sheet_confirm)
+    add_sheet_tab_tool = FunctionTool(func=sheets_tool.add_sheet_tab, require_confirmation=sheet_confirmation)
     sheet_schema_tool = FunctionTool(func=sheets_tool.get_sheet_schema)
     read_sheet_records_tool = FunctionTool(func=sheets_tool.read_sheet_records)
-    ensure_sheet_headers_tool = FunctionTool(func=sheets_tool.ensure_sheet_headers, require_confirmation=_sheet_confirm)
-    append_record_to_sheet_tool = FunctionTool(func=sheets_tool.append_record_to_sheet, require_confirmation=_sheet_confirm)
+    ensure_sheet_headers_tool = FunctionTool(func=sheets_tool.ensure_sheet_headers, require_confirmation=sheet_confirmation)
+    append_record_to_sheet_tool = FunctionTool(func=sheets_tool.append_record_to_sheet, require_confirmation=sheet_confirmation)
     find_sheet_rows_tool = FunctionTool(func=sheets_tool.find_sheet_rows)
-    update_sheet_row_tool = FunctionTool(func=sheets_tool.update_sheet_row, require_confirmation=_sheet_confirm)
-    append_to_sheet_tool = FunctionTool(func=sheets_tool.append_row_to_sheet, require_confirmation=_sheet_confirm)
+    update_sheet_row_tool = FunctionTool(func=sheets_tool.update_sheet_row, require_confirmation=sheet_confirmation)
+    append_to_sheet_tool = FunctionTool(func=sheets_tool.append_row_to_sheet, require_confirmation=sheet_confirmation)
     read_sheet_tool = FunctionTool(func=sheets_tool.read_sheet)
-    add_column_tool = FunctionTool(func=sheets_tool.add_sheet_column, require_confirmation=_sheet_confirm)
-    update_cell_tool = FunctionTool(func=sheets_tool.update_sheet_cell, require_confirmation=_sheet_confirm)
+    add_column_tool = FunctionTool(func=sheets_tool.add_sheet_column, require_confirmation=sheet_confirmation)
+    update_cell_tool = FunctionTool(func=sheets_tool.update_sheet_cell, require_confirmation=sheet_confirmation)
     sheets_status_tool = FunctionTool(func=sheets_tool.get_sheets_status)
 
     # Preferences tools
@@ -322,6 +353,8 @@ def create_agent(
     )
     code_executor_tool = AgentTool(agent=code_executor_agent)
 
+    deep_research_tool = AgentTool(agent=create_deep_research_agent())
+
     tools = [
         save_memory_tool,
         save_multiple_memories_tool,
@@ -329,6 +362,7 @@ def create_agent(
         preload_memory_tool,
         search_tool,
         code_executor_tool,
+        deep_research_tool,
         list_events_tool,
         create_event_tool,
         update_event_tool,
