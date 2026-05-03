@@ -13,6 +13,7 @@ from .tools.async_task_tool import AsyncTaskTool
 from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
 from .code_executor_agent import create_code_executor_agent
+from .deep_research_agent import create_deep_research_agent
 from google.adk.agents.llm_agent import LlmAgent
 from .global_gemini import GlobalGemini
 from google.adk.tools.function_tool import FunctionTool
@@ -69,6 +70,14 @@ def _personal_prompt() -> str:
         "- code_executor: Delegate to this subagent for Python execution\n"
         "Use for: date calculations ('next Monday', 'in 3 weeks'), math, data transformations.\n"
         "For calendar operations: calculate exact dates here first, then call calendar tools.\n\n"
+
+        "## Deep Research\n"
+        "- deep_research_agent: Delegate to this subagent for curated recommendation research\n"
+        "Use for: discovering new restaurants, events, concerts, museums, or any category the user wants to track; "
+        "matching findings to user preferences; maintaining deduplicated collections in Sheets or Docs.\n"
+        "The agent searches Google, filters against stored preferences, adds new candidates to the collection, "
+        "and returns a summary for the user to review.\n"
+        "For recurring research (e.g. 'every week find new restaurants'), create an async task that delegates here.\n\n"
 
         "## User Preferences\n"
         "- set_timezone(timezone_str): Save the user's timezone (e.g., 'America/Los_Angeles')\n"
@@ -322,6 +331,13 @@ def create_agent(
     )
     code_executor_tool = AgentTool(agent=code_executor_agent)
 
+    # Initialize Deep Research subagent (for curated recommendation collections)
+    deep_research_agent = create_deep_research_agent(
+        project=project,
+        location=location
+    )
+    deep_research_tool = AgentTool(agent=deep_research_agent)
+
     tools = [
         save_memory_tool,
         save_multiple_memories_tool,
@@ -329,6 +345,7 @@ def create_agent(
         preload_memory_tool,
         search_tool,
         code_executor_tool,
+        deep_research_tool,
         list_events_tool,
         create_event_tool,
         update_event_tool,
