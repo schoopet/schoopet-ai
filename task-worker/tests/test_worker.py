@@ -14,7 +14,16 @@ def mock_firestore():
     mock_module = MagicMock()
     client = MagicMock()
     mock_module.Client.return_value = client
-    with patch.dict("sys.modules", {"google.cloud.firestore": mock_module}):
+    # google.cloud and google namespace packages must also be present so that
+    # lazy `from google.cloud import firestore` imports inside the worker succeed.
+    mock_google = MagicMock()
+    mock_google_cloud = MagicMock()
+    mock_google_cloud.firestore = mock_module
+    with patch.dict("sys.modules", {
+        "google": mock_google,
+        "google.cloud": mock_google_cloud,
+        "google.cloud.firestore": mock_module,
+    }):
         yield client
 
 @pytest.fixture
