@@ -66,8 +66,6 @@ class AsyncTaskDocument(BaseModel):
         default="sms", description="Channel to notify user on completion: sms, discord, slack, etc."
     )
 
-    # Pre-authorized resources for offline execution (no user confirmation required)
-    # Keys are resource_confirmation state_prefix values: "sheet", "doc", "drive_folder"
     allowed_resource_ids: Dict[str, List[str]] = Field(
         default_factory=dict,
         description="Resource IDs pre-authorized for offline access, keyed by type",

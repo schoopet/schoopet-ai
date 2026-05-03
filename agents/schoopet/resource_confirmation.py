@@ -4,10 +4,21 @@ Passed as ``require_confirmation=make_resource_confirmation(...)`` on FunctionTo
 First call for a given resource ID requests a normal confirmation from the user.
 After the user approves, that resource ID is stored in ADK session state and all
 subsequent calls for the same resource skip the prompt automatically.
+
+Pre-built singletons for the three standard resource types are exported at the
+bottom of this module (sheet_confirmation, doc_confirmation, drive_folder_confirmation).
+Prefer importing those over calling make_resource_confirmation directly.
+
+The session-state key format is ``_RESOURCE_CONFIRMED_PREFIX + state_prefix + "_" + resource_id``.
+The task-worker mirrors this format to pre-seed approved resource IDs into session state.
 """
 from typing import Any
 
 from google.adk.tools import ToolContext
+
+# Session-state key prefix shared with the task-worker service.
+# task-worker/src/worker.py mirrors this value to pre-seed approved resources.
+_RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
 
 
 def make_resource_confirmation(id_arg: str, state_prefix: str):
@@ -21,7 +32,7 @@ def make_resource_confirmation(id_arg: str, state_prefix: str):
     """
     async def _check(tool_context: ToolContext = None, **kwargs: Any) -> bool:
         resource_id = kwargs.get(id_arg) or "_default_"
-        state_key = f"_resource_confirmed_{state_prefix}_{resource_id}"
+        state_key = f"{_RESOURCE_CONFIRMED_PREFIX}{state_prefix}_{resource_id}"
 
         if tool_context is None:
             return True
@@ -42,8 +53,6 @@ def make_resource_confirmation(id_arg: str, state_prefix: str):
     return _check
 
 
-# Pre-built confirmation callables for the three standard resource types.
-# Import these directly rather than calling make_resource_confirmation in each agent.
 sheet_confirmation = make_resource_confirmation("sheet_id", "sheet")
 doc_confirmation = make_resource_confirmation("document_id", "doc")
 drive_folder_confirmation = make_resource_confirmation("folder_id", "drive_folder")

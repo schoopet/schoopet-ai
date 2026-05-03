@@ -66,11 +66,7 @@ def _make_research_loop() -> LoopAgent:
     )
 
 
-def create_deep_research_agent(
-    model_name: str = _PRO_MODEL,
-    project: str = None,
-    location: str = None,
-) -> LlmAgent:
+def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
     """Creates the deep research agent for async curated recommendation collections.
 
     Triggered as a background async task after the user has approved a research plan

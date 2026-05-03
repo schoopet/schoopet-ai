@@ -212,7 +212,7 @@ class AsyncTaskTool:
             task_type=task_type,
             instruction=instruction,
             context=context or {},
-            allowed_resource_ids=dict(allowed_resource_ids) if allowed_resource_ids else {},
+            allowed_resource_ids=allowed_resource_ids or {},
             scheduled_at=scheduled_at_dt,
             agent_type=agent_type,
             notification_channel=notification_channel,

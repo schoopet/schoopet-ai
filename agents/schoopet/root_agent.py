@@ -353,12 +353,7 @@ def create_agent(
     )
     code_executor_tool = AgentTool(agent=code_executor_agent)
 
-    # Initialize Deep Research subagent (for curated recommendation collections)
-    deep_research_agent = create_deep_research_agent(
-        project=project,
-        location=location
-    )
-    deep_research_tool = AgentTool(agent=deep_research_agent)
+    deep_research_tool = AgentTool(agent=create_deep_research_agent())
 
     tools = [
         save_memory_tool,
