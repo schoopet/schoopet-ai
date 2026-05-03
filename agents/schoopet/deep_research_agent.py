@@ -7,7 +7,7 @@ from .global_gemini import GlobalGemini
 from .calendar_tool import CalendarTool
 from .drive_sheets_tool import DocsTool, DriveTool, SheetsTool
 from .memory_tool import save_memory, save_multiple_memories
-from .resource_confirmation import make_resource_confirmation
+from .resource_confirmation import sheet_confirmation, doc_confirmation, drive_folder_confirmation
 
 
 _FLASH_MODEL = "gemini-3-flash-preview"
@@ -87,10 +87,6 @@ def create_deep_research_agent(
     docs_tool = DocsTool()
     sheets_tool = SheetsTool()
 
-    _drive_confirm = make_resource_confirmation("folder_id", "drive_folder")
-    _doc_confirm = make_resource_confirmation("document_id", "doc")
-    _sheet_confirm = make_resource_confirmation("sheet_id", "sheet")
-
     tools = [
         load_memory_tool,
         save_memory_tool,
@@ -105,18 +101,18 @@ def create_deep_research_agent(
         # Docs
         FunctionTool(func=docs_tool.create_google_doc, require_confirmation=True),
         FunctionTool(func=docs_tool.read_google_doc),
-        FunctionTool(func=docs_tool.append_to_google_doc, require_confirmation=_doc_confirm),
-        FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=_doc_confirm),
+        FunctionTool(func=docs_tool.append_to_google_doc, require_confirmation=doc_confirmation),
+        FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=doc_confirmation),
         FunctionTool(func=docs_tool.get_docs_status),
         # Sheets
         FunctionTool(func=sheets_tool.create_spreadsheet, require_confirmation=True),
-        FunctionTool(func=sheets_tool.add_sheet_tab, require_confirmation=_sheet_confirm),
+        FunctionTool(func=sheets_tool.add_sheet_tab, require_confirmation=sheet_confirmation),
         FunctionTool(func=sheets_tool.get_sheet_schema),
         FunctionTool(func=sheets_tool.read_sheet_records),
-        FunctionTool(func=sheets_tool.ensure_sheet_headers, require_confirmation=_sheet_confirm),
-        FunctionTool(func=sheets_tool.append_record_to_sheet, require_confirmation=_sheet_confirm),
+        FunctionTool(func=sheets_tool.ensure_sheet_headers, require_confirmation=sheet_confirmation),
+        FunctionTool(func=sheets_tool.append_record_to_sheet, require_confirmation=sheet_confirmation),
         FunctionTool(func=sheets_tool.find_sheet_rows),
-        FunctionTool(func=sheets_tool.update_sheet_row, require_confirmation=_sheet_confirm),
+        FunctionTool(func=sheets_tool.update_sheet_row, require_confirmation=sheet_confirmation),
         FunctionTool(func=sheets_tool.read_sheet),
         FunctionTool(func=sheets_tool.get_sheets_status),
     ]

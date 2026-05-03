@@ -79,9 +79,11 @@ class TestAsyncTaskTool:
         async_task_tool.create_async_task(
             task_type="research",
             instruction="DEEP_RESEARCH_TASK: find restaurants",
-            allowed_sheet_ids=["sheet-abc", "sheet-def"],
-            allowed_doc_ids=["doc-xyz"],
-            allowed_folder_ids=["folder-1"],
+            allowed_resource_ids={
+                "sheet": ["sheet-abc", "sheet-def"],
+                "doc": ["doc-xyz"],
+                "drive_folder": ["folder-1"],
+            },
             tool_context=tool_context,
         )
 
@@ -103,8 +105,7 @@ class TestAsyncTaskTool:
         )
 
         call_args = mock_firestore.collection.return_value.document.return_value.set.call_args[0][0]
-        # allowed_resource_ids should not be present (empty dict is not written to Firestore)
-        assert "allowed_resource_ids" not in call_args or call_args.get("allowed_resource_ids") == {}
+        assert call_args.get("allowed_resource_ids") == {}
 
     def test_create_async_task_scheduled(self, async_task_tool, mock_cloud_tasks, tool_context):
         """Should create a scheduled task."""

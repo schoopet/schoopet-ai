@@ -134,8 +134,7 @@ class AsyncTaskDocument(BaseModel):
             "created_at": self.created_at,
         }
 
-        if self.allowed_resource_ids:
-            data["allowed_resource_ids"] = self.allowed_resource_ids
+        data["allowed_resource_ids"] = self.allowed_resource_ids
 
         # Add optional fields if set
         if self.scheduled_at:

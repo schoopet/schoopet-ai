@@ -129,9 +129,7 @@ class AsyncTaskTool:
         context: Optional[Dict[str, Any]] = None,
         schedule_delay_minutes: int = 0,
         schedule_at: Optional[str] = None,
-        allowed_sheet_ids: Optional[List[str]] = None,
-        allowed_doc_ids: Optional[List[str]] = None,
-        allowed_folder_ids: Optional[List[str]] = None,
+        allowed_resource_ids: Optional[Dict[str, List[str]]] = None,
         tool_context: Optional[ToolContext] = None,
     ) -> str:
         """
@@ -156,13 +154,10 @@ class AsyncTaskTool:
             schedule_at: Specific datetime to execute (ISO 8601 format).
                 Use for "remind me tomorrow at 9am" type requests.
                 Format: "2025-01-12T09:00:00" or "2025-01-12T09:00:00-08:00"
-            allowed_sheet_ids: Google Sheet IDs the task may read/write without user
-                confirmation. Use when the task needs to update a known spreadsheet
-                (e.g. a research collection sheet).
-            allowed_doc_ids: Google Doc IDs the task may read/write without user
-                confirmation. Use when the task needs to update a known document.
-            allowed_folder_ids: Google Drive folder IDs the task may write to without
-                user confirmation.
+            allowed_resource_ids: Resource IDs pre-authorized for offline access, keyed by
+                type: {"sheet": [...], "doc": [...], "drive_folder": [...]}. Use when the
+                task needs to read/write known Sheets, Docs, or Drive folders without
+                interrupting the user for confirmation.
 
         Returns:
             Confirmation message with task ID, or error message if creation failed.
@@ -172,7 +167,7 @@ class AsyncTaskTool:
             - Reminder: create_async_task("reminder", "Call mom", schedule_at="2025-01-12T09:00:00")
             - Analysis: create_async_task("analysis", "Look at my calendar and find conflicts next week")
             - Deep research with pre-authorized sheet:
-                create_async_task("research", "DEEP_RESEARCH_TASK: ...", allowed_sheet_ids=["1BxiM..."])
+                create_async_task("research", "DEEP_RESEARCH_TASK: ...", allowed_resource_ids={"sheet": ["1BxiM..."]})
         """
         user_id = self._get_user_id(tool_context)
         if not user_id:
@@ -200,15 +195,6 @@ class AsyncTaskTool:
         elif schedule_delay_minutes > 0:
             scheduled_at_dt = datetime.now(timezone.utc) + timedelta(minutes=schedule_delay_minutes)
 
-        # Build allowed resource IDs map (keys match resource_confirmation state_prefix values)
-        allowed_resource_ids: Dict[str, List[str]] = {}
-        if allowed_sheet_ids:
-            allowed_resource_ids["sheet"] = list(allowed_sheet_ids)
-        if allowed_doc_ids:
-            allowed_resource_ids["doc"] = list(allowed_doc_ids)
-        if allowed_folder_ids:
-            allowed_resource_ids["drive_folder"] = list(allowed_folder_ids)
-
         # Generate task ID
         task_id = str(uuid.uuid4())
 
@@ -226,7 +212,7 @@ class AsyncTaskTool:
             task_type=task_type,
             instruction=instruction,
             context=context or {},
-            allowed_resource_ids=allowed_resource_ids,
+            allowed_resource_ids=dict(allowed_resource_ids) if allowed_resource_ids else {},
             scheduled_at=scheduled_at_dt,
             agent_type=agent_type,
             notification_channel=notification_channel,

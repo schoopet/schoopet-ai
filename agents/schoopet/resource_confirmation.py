@@ -40,3 +40,10 @@ def make_resource_confirmation(id_arg: str, state_prefix: str):
         return True
 
     return _check
+
+
+# Pre-built confirmation callables for the three standard resource types.
+# Import these directly rather than calling make_resource_confirmation in each agent.
+sheet_confirmation = make_resource_confirmation("sheet_id", "sheet")
+doc_confirmation = make_resource_confirmation("document_id", "doc")
+drive_folder_confirmation = make_resource_confirmation("folder_id", "drive_folder")
