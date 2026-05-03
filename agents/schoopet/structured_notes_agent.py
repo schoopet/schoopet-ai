@@ -9,7 +9,7 @@ from .search_agent import create_search_agent
 
 
 def create_structured_notes_agent(
-    model_name: str = "gemini-3.1-pro-preview",
+    model_name: str = "gemini-3-flash-preview",
     project: str = None,
     location: str = None
 ):
