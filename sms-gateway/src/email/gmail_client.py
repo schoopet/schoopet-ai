@@ -83,7 +83,7 @@ async def setup_watch(token: str, topic_name: str) -> Optional[dict]:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "labelIds": ["INBOX"],
+                    "labelIds": ["CATEGORY_PERSONAL"],
                     "topicName": topic_name,
                 },
             )
@@ -120,6 +120,7 @@ async def get_new_messages(
                 params={
                     "startHistoryId": start_history_id,
                     "historyTypes": "messageAdded",
+                    "labelId": "CATEGORY_PERSONAL",
                 },
             )
             if resp.status_code == 404:
@@ -155,7 +156,7 @@ async def _get_recent_messages(
         resp = await client.get(
             f"{GMAIL_API_BASE}/messages",
             headers={"Authorization": f"Bearer {token}"},
-            params={"labelIds": "INBOX", "maxResults": max_results},
+            params={"labelIds": "CATEGORY_PERSONAL", "maxResults": max_results},
         )
         resp.raise_for_status()
         messages = resp.json().get("messages", [])
