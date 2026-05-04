@@ -9,8 +9,9 @@ Pre-built singletons for the three standard resource types are exported at the
 bottom of this module (sheet_confirmation, doc_confirmation, drive_folder_confirmation).
 Prefer importing those over calling make_resource_confirmation directly.
 
-The session-state key format is ``_RESOURCE_CONFIRMED_PREFIX + state_prefix + "_" + resource_id``.
-The task-worker mirrors this format to pre-seed approved resource IDs into session state.
+The session-state key format is ``_RESOURCE_CONFIRMED_PREFIX + resource_id``.
+The task-worker seeds these keys from the flat ``allowed_resource_ids`` list stored
+on the task document, so any pre-authorized ID bypasses the confirmation prompt.
 """
 from typing import Any
 
@@ -21,18 +22,16 @@ from google.adk.tools import ToolContext
 _RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
 
 
-def make_resource_confirmation(id_arg: str, state_prefix: str):
+def make_resource_confirmation(id_arg: str):
     """Return a require_confirmation callable scoped to a resource ID.
 
     Args:
         id_arg: Name of the function argument that carries the resource ID
                 (e.g. "sheet_id", "document_id", "folder_id").
-        state_prefix: Short label used as part of the session-state key
-                      (e.g. "sheet", "doc", "drive_folder").
     """
     async def _check(tool_context: ToolContext = None, **kwargs: Any) -> bool:
         resource_id = kwargs.get(id_arg) or "_default_"
-        state_key = f"{_RESOURCE_CONFIRMED_PREFIX}{state_prefix}_{resource_id}"
+        state_key = f"{_RESOURCE_CONFIRMED_PREFIX}{resource_id}"
 
         if tool_context is None:
             return True
@@ -53,6 +52,6 @@ def make_resource_confirmation(id_arg: str, state_prefix: str):
     return _check
 
 
-sheet_confirmation = make_resource_confirmation("sheet_id", "sheet")
-doc_confirmation = make_resource_confirmation("document_id", "doc")
-drive_folder_confirmation = make_resource_confirmation("folder_id", "drive_folder")
+sheet_confirmation = make_resource_confirmation("sheet_id")
+doc_confirmation = make_resource_confirmation("document_id")
+drive_folder_confirmation = make_resource_confirmation("folder_id")

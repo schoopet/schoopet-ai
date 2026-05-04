@@ -80,33 +80,26 @@ class TestBuildAllowedResourceState:
     """Tests for _build_allowed_resource_state helper."""
 
     def test_empty_input_returns_empty(self):
-        assert _build_allowed_resource_state({}) == {}
+        assert _build_allowed_resource_state([]) == {}
 
-    def test_maps_sheet_ids(self):
-        state = _build_allowed_resource_state({"sheet": ["abc", "def"]})
+    def test_maps_single_id(self):
+        state = _build_allowed_resource_state(["abc"])
+        assert state == {"_resource_confirmed_abc": True}
+
+    def test_maps_multiple_ids(self):
+        state = _build_allowed_resource_state(["sheet-1", "doc-1", "folder-99"])
         assert state == {
-            "_resource_confirmed_sheet_abc": True,
-            "_resource_confirmed_sheet_def": True,
+            "_resource_confirmed_sheet-1": True,
+            "_resource_confirmed_doc-1": True,
+            "_resource_confirmed_folder-99": True,
         }
 
-    def test_maps_doc_ids(self):
-        state = _build_allowed_resource_state({"doc": ["doc-1"]})
-        assert state == {"_resource_confirmed_doc_doc-1": True}
-
-    def test_maps_drive_folder_ids(self):
-        state = _build_allowed_resource_state({"drive_folder": ["folder-99"]})
-        assert state == {"_resource_confirmed_drive_folder_folder-99": True}
-
-    def test_maps_multiple_types(self):
-        state = _build_allowed_resource_state({
-            "sheet": ["s1"],
-            "doc": ["d1"],
-            "drive_folder": ["f1"],
-        })
+    def test_maps_mixed_ids(self):
+        state = _build_allowed_resource_state(["s1", "d1", "f1"])
         assert state == {
-            "_resource_confirmed_sheet_s1": True,
-            "_resource_confirmed_doc_d1": True,
-            "_resource_confirmed_drive_folder_f1": True,
+            "_resource_confirmed_s1": True,
+            "_resource_confirmed_d1": True,
+            "_resource_confirmed_f1": True,
         }
 
 
@@ -338,10 +331,7 @@ class TestTaskWorker:
             "task_type": "research",
             "instruction": "DEEP_RESEARCH_TASK: find restaurants",
             "agent_type": "personal",
-            "allowed_resource_ids": {
-                "sheet": ["sheet-abc"],
-                "doc": ["doc-xyz"],
-            },
+            "allowed_resource_ids": ["sheet-abc", "doc-xyz"],
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
@@ -361,8 +351,8 @@ class TestTaskWorker:
         await task_worker.execute_task(TASK_ID)
 
         assert captured_kwargs.get("state") == {
-            "_resource_confirmed_sheet_sheet-abc": True,
-            "_resource_confirmed_doc_doc-xyz": True,
+            "_resource_confirmed_sheet-abc": True,
+            "_resource_confirmed_doc-xyz": True,
         }
 
     @pytest.mark.asyncio

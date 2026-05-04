@@ -94,8 +94,8 @@ def _personal_prompt() -> str:
         "3. **Schedule as an async task** using create_async_task with:\n"
         "   - task_type: 'research'\n"
         "   - instruction: the approved plan, prefixed with DEEP_RESEARCH_TASK:\n"
-        "   - allowed_resource_ids: dict of pre-authorized resource IDs, e.g. "
-        '{"sheet": ["sheet-id"], "doc": ["doc-id"], "drive_folder": ["folder-id"]}\n'
+        "   - allowed_resource_ids: flat list of pre-authorized resource IDs, e.g. "
+        '["sheet-id", "doc-id", "folder-id"]\n'
         "   - Always pass the relevant resource IDs — this lets the task write to those resources "
         "     without prompting the user again during background execution.\n"
         "   - For immediate one-off: no schedule delay\n"
@@ -353,8 +353,6 @@ def create_agent(
     )
     code_executor_tool = AgentTool(agent=code_executor_agent)
 
-    deep_research_tool = AgentTool(agent=create_deep_research_agent())
-
     tools = [
         save_memory_tool,
         save_multiple_memories_tool,
@@ -362,7 +360,6 @@ def create_agent(
         preload_memory_tool,
         search_tool,
         code_executor_tool,
-        deep_research_tool,
         list_events_tool,
         create_event_tool,
         update_event_tool,
@@ -431,13 +428,15 @@ def create_agent(
         location=location
     )
 
+    deep_research_agent = create_deep_research_agent()
+
     model = GlobalGemini(model=model_name)
 
     agent = LlmAgent(
         name="personal",
         model=model,
         tools=tools,
-        sub_agents=[structured_notes_agent],
+        sub_agents=[structured_notes_agent, deep_research_agent],
         instruction=_personal_prompt(),
         before_model_callback=before_model_modifier,
         after_agent_callback=save_session_to_memory,

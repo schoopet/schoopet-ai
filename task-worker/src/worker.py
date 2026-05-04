@@ -19,16 +19,15 @@ logger = logging.getLogger(__name__)
 _RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
 
 
-def _build_allowed_resource_state(allowed_resource_ids: dict) -> dict:
+def _build_allowed_resource_state(allowed_resource_ids: list) -> dict:
     """Build initial ADK session state that pre-approves specific resource IDs.
 
     Pre-populating these keys lets the task run without prompting the user for
     resources they already approved at scheduling time.
     """
     return {
-        f"{_RESOURCE_CONFIRMED_PREFIX}{resource_type}_{resource_id}": True
-        for resource_type, ids in allowed_resource_ids.items()
-        for resource_id in ids
+        f"{_RESOURCE_CONFIRMED_PREFIX}{resource_id}": True
+        for resource_id in allowed_resource_ids
     }
 
 
