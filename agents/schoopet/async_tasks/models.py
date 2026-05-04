@@ -66,6 +66,11 @@ class AsyncTaskDocument(BaseModel):
         default="sms", description="Channel to notify user on completion: sms, discord, slack, etc."
     )
 
+    allowed_resource_ids: List[str] = Field(
+        default_factory=list,
+        description="Resource IDs pre-authorized for offline access (flat list of IDs)",
+    )
+
     # Session tracking
     user_session_id: Optional[str] = Field(
         default=None, description="Original user session for context/notification"
@@ -127,6 +132,8 @@ class AsyncTaskDocument(BaseModel):
             "created_at": self.created_at,
         }
 
+        data["allowed_resource_ids"] = self.allowed_resource_ids
+
         # Add optional fields if set
         if self.scheduled_at:
             data["scheduled_at"] = self.scheduled_at
@@ -164,6 +171,7 @@ class AsyncTaskDocument(BaseModel):
             task_type=data["task_type"],
             instruction=data["instruction"],
             context=data.get("context", {}),
+            allowed_resource_ids=data.get("allowed_resource_ids", []),
             scheduled_at=data.get("scheduled_at"),
             cloud_task_name=data.get("cloud_task_name"),
             agent_type=data.get("agent_type", "personal"),

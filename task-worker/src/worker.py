@@ -14,6 +14,23 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 
+# Mirrors _RESOURCE_CONFIRMED_PREFIX in agents/schoopet/resource_confirmation.py.
+# Both must stay in sync — changing one without the other silently breaks pre-auth.
+_RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
+
+
+def _build_allowed_resource_state(allowed_resource_ids: list) -> dict:
+    """Build initial ADK session state that pre-approves specific resource IDs.
+
+    Pre-populating these keys lets the task run without prompting the user for
+    resources they already approved at scheduling time.
+    """
+    return {
+        f"{_RESOURCE_CONFIRMED_PREFIX}{resource_id}": True
+        for resource_id in allowed_resource_ids
+    }
+
+
 class TaskWorker:
     """Executes async tasks by delegating to the deployed Agent Engine."""
 
@@ -267,8 +284,8 @@ class TaskWorker:
         adk_app = client.agent_engines.get(name=engine_name)
         user_id = task["user_id"]
 
-        # Create a task-scoped session
-        session = await adk_app.async_create_session(user_id=user_id)
+        initial_state = _build_allowed_resource_state(task.get("allowed_resource_ids", {}))
+        session = await adk_app.async_create_session(user_id=user_id, state=initial_state)
         session_id = session["id"]
 
         logger.info(

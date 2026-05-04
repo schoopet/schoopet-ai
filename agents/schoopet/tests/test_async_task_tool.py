@@ -72,6 +72,33 @@ class TestAsyncTaskTool:
         # Verify Cloud Task creation
         mock_cloud_tasks.create_task.assert_called_once()
 
+    def test_create_async_task_with_allowed_resources(self, async_task_tool, mock_cloud_tasks, tool_context, mock_firestore):
+        """Should store allowed_resource_ids in the Firestore document."""
+        mock_cloud_tasks.create_task.return_value = "projects/p/locations/l/queues/q/tasks/t1"
+
+        async_task_tool.create_async_task(
+            task_type="research",
+            instruction="DEEP_RESEARCH_TASK: find restaurants",
+            allowed_resource_ids=["sheet-abc", "sheet-def", "doc-xyz", "folder-1"],
+            tool_context=tool_context,
+        )
+
+        call_args = mock_firestore.collection.return_value.document.return_value.set.call_args[0][0]
+        assert call_args["allowed_resource_ids"] == ["sheet-abc", "sheet-def", "doc-xyz", "folder-1"]
+
+    def test_create_async_task_no_allowed_resources_stores_empty(self, async_task_tool, mock_cloud_tasks, tool_context, mock_firestore):
+        """Should store empty allowed_resource_ids when none are passed."""
+        mock_cloud_tasks.create_task.return_value = "projects/p/locations/l/queues/q/tasks/t1"
+
+        async_task_tool.create_async_task(
+            task_type="research",
+            instruction="Research AI",
+            tool_context=tool_context,
+        )
+
+        call_args = mock_firestore.collection.return_value.document.return_value.set.call_args[0][0]
+        assert call_args.get("allowed_resource_ids") == []
+
     def test_create_async_task_scheduled(self, async_task_tool, mock_cloud_tasks, tool_context):
         """Should create a scheduled task."""
         mock_cloud_tasks.create_task.return_value = "task-name"
