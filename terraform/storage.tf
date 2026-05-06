@@ -7,9 +7,9 @@ resource "google_storage_bucket" "artifacts" {
   depends_on = [google_project_service.apis["run.googleapis.com"]]
 }
 
-# Agent Engine reads pickled agent code from this bucket during deployment.
-resource "google_storage_bucket_iam_member" "personal_agent_artifact_reader" {
+# Agent Engine reads deployment packages and writes runtime artifacts (email attachments, etc.)
+resource "google_storage_bucket_iam_member" "personal_agent_artifact_admin" {
   bucket = google_storage_bucket.artifacts.name
-  role   = "roles/storage.objectViewer"
+  role   = "roles/storage.objectAdmin"
   member = local.personal_agent_principal
 }

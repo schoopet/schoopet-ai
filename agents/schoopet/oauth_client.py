@@ -289,12 +289,15 @@ class OAuthClient:
 
         refresh_token = self._get_refresh_token(user_id, feature)
 
+        # Do not pass scopes — including them in the Credentials object causes
+        # google-auth to append them to the refresh request, which fails with
+        # invalid_scope if the refresh token was issued with different scopes.
+        # get_valid_access_token() already handles refresh before the call.
         return Credentials(
             token=access_token,
             refresh_token=refresh_token,
             token_uri=TOKEN_URL,
             client_id=self._client_id,
             client_secret=self._client_secret,
-            scopes=scopes,
             expiry=expires_at,
         )

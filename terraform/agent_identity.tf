@@ -11,6 +11,7 @@ locals {
 
   agent_engine_project_roles = [
     "roles/cloudtasks.enqueuer",
+    "roles/cloudtasks.viewer",
     "roles/run.invoker",
     "roles/datastore.user",
     "roles/serviceusage.serviceUsageConsumer",
