@@ -1,10 +1,10 @@
+from google.adk.agents.context import Context
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.agents.loop_agent import LoopAgent
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.load_memory_tool import LoadMemoryTool
 from google.adk.tools.google_search_tool import GoogleSearchTool
 from google.adk.tools.exit_loop_tool import exit_loop
-from google.adk.tools import ToolContext
 from .global_gemini import GlobalGemini
 from .calendar_tool import CalendarTool
 from .drive_sheets_tool import DocsTool, DriveTool, SheetsTool
@@ -16,27 +16,27 @@ _FLASH_MODEL = "gemini-3-flash-preview"
 _PRO_MODEL = "gemini-3.1-pro-preview"
 
 
-async def append_search_results(findings: str, tool_context: ToolContext) -> str:
-    """Append new search findings to the cumulative search_results in session state."""
-    existing = tool_context.state.get("search_results", "")
-    tool_context.state["search_results"] = (existing + "\n\n" + findings).strip()
-    return "Results appended."
+async def _append_iteration_results(callback_context: Context) -> None:
+    """Append iteration_results to cumulative search_results after each searcher run."""
+    findings = callback_context.state.get("iteration_results", "")
+    existing = callback_context.state.get("search_results", "")
+    callback_context.state["search_results"] = (existing + "\n\n" + findings).strip()
 
 
 def _make_research_loop() -> LoopAgent:
     """LoopAgent: search → critique, up to 3 iterations.
 
-    Each iteration the searcher appends new findings to session state via append_search_results.
-    The critique evaluates total coverage and either calls exit_loop() to stop early,
-    or outputs NEEDS_MORE_RESEARCH with specific gaps to guide the next iteration.
+    research_searcher only has GoogleSearchTool (no function tools), so
+    bypass_multi_tools_limit is never triggered and the tool stays named
+    google_search. Findings are accumulated via after_agent_callback —
+    guaranteed to run after every searcher execution, no model involved.
     """
     searcher = LlmAgent(
         name="research_searcher",
         model=GlobalGemini(model=_FLASH_MODEL),
-        tools=[
-            GoogleSearchTool(bypass_multi_tools_limit=True),
-            FunctionTool(func=append_search_results),
-        ],
+        tools=[GoogleSearchTool()],
+        output_key="iteration_results",
+        after_agent_callback=_append_iteration_results,
         instruction=(
             "You are a research search assistant. Your job is to find candidates matching "
             "the research task described in the conversation.\n\n"
@@ -49,9 +49,8 @@ def _make_research_loop() -> LoopAgent:
             "- Key details (location, date, price, rating, genre — whatever applies)\n"
             "- Source URL\n"
             "- One sentence on why it fits the research goal\n\n"
-            "When done searching, call append_search_results(findings) with only the NEW findings "
-            "from this iteration. Do not include items already in search_results. "
-            "Do not filter or rank — the critique agent handles that."
+            "Output only the NEW findings from this iteration as a structured list. "
+            "Do not include items already in search_results. Do not filter or rank."
         ),
     )
 
