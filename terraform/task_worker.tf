@@ -45,6 +45,18 @@ resource "google_cloud_run_v2_service" "task_worker" {
         name  = "SMS_GATEWAY_URL"
         value = google_cloud_run_v2_service.sms_gateway.uri
       }
+      env {
+        name  = "TASK_WORKER_URL"
+        value = var.task_worker_url
+      }
+      env {
+        name  = "TASK_WORKER_SA"
+        value = google_service_account.task_worker.email
+      }
+      env {
+        name  = "TASK_REQUEUE_SCHEDULER_SA"
+        value = google_service_account.task_requeue_scheduler.email
+      }
     }
   }
 

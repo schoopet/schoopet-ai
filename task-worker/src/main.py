@@ -6,11 +6,14 @@ This service executes async tasks spawned by the root agent:
 3. Notifies SMS Gateway for root agent review
 4. Handles revisions when corrections are requested
 """
+import asyncio
+import functools
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .worker import TaskWorker
@@ -107,6 +110,61 @@ async def execute_task(request: Request, payload: ExecuteRequest):
     except Exception as e:
         logger.error(f"Task execution failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _verify_scheduler_token(authorization: Optional[str]) -> None:
+    """Verify that the caller is the task-requeue Cloud Scheduler SA."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authentication")
+
+    token = authorization[7:]
+    scheduler_sa = os.getenv("TASK_REQUEUE_SCHEDULER_SA", "")
+    audience = os.getenv("TASK_WORKER_URL", "")
+
+    try:
+        from google.auth.transport import requests as google_requests
+        from google.oauth2 import id_token
+
+        loop = asyncio.get_running_loop()
+        claims = await loop.run_in_executor(
+            None,
+            functools.partial(
+                id_token.verify_oauth2_token,
+                token,
+                google_requests.Request(),
+                audience=audience if audience else None,
+            ),
+        )
+
+        if scheduler_sa and claims.get("email") != scheduler_sa:
+            logger.warning(f"Unauthorized requeue caller: {claims.get('email')}")
+            raise HTTPException(status_code=403, detail="Unauthorized")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Scheduler token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+@app.post("/requeue-scheduled-tasks")
+async def requeue_scheduled_tasks(
+    authorization: Optional[str] = Header(None),
+):
+    """Queue Cloud Tasks for scheduled tasks entering the 30-day window.
+
+    Called weekly by Cloud Scheduler. Finds Firestore tasks with
+    status='scheduled', scheduled_at within the next 720 hours, and no
+    cloud_task_name, then creates Cloud Tasks for each.
+    """
+    if not _worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    await _verify_scheduler_token(authorization)
+
+    result = await _worker.requeue_scheduled_tasks()
+    logger.info(f"Requeue run: {result}")
+    return result
 
 
 @app.get("/health")

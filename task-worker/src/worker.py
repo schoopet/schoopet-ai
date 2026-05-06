@@ -6,10 +6,12 @@ This module handles:
 3. Notifying SMS Gateway for root agent review
 4. Processing revision requests
 """
+import json
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -415,6 +417,132 @@ class TaskWorker:
 
         except Exception as e:
             logger.error(f"Failed to notify for review: {e}")
+
+    async def requeue_scheduled_tasks(self) -> Dict[str, int]:
+        """Create Cloud Tasks for scheduled tasks entering the 30-day window.
+
+        Queries Firestore for tasks with status="scheduled", scheduled_at within
+        the next 720 hours, and no cloud_task_name yet, then creates Cloud Tasks
+        for each. Called weekly by Cloud Scheduler.
+
+        Returns:
+            Dict with "queued" and "errors" counts.
+        """
+        self._ensure_initialized()
+        firestore_client = self._get_firestore_client()
+        if not firestore_client:
+            logger.error("Firestore not available for requeue")
+            return {"queued": 0, "errors": 0}
+
+        now = datetime.now(timezone.utc)
+        window_end = now + timedelta(hours=720)
+
+        docs = (
+            firestore_client.collection("async_tasks")
+            .where("status", "==", "scheduled")
+            .where("scheduled_at", "<=", window_end)
+            .get()
+        )
+
+        # Filter in Python — avoids a composite index on cloud_task_name
+        pending = [d for d in docs if not d.to_dict().get("cloud_task_name")]
+
+        queued = 0
+        errors = 0
+
+        for doc in pending:
+            data = doc.to_dict()
+            task_id = data["task_id"]
+            user_id = data["user_id"]
+            scheduled_at = data.get("scheduled_at")
+
+            if not scheduled_at:
+                logger.warning(f"Task {task_id} has no scheduled_at, skipping")
+                errors += 1
+                continue
+
+            cloud_task_name = self._create_cloud_task(
+                task_id=task_id,
+                user_id=user_id,
+                schedule_time=scheduled_at,
+            )
+
+            if cloud_task_name:
+                firestore_client.collection("async_tasks").document(task_id).update(
+                    {"cloud_task_name": cloud_task_name}
+                )
+                logger.info(f"Requeued task {task_id} → {cloud_task_name}")
+                queued += 1
+            else:
+                errors += 1
+
+        logger.info(f"Requeue complete: {queued} queued, {errors} errors")
+        return {"queued": queued, "errors": errors}
+
+    def _create_cloud_task(
+        self,
+        task_id: str,
+        user_id: str,
+        schedule_time: datetime,
+    ) -> Optional[str]:
+        """Create a single Cloud Task for a scheduled async task."""
+        self._ensure_initialized()
+
+        worker_url = os.getenv("TASK_WORKER_URL")
+        queue = os.getenv("ASYNC_TASKS_QUEUE", "async-agent-tasks")
+        service_account = os.getenv(
+            "TASK_WORKER_SA",
+            f"task-worker@{self._project_id}.iam.gserviceaccount.com"
+            if self._project_id
+            else None,
+        )
+
+        if not worker_url or not self._project_id:
+            logger.error("TASK_WORKER_URL or GOOGLE_CLOUD_PROJECT not set")
+            return None
+
+        from google.cloud import tasks_v2
+        from google.api_core.exceptions import AlreadyExists
+        from google.protobuf import duration_pb2, timestamp_pb2
+
+        client = tasks_v2.CloudTasksClient()
+        parent = client.queue_path(self._project_id, self._location, queue)
+
+        normalized = re.sub(r"[^a-zA-Z0-9-]", "-", task_id).strip("-").lower()
+        task_name = client.task_path(
+            self._project_id, self._location, queue, f"execute-{normalized}-initial"
+        )
+
+        if schedule_time.tzinfo is None:
+            schedule_time = schedule_time.replace(tzinfo=timezone.utc)
+        ts = timestamp_pb2.Timestamp()
+        ts.FromDatetime(schedule_time)
+
+        task = {
+            "name": task_name,
+            "http_request": {
+                "http_method": tasks_v2.HttpMethod.POST,
+                "url": f"{worker_url}/execute",
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({"task_id": task_id, "user_id": user_id}).encode(),
+                "oidc_token": {
+                    "service_account_email": service_account,
+                    "audience": worker_url,
+                },
+            },
+            "schedule_time": ts,
+            "dispatch_deadline": duration_pb2.Duration(seconds=900),
+        }
+
+        try:
+            response = client.create_task(parent=parent, task=task)
+            return response.name
+        except AlreadyExists:
+            logger.info(f"Cloud Task already exists for {task_id}, reusing name")
+            return task_name
+        except Exception as e:
+            logger.error(f"Failed to create Cloud Task for {task_id}: {e}")
+            return None
 
     async def _get_oidc_token(self) -> Optional[str]:
         """Get OIDC token for service-to-service auth.
