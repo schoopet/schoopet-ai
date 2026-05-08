@@ -148,10 +148,11 @@ async def test_route_email_prompt_includes_offline_safety_and_suppression_instru
 
 
 @pytest.mark.asyncio
-async def test_route_email_confirmation_rejects_and_does_not_send(email_services):
+async def test_route_email_confirmation_declines_and_forwards_fallback(email_services):
     agent_client, _, senders = email_services
     agent_client.send_message_events = AsyncMock(return_value=_confirmation_events())
-    agent_client.send_confirmation_response = AsyncMock(return_value=[])
+    # Fallback response: agent replies naturally after the tool is declined
+    agent_client.send_confirmation_response = AsyncMock(return_value=_text_events("I'll note that for you."))
 
     await handler._route_email_to_agent(
         {"from": "sender@example.com", "subject": "Action", "id": "msg-999"},
@@ -165,6 +166,6 @@ async def test_route_email_confirmation_rejects_and_does_not_send(email_services
         session_id="agent-session-123",
         confirmation_function_call_id="confirm-1",
         confirmed=False,
+        reason="User confirmation is not available via email. Do not use this tool. Respond naturally to the user instead.",
     )
-    for sender in senders.values():
-        sender.send.assert_not_awaited()
+    senders["discord"].send.assert_awaited_once_with("user-123", "I'll note that for you.")

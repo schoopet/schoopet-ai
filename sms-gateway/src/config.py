@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     # Service Configuration
     SESSION_TIMEOUT_MINUTES: int = 30
-    AGENT_TIMEOUT_SECONDS: int = 300
+    AGENT_TIMEOUT_SECONDS: int = 900
 
     # Feature Flags
     ENABLE_SIGNATURE_VALIDATION: bool = True

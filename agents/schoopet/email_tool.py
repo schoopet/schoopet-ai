@@ -27,9 +27,8 @@ EMAIL_RULES_COLLECTION = "email_rules"
 
 # MIME types natively understood by Gemini as inline_data
 GEMINI_SUPPORTED_MIME_TYPES: frozenset[str] = frozenset({
-    # Documents
+    # Documents — Gemini only supports PDF; DOCX and other Office formats are rejected
     "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
     # Images
     "image/jpeg",
     "image/png",

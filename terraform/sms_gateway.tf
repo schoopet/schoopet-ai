@@ -13,7 +13,7 @@ resource "google_cloud_run_v2_service" "sms_gateway" {
 
   template {
     service_account = google_service_account.sms_gateway.email
-    timeout         = "300s"
+    timeout         = "900s"
 
     scaling {
       min_instance_count = 1

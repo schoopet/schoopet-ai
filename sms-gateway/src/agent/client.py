@@ -58,6 +58,25 @@ class AdkConfirmationRequest:
         }
 
 
+def _log_tool_activity(event: Event, user_id: str) -> None:
+    """Log function calls and responses from an ADK event."""
+    uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+
+    for fc in event.get_function_calls() or []:
+        args = fc.args or {}
+        # Truncate large args (e.g. email bodies) to keep logs readable
+        summarized = {k: (str(v)[:120] if isinstance(v, str) else v) for k, v in args.items()}
+        logger.info(f"Tool call [{uid}]: {fc.name}({summarized})")
+
+    for fr in event.get_function_responses() or []:
+        response = fr.response or {}
+        output = response.get("output") or response.get("result") or response
+        output_str = str(output)
+        if len(output_str) > 200:
+            output_str = output_str[:200] + "…"
+        logger.info(f"Tool response [{uid}]: {fr.name} → {output_str}")
+
+
 class AgentEngineClient:
     """Client for interacting with Vertex AI Agent Engine.
 
@@ -199,12 +218,14 @@ class AgentEngineClient:
                     events.append(parsed_event)
                     if ttft_ms is None and self.extract_text([parsed_event]):
                         ttft_ms = (time.monotonic() - t_start) * 1000
+                    _log_tool_activity(parsed_event, user_id)
                     continue
 
                 parsed_event = event if isinstance(event, Event) else Event.model_validate(event)
                 events.append(parsed_event)
                 if ttft_ms is None and self.extract_text([parsed_event]):
                     ttft_ms = (time.monotonic() - t_start) * 1000
+                _log_tool_activity(parsed_event, user_id)
 
         # Apply timeout to the streaming operation; retry once on token expiry
         try:
@@ -233,8 +254,12 @@ class AgentEngineClient:
         session_id: str,
         confirmation_function_call_id: str,
         confirmed: bool,
+        reason: str | None = None,
     ) -> list[Event]:
         """Resolve an ADK confirmation request with a native function response."""
+        response_payload: dict = {"confirmed": confirmed}
+        if reason:
+            response_payload["reason"] = reason
         content = types.Content(
             role="user",
             parts=[
@@ -242,7 +267,7 @@ class AgentEngineClient:
                     function_response=types.FunctionResponse(
                         name="adk_request_confirmation",
                         id=confirmation_function_call_id,
-                        response={"confirmed": confirmed},
+                        response=response_payload,
                     )
                 )
             ],

@@ -346,18 +346,20 @@ async def _route_email_to_agent(
         if confirmations:
             tool_names = [confirmation.tool_name for confirmation in confirmations]
             logger.warning(
-                f"Rejecting offline ADK confirmations for {user_id[:4]}****: {tool_names}"
+                f"Offline ADK confirmations for {user_id[:4]}****: {tool_names} — declining and collecting fallback response"
             )
+            follow_up_events: list = []
             for confirmation in confirmations:
-                await _agent_client.send_confirmation_response(
+                follow_up_events = await _agent_client.send_confirmation_response(
                     user_id=user_id,
                     session_id=session_info.agent_session_id,
                     confirmation_function_call_id=confirmation.function_call_id,
                     confirmed=False,
+                    reason="User confirmation is not available via email. Do not use this tool. Respond naturally to the user instead.",
                 )
-            return
-
-        response = _agent_client.extract_text(events)
+            response = _agent_client.extract_text(follow_up_events)
+        else:
+            response = _agent_client.extract_text(events)
         if response:
             if _should_suppress_response(response):
                 logger.info(f"Email response suppressed for {user_id[:4]}****")
