@@ -130,7 +130,7 @@ class TestTaskWorker:
         task_worker._vertex_client = mock_vertex_client
 
         # Mock notification
-        task_worker._notify_for_review = AsyncMock()
+        task_worker._notify_user = AsyncMock()
 
         result = await task_worker.execute_task(TASK_ID)
 
@@ -144,16 +144,15 @@ class TestTaskWorker:
         assert "option" in running_update.kwargs
         # Should update result
         doc_ref.update.assert_any_call({
-            "status": "awaiting_review",
+            "status": "completed",
             "result": "AI Result",
             "completed_at": ANY
         })
 
         # Verify notification
-        task_worker._notify_for_review.assert_awaited_once_with(
+        task_worker._notify_user.assert_awaited_once_with(
             task_id=TASK_ID,
             user_id=USER_ID,
-            agent_type="personal",
             result="AI Result"
         )
 
@@ -210,7 +209,7 @@ class TestTaskWorker:
         mock_vertex_client.agent_engines.get.return_value = mock_adk_app
         task_worker._vertex_client = mock_vertex_client
 
-        task_worker._notify_for_review = AsyncMock()
+        task_worker._notify_user = AsyncMock()
 
         result = await task_worker.execute_task(TASK_ID)
 
@@ -224,36 +223,6 @@ class TestTaskWorker:
             "error": "Agent Error",
             "completed_at": ANY
         })
-
-    @pytest.mark.asyncio
-    async def test_execute_revision(self, task_worker, mock_firestore):
-        """Should execute revision with feedback in prompt."""
-        mock_doc = MagicMock()
-        mock_doc.exists = True
-        mock_doc.update_time = object()
-        mock_doc.to_dict.return_value = {
-            "task_id": TASK_ID,
-            "user_id": USER_ID,
-            "status": "revision_requested",
-            "task_type": "research",
-            "instruction": "Research AI",
-            "result": "Old Result",
-            "revision_feedback": "Fix it",
-            "agent_type": "personal",
-        }
-        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
-
-        # Mock Agent Engine
-        mock_adk_app = _mock_adk_app_with_response("Revised Result")
-        mock_vertex_client = MagicMock()
-        mock_vertex_client.agent_engines.get.return_value = mock_adk_app
-        task_worker._vertex_client = mock_vertex_client
-
-        task_worker._notify_for_review = AsyncMock()
-
-        result = await task_worker.execute_task(TASK_ID)
-
-        assert result["success"] is True
 
     @pytest.mark.asyncio
     async def test_execute_task_defaults_to_personal_engine(self, task_worker, mock_firestore):
@@ -276,7 +245,7 @@ class TestTaskWorker:
         mock_vertex_client.agent_engines.get.return_value = mock_adk_app
         task_worker._vertex_client = mock_vertex_client
 
-        task_worker._notify_for_review = AsyncMock()
+        task_worker._notify_user = AsyncMock()
 
         await task_worker.execute_task(TASK_ID)
 
@@ -311,7 +280,7 @@ class TestTaskWorker:
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
-        worker._notify_for_review = AsyncMock()
+        worker._notify_user = AsyncMock()
 
         result = await worker.execute_task(TASK_ID)
 
@@ -346,7 +315,7 @@ class TestTaskWorker:
         mock_vertex_client = MagicMock()
         mock_vertex_client.agent_engines.get.return_value = mock_adk_app
         task_worker._vertex_client = mock_vertex_client
-        task_worker._notify_for_review = AsyncMock()
+        task_worker._notify_user = AsyncMock()
 
         await task_worker.execute_task(TASK_ID)
 
@@ -382,7 +351,7 @@ class TestTaskWorker:
         mock_vertex_client = MagicMock()
         mock_vertex_client.agent_engines.get.return_value = mock_adk_app
         task_worker._vertex_client = mock_vertex_client
-        task_worker._notify_for_review = AsyncMock()
+        task_worker._notify_user = AsyncMock()
 
         await task_worker.execute_task(TASK_ID)
 
@@ -419,11 +388,11 @@ class TestTaskWorker:
         doc_ref.update.side_effect = Exception("precondition failed")
 
         task_worker._execute_task = AsyncMock()
-        task_worker._notify_for_review = AsyncMock()
+        task_worker._notify_user = AsyncMock()
 
         result = await task_worker.execute_task(TASK_ID)
 
         assert result["success"] is True
         assert result["message"] == "Task already in status: running"
         task_worker._execute_task.assert_not_awaited()
-        task_worker._notify_for_review.assert_not_awaited()
+        task_worker._notify_user.assert_not_awaited()

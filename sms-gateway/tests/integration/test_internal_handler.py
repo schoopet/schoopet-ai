@@ -1,14 +1,13 @@
-"""Tests for the internal task review and notification flow.
+"""Tests for the internal task completion and notification flow.
 
 Covers:
-- /internal/task-review sends to the single agent client regardless of payload.agent_type
+- /internal/task-review delivers result directly to user (no agent review step)
 - /internal/user-notify marks the task NOTIFIED in Firestore only after
   confirmed delivery (status race fix)
 - Channel routing for Discord, Telegram, Slack, SMS
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, ANY
-from datetime import datetime, timezone
 
 import src.internal.handler as handler
 from src.internal.handler import (
@@ -22,7 +21,6 @@ from src.internal.handler import (
 
 TASK_ID = "task-abc123"
 USER_ID = "+14155550001"
-SUPERVISOR_SESSION_ID = "supervisor-sess-333"
 USER_SESSION_ID = "user-sess-111"
 
 
@@ -45,7 +43,7 @@ def reset_globals():
 @pytest.fixture
 def agent_client():
     c = AsyncMock()
-    c.send_message = AsyncMock(return_value="Agent review response")
+    c.send_message = AsyncMock(return_value="Agent notification response")
     return c
 
 
@@ -74,11 +72,15 @@ def mock_firestore():
     """Firestore AsyncClient mock.
 
     .collection() and .document() are sync calls that return MagicMock.
-    .update() is the only awaitable, so it uses AsyncMock.
+    .get() and .update() are awaitables.
     """
     client = MagicMock()
     doc_ref = MagicMock()
     doc_ref.update = AsyncMock()
+    doc = MagicMock()
+    doc.exists = True
+    doc.to_dict.return_value = {"notification_channel": "sms"}
+    doc_ref.get = AsyncMock(return_value=doc)
     client.collection.return_value.document.return_value = doc_ref
     return client
 
@@ -88,12 +90,6 @@ def session_manager():
     mgr = AsyncMock()
     mgr.is_session_active = MagicMock(return_value=True)
     return mgr
-
-
-def _supervisor_session(session_id=SUPERVISOR_SESSION_ID):
-    s = MagicMock()
-    s.agent_session_id = session_id
-    return s
 
 
 def _user_session(channel="sms", session_id=USER_SESSION_ID):
@@ -107,166 +103,145 @@ def _user_session(channel="sms", session_id=USER_SESSION_ID):
 
 
 class TestTaskReview:
-    """trigger_task_review must route to the single agent client."""
+    """trigger_task_review must deliver the result directly to the user."""
 
     @pytest.mark.asyncio
-    async def test_personal_task_goes_to_agent_client(
-        self, agent_client, session_manager
+    async def test_result_delivered_directly_when_no_session(
+        self, agent_client, session_manager, sms_sender, mock_firestore
     ):
-        """A task with agent_type='personal' uses the agent client."""
-        session_manager.get_supervisor_session = AsyncMock(
-            return_value=_supervisor_session()
-        )
+        """Task result is sent directly to the user when no active session."""
+        session_manager.get_user_session = AsyncMock(return_value=None)
+
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=AsyncMock(),
+            sms_sender=sms_sender,
+            firestore_client=mock_firestore,
         )
 
-        payload = TaskReviewRequest(
-            task_id=TASK_ID, user_id=USER_ID, agent_type="personal", result="done"
-        )
+        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Research done.")
         await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
 
-        agent_client.send_message.assert_awaited_once()
+        sms_sender.send.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_team_task_also_goes_to_agent_client(
-        self, agent_client, session_manager
+    async def test_result_delivered_via_active_session(
+        self, agent_client, session_manager, sms_sender, mock_firestore
     ):
-        """A task with agent_type='team' (legacy field) also uses the single agent client."""
-        session_manager.get_supervisor_session = AsyncMock(
-            return_value=_supervisor_session()
-        )
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=agent_client,
-            sms_sender=AsyncMock(),
-        )
-
-        payload = TaskReviewRequest(
-            task_id=TASK_ID, user_id=USER_ID, agent_type="team", result="done"
-        )
-        await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
-
-        agent_client.send_message.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_agent_type_in_payload_is_ignored(
-        self, agent_client, session_manager
-    ):
-        """agent_type in payload is kept for backward compat but ignored — same
-        single agent handles all tasks regardless of value."""
+        """When user has an active session, result is routed through the agent."""
         session_manager.get_user_session = AsyncMock(
-            return_value=_user_session(channel="slack")
+            return_value=_user_session(channel="sms")
         )
-        session_manager.get_supervisor_session = AsyncMock(
-            return_value=_supervisor_session()
-        )
+        session_manager.is_session_active = MagicMock(return_value=True)
+        agent_client.send_message = AsyncMock(return_value="Here's your result!")
+
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=AsyncMock(),
+            sms_sender=sms_sender,
+            firestore_client=mock_firestore,
         )
 
-        payload = TaskReviewRequest(
-            task_id=TASK_ID, user_id=USER_ID, agent_type="personal", result="done"
-        )
+        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Research done.")
         await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
 
         agent_client.send_message.assert_awaited_once()
+        call_args = agent_client.send_message.call_args
+        assert "INTERNAL_TASK_COMPLETE" in call_args.kwargs["message"]
+        sms_sender.send.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_supervisor_session_created_without_agent_type(
-        self, agent_client, session_manager
+    async def test_error_task_notifies_user_with_error_message(
+        self, agent_client, session_manager, sms_sender, mock_firestore
     ):
-        """Supervisor session is created with phone_number and task_id only."""
-        session_manager.get_supervisor_session = AsyncMock(
-            return_value=_supervisor_session()
-        )
+        """Failed tasks send an error message directly to the user."""
+        session_manager.get_user_session = AsyncMock(return_value=None)
+
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=AsyncMock(),
+            sms_sender=sms_sender,
+            firestore_client=mock_firestore,
         )
 
         payload = TaskReviewRequest(
-            task_id=TASK_ID, user_id=USER_ID, agent_type="team", result="done"
+            task_id=TASK_ID, user_id=USER_ID, result=None, error="Agent crashed"
         )
         await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
 
-        session_manager.get_supervisor_session.assert_awaited_once_with(
-            phone_number=USER_ID,
-            task_id=TASK_ID,
-        )
+        sms_sender.send.assert_awaited_once()
+        sent_body = sms_sender.send.call_args.kwargs.get("body") or sms_sender.send.call_args[1].get("body")
+        assert "error" in sent_body.lower()
+        assert "Agent crashed" in sent_body
 
     @pytest.mark.asyncio
-    async def test_review_message_sent_to_supervisor_session(
-        self, agent_client, session_manager
+    async def test_no_result_and_no_error_is_skipped(
+        self, agent_client, session_manager, sms_sender, mock_firestore
     ):
-        """Review message must go to the supervisor session ID, not the user session."""
-        session_manager.get_supervisor_session = AsyncMock(
-            return_value=_supervisor_session(SUPERVISOR_SESSION_ID)
+        """Tasks with neither result nor error produce no notification."""
+        session_manager.get_user_session = AsyncMock(return_value=None)
+
+        init_internal_services(
+            session_manager=session_manager,
+            agent_client=agent_client,
+            sms_sender=sms_sender,
+            firestore_client=mock_firestore,
         )
+
+        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result=None, error=None)
+        response = await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
+
+        sms_sender.send.assert_not_awaited()
+        assert response.status == "skipped"
+
+    @pytest.mark.asyncio
+    async def test_notification_channel_read_from_firestore(
+        self, agent_client, session_manager, telegram_sender, mock_firestore
+    ):
+        """notification_channel is read from the Firestore task doc, not the payload."""
+        mock_firestore.collection.return_value.document.return_value.get = AsyncMock(
+            return_value=MagicMock(
+                exists=True,
+                to_dict=MagicMock(return_value={"notification_channel": "telegram"})
+            )
+        )
+        session_manager.get_user_session = AsyncMock(return_value=None)
+
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
             sms_sender=AsyncMock(),
+            telegram_sender=telegram_sender,
+            firestore_client=mock_firestore,
         )
 
-        payload = TaskReviewRequest(
-            task_id=TASK_ID, user_id=USER_ID, agent_type="personal", result="Task result here"
-        )
+        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Done.")
         await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
 
-        call_kwargs = agent_client.send_message.call_args.kwargs
-        assert call_kwargs["session_id"] == SUPERVISOR_SESSION_ID
-        assert "_supervisor" in call_kwargs["user_id"]
-        assert "INTERNAL_TASK_REVIEW" in call_kwargs["message"]
+        telegram_sender.send.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_failed_task_included_in_review_message(
-        self, agent_client, session_manager
+    async def test_marks_task_notified_after_delivery(
+        self, agent_client, session_manager, sms_sender, mock_firestore
     ):
-        """Error details must appear in the review message when the task failed."""
-        session_manager.get_supervisor_session = AsyncMock(
-            return_value=_supervisor_session()
-        )
+        """Task is marked NOTIFIED in Firestore after successful delivery."""
+        session_manager.get_user_session = AsyncMock(return_value=None)
+
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=AsyncMock(),
+            sms_sender=sms_sender,
+            firestore_client=mock_firestore,
         )
 
-        payload = TaskReviewRequest(
-            task_id=TASK_ID, user_id=USER_ID, agent_type="personal",
-            result=None, error="Agent crashed"
-        )
+        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Done.")
         await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
 
-        message = agent_client.send_message.call_args.kwargs["message"]
-        assert "FAILED" in message
-        assert "Agent crashed" in message
-
-    @pytest.mark.asyncio
-    async def test_defaults_to_personal_when_agent_type_omitted(
-        self, agent_client, session_manager
-    ):
-        """Missing agent_type field defaults to 'personal' (backward compat field)."""
-        session_manager.get_supervisor_session = AsyncMock(
-            return_value=_supervisor_session()
-        )
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=agent_client,
-            sms_sender=AsyncMock(),
-        )
-
-        # agent_type not provided → defaults to "personal"
-        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="done")
-        await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
-
-        agent_client.send_message.assert_awaited_once()
+        doc_ref = mock_firestore.collection.return_value.document.return_value
+        doc_ref.update.assert_awaited_once_with({
+            "status": "notified",
+            "notified_at": ANY,
+        })
 
 
 # ── /internal/user-notify ────────────────────────────────────────────────────
@@ -476,8 +451,7 @@ class TestUserNotify:
     async def test_slack_session_routes_through_personal_agent(
         self, agent_client, session_manager, mock_firestore
     ):
-        """A user with an active Slack session is notified via the personal agent
-        (Slack now routes to personal agent, not a separate team agent)."""
+        """A user with an active Slack session is notified via the personal agent."""
         session_manager.get_user_session = AsyncMock(
             return_value=_user_session(channel="slack")
         )
@@ -522,7 +496,6 @@ class TestMarkTaskNotified:
             "status": "notified",
             "notified_at": ANY,
         })
-
 
     @pytest.mark.asyncio
     async def test_does_nothing_when_no_firestore(self):
