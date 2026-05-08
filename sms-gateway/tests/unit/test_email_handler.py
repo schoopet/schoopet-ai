@@ -142,8 +142,8 @@ async def test_route_email_prompt_includes_offline_safety_and_suppression_instru
     )
 
     prompt = agent_client.send_message_events.await_args.kwargs["message"]
-    assert "OFFLINE EVENT SAFETY" in prompt
-    assert "Do not create, modify, delete, send, or otherwise change external" in prompt
+    assert "OFFLINE MODE" in prompt
+    assert "will be rejected" in prompt
     assert "<SUPPRESS RESPONSE>" in prompt
 
 
@@ -166,6 +166,5 @@ async def test_route_email_confirmation_declines_and_forwards_fallback(email_ser
         session_id="agent-session-123",
         confirmation_function_call_id="confirm-1",
         confirmed=False,
-        reason="User confirmation is not available via email. Do not use this tool. Respond naturally to the user instead.",
     )
     senders["discord"].send.assert_awaited_once_with("user-123", "I'll note that for you.")

@@ -43,9 +43,14 @@ _discord_sender = None
 _NOTIFICATION_WRAPPER = """\
 INCOMING_EMAIL_NOTIFICATION
 
-OFFLINE EVENT SAFETY: This email notification is offline, background-triggered
-processing. Do not create, modify, delete, send, or otherwise change external
-system state unless you ask the user first and they explicitly approve it.
+OFFLINE MODE: You are operating autonomously without the user present (this
+may be an email notification, a background task, or another automated trigger).
+Any tool that requires interactive user confirmation will be rejected — you
+will receive "This tool call is rejected." When that happens:
+- If the operation can be completed without that tool, do so.
+- Otherwise, send the user a concise message describing what you would have
+  done and ask them to follow up on an interactive channel (SMS, WhatsApp,
+  Telegram, or Discord) where they can approve it in real time.
 
 If no user-visible reminder or summary is needed, start your response with:
 <SUPPRESS RESPONSE>
@@ -355,7 +360,6 @@ async def _route_email_to_agent(
                     session_id=session_info.agent_session_id,
                     confirmation_function_call_id=confirmation.function_call_id,
                     confirmed=False,
-                    reason="User confirmation is not available via email. Do not use this tool. Respond naturally to the user instead.",
                 )
             response = _agent_client.extract_text(follow_up_events)
         else:
