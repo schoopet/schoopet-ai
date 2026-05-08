@@ -4,8 +4,6 @@ This tool enables the root agent to:
 1. Spawn async tasks that execute in background
 2. Schedule tasks for future execution (reminders)
 3. Check task status and results
-4. Review and approve completed tasks (supervisor functions)
-5. Request corrections from async agents
 
 Security: All operations require user_id from ToolContext for proper scoping.
 """
@@ -21,7 +19,6 @@ from ..utils import normalize_user_id
 from ..async_tasks.models import (
     AsyncTaskDocument,
     TaskStatus,
-    VALID_AGENT_TYPES,
     VALID_CHANNELS,
 )
 from .cloud_tasks_client import get_cloud_tasks_client
@@ -33,11 +30,7 @@ ASYNC_TASKS_COLLECTION = "async_tasks"
 
 
 class AsyncTaskTool:
-    """Tool for the root agent to spawn and manage async tasks.
-
-    Provides both task creation functions (used in user sessions) and
-    supervisor functions (used in supervisor sessions to review results).
-    """
+    """Tool for the root agent to spawn and manage async tasks."""
 
     def __init__(self):
         """Initialize the Async Task Tool - all initialization is deferred."""
@@ -93,35 +86,6 @@ class AsyncTaskTool:
         )
         return "sms"
 
-    def _get_agent_type(self, tool_context: Optional[ToolContext]) -> str:
-        """Extract agent type from session state, defaulting to 'personal'."""
-        if not tool_context:
-            return "personal"
-        try:
-            state = tool_context.state
-            if state and "agent_type" in state:
-                agent_type = state["agent_type"]
-                if agent_type in VALID_AGENT_TYPES:
-                    return agent_type
-        except Exception:
-            pass
-        return "personal"
-
-    def _get_session_id(self, tool_context: Optional[ToolContext]) -> Optional[str]:
-        """Extract session_id from tool context safely."""
-        if not tool_context:
-            return None
-        # Try different attribute names based on ADK version
-        if hasattr(tool_context, "session_id") and tool_context.session_id:
-            return tool_context.session_id
-        if hasattr(tool_context, "_invocation_context"):
-            invocation = tool_context._invocation_context
-            if hasattr(invocation, "session") and hasattr(invocation.session, "id"):
-                return invocation.session.id
-        return None
-
-    # ========== Task Creation Functions (User Session) ==========
-
     def create_async_task(
         self,
         task_type: str,
@@ -137,7 +101,7 @@ class AsyncTaskTool:
 
         Use this to delegate long-running tasks or schedule future tasks like reminders.
         The task runs on the deployed Agent Engine with full tool access (calendar, search,
-        drive, sheets, memory). You will be notified when the task completes for your review.
+        drive, sheets, memory). You will be notified when the task completes.
 
         Args:
             task_type: Type of task - one of:
@@ -197,12 +161,8 @@ class AsyncTaskTool:
         # Generate task ID
         task_id = str(uuid.uuid4())
 
-        # Get current session ID for context
-        session_id = self._get_session_id(tool_context)
-
-        # Determine routing from session state
+        # Determine channel from session state
         notification_channel = self._get_channel(tool_context)
-        agent_type = self._get_agent_type(tool_context)
 
         # Create task document
         task = AsyncTaskDocument(
@@ -213,9 +173,7 @@ class AsyncTaskTool:
             context=context or {},
             allowed_resource_ids=allowed_resource_ids or [],
             scheduled_at=scheduled_at_dt,
-            agent_type=agent_type,
             notification_channel=notification_channel,
-            user_session_id=session_id,
             status=TaskStatus.SCHEDULED if scheduled_at_dt else TaskStatus.PENDING,
         )
 
@@ -240,7 +198,7 @@ class AsyncTaskTool:
                     time_str = scheduled_at_dt.strftime("%Y-%m-%d at %H:%M UTC")
                     return f"Scheduled {task_type} task for {time_str}. Task ID: {task_id}"
                 else:
-                    return f"Started async {task_type} task. You'll receive the result for review when complete. Task ID: {task_id}"
+                    return f"Started async {task_type} task. You'll be notified when it completes. Task ID: {task_id}"
             else:
                 # Cloud Task creation failed, but Firestore document exists
                 # Task worker can still pick it up if manually triggered
@@ -291,16 +249,12 @@ class AsyncTaskTool:
 
             if task.status == TaskStatus.SCHEDULED and task.scheduled_at:
                 status_msg += f"\nScheduled for: {task.scheduled_at.strftime('%Y-%m-%d %H:%M UTC')}"
-            elif task.status in [TaskStatus.APPROVED, TaskStatus.NOTIFIED] and task.result:
+            elif task.status in [TaskStatus.COMPLETED, TaskStatus.NOTIFIED] and task.result:
                 # Truncate long results
                 result_preview = task.result[:200] + "..." if len(task.result) > 200 else task.result
                 status_msg += f"\nResult preview: {result_preview}"
-            elif task.status == TaskStatus.AWAITING_REVIEW:
-                status_msg += "\nWaiting for review before delivery."
             elif task.status == TaskStatus.FAILED and task.error:
                 status_msg += f"\nError: {task.error}"
-            elif task.status == TaskStatus.REVISION_REQUESTED:
-                status_msg += f"\nRevision requested: {task.revision_feedback or 'See supervisor notes'}"
 
             return status_msg
 
@@ -391,8 +345,7 @@ class AsyncTaskTool:
                 TaskStatus.PENDING.value,
                 TaskStatus.SCHEDULED.value,
                 TaskStatus.RUNNING.value,
-                TaskStatus.AWAITING_REVIEW.value,
-                TaskStatus.REVISION_REQUESTED.value,
+                TaskStatus.COMPLETED.value,
             ]
 
             query = (
@@ -427,248 +380,6 @@ class AsyncTaskTool:
         except Exception as e:
             logger.error(f"Failed to list tasks: {e}")
             return f"ERROR: Failed to list tasks: {str(e)}"
-
-    # ========== Supervisor Functions (Supervisor Session) ==========
-
-    def review_task_result(
-        self,
-        task_id: str,
-        tool_context: Optional[ToolContext] = None,
-    ) -> str:
-        """
-        Review the result of a completed async task.
-
-        This is called in the supervisor session when an async task completes.
-        Use this to evaluate the result before deciding to approve or request corrections.
-
-        Args:
-            task_id: The task ID to review
-
-        Returns:
-            Full task details including the result for review
-        """
-        user_id = self._get_user_id(tool_context)
-        if not user_id:
-            return "ERROR: Cannot review task - no user_id available."
-
-        firestore_client = self._get_firestore_client()
-        if not firestore_client:
-            return "ERROR: Task system not initialized."
-
-        try:
-            doc = firestore_client.collection(ASYNC_TASKS_COLLECTION).document(task_id).get()
-
-            if not doc.exists:
-                return f"Task {task_id} not found."
-
-            data = doc.to_dict()
-
-            # Security: verify task belongs to user (supervisor session has user_id)
-            # Note: supervisor user_id format might be "{phone}_supervisor"
-            task_user = data.get("user_id", "")
-            check_user = user_id.replace("_supervisor", "")
-            if task_user != check_user and task_user != user_id:
-                return f"Task {task_id} not found."
-
-            task = AsyncTaskDocument.from_firestore(data)
-
-            # Build detailed review info
-            review = [
-                f"=== Task Review: {task.task_type} ===",
-                f"Task ID: {task.task_id}",
-                f"Status: {task.status.value}",
-                f"Created: {task.created_at.strftime('%Y-%m-%d %H:%M UTC')}",
-                "",
-                "Original Instruction:",
-                task.instruction,
-                "",
-            ]
-
-            if task.context:
-                review.append("Context provided:")
-                for key, value in task.context.items():
-                    review.append(f"  {key}: {value}")
-                review.append("")
-
-            if task.result:
-                review.append("=== RESULT ===")
-                review.append(task.result)
-                review.append("")
-
-            if task.error:
-                review.append("=== ERROR ===")
-                review.append(task.error)
-                review.append("")
-
-            if task.revision_feedback:
-                review.append(f"Previous revision feedback: {task.revision_feedback}")
-                review.append(f"Review attempts: {task.review_attempts}/{task.max_review_attempts}")
-                review.append("")
-
-            review.append("=== Review Actions ===")
-            if task.status == TaskStatus.AWAITING_REVIEW:
-                review.append("- Use approve_task(task_id) to approve and notify user")
-                review.append("- Use request_correction(task_id, feedback) to request revision")
-            else:
-                review.append(f"Note: Task is in '{task.status.value}' status")
-
-            return "\n".join(review)
-
-        except Exception as e:
-            logger.error(f"Failed to review task: {e}")
-            return f"ERROR: Failed to review task: {str(e)}"
-
-    def approve_task(
-        self,
-        task_id: str,
-        tool_context: Optional[ToolContext] = None,
-    ) -> str:
-        """
-        Approve a task result and trigger user notification.
-
-        Call this after reviewing a task result that meets the user's request.
-        The user will receive the result via SMS/WhatsApp.
-
-        Args:
-            task_id: The task ID to approve
-
-        Returns:
-            Confirmation message
-        """
-        user_id = self._get_user_id(tool_context)
-        if not user_id:
-            return "ERROR: Cannot approve task - no user_id available."
-
-        firestore_client = self._get_firestore_client()
-        if not firestore_client:
-            return "ERROR: Task system not initialized."
-
-        try:
-            doc_ref = firestore_client.collection(ASYNC_TASKS_COLLECTION).document(task_id)
-            doc = doc_ref.get()
-
-            if not doc.exists:
-                return f"Task {task_id} not found."
-
-            data = doc.to_dict()
-            task = AsyncTaskDocument.from_firestore(data)
-
-            # Verify authorization
-            task_user = data.get("user_id", "")
-            check_user = user_id.replace("_supervisor", "")
-            if task_user != check_user and task_user != user_id:
-                return f"Task {task_id} not found."
-
-            if task.status != TaskStatus.AWAITING_REVIEW:
-                return f"Cannot approve task with status: {task.status.value}. Only tasks awaiting review can be approved."
-
-            # Update task status
-            now = datetime.now(timezone.utc)
-            doc_ref.update({
-                "status": TaskStatus.APPROVED.value,
-                "reviewed_at": now,
-            })
-
-            # Trigger user notification via Cloud Tasks
-            if task.result:
-                cloud_tasks = get_cloud_tasks_client()
-                cloud_tasks.create_notification_task(
-                    user_id=task_user,
-                    task_id=task_id,
-                    message=task.result,
-                    schedule_time=now,
-                    channel=task.notification_channel,
-                )
-                # NOTIFIED status is set by the SMS Gateway /internal/user-notify
-                # endpoint after confirmed delivery — not here.
-                return f"Task {task_id} approved. User will be notified with the result."
-            else:
-                return f"Task {task_id} approved but has no result to send."
-
-        except Exception as e:
-            logger.error(f"Failed to approve task: {e}")
-            return f"ERROR: Failed to approve task: {str(e)}"
-
-    def request_correction(
-        self,
-        task_id: str,
-        feedback: str,
-        tool_context: Optional[ToolContext] = None,
-    ) -> str:
-        """
-        Request corrections to a task result.
-
-        Call this when the task result doesn't meet the user's needs.
-        Provide specific feedback about what needs to be improved.
-        The async agent will revise the result based on your feedback.
-
-        Args:
-            task_id: The task ID to request correction for
-            feedback: Specific feedback about what needs improvement.
-                Be clear and actionable (e.g., "Add price ranges for each restaurant"
-                or "Include distance from downtown")
-
-        Returns:
-            Confirmation message
-        """
-        user_id = self._get_user_id(tool_context)
-        if not user_id:
-            return "ERROR: Cannot request correction - no user_id available."
-
-        if not feedback or not feedback.strip():
-            return "ERROR: Please provide specific feedback about what needs improvement."
-
-        firestore_client = self._get_firestore_client()
-        if not firestore_client:
-            return "ERROR: Task system not initialized."
-
-        try:
-            doc_ref = firestore_client.collection(ASYNC_TASKS_COLLECTION).document(task_id)
-            doc = doc_ref.get()
-
-            if not doc.exists:
-                return f"Task {task_id} not found."
-
-            data = doc.to_dict()
-            task = AsyncTaskDocument.from_firestore(data)
-
-            # Verify authorization
-            task_user = data.get("user_id", "")
-            check_user = user_id.replace("_supervisor", "")
-            if task_user != check_user and task_user != user_id:
-                return f"Task {task_id} not found."
-
-            if task.status != TaskStatus.AWAITING_REVIEW:
-                return f"Cannot request correction for task with status: {task.status.value}"
-
-            # Check if max revisions reached
-            if task.review_attempts >= task.max_review_attempts:
-                return f"Task has reached maximum revision attempts ({task.max_review_attempts}). Please approve with current result or cancel the task."
-
-            # Update task with feedback
-            doc_ref.update({
-                "status": TaskStatus.REVISION_REQUESTED.value,
-                "revision_feedback": feedback,
-                "review_attempts": task.review_attempts + 1,
-            })
-
-            # Create Cloud Task for revision execution
-            cloud_tasks = get_cloud_tasks_client()
-            cloud_task_name = cloud_tasks.create_revision_task(
-                task_id=task_id,
-                user_id=task_user,
-                revision_number=task.review_attempts + 1,
-            )
-
-            if cloud_task_name:
-                doc_ref.update({"cloud_task_name": cloud_task_name})
-                return f"Revision requested for task {task_id}. Feedback: '{feedback}'. Attempt {task.review_attempts + 1}/{task.max_review_attempts}."
-            else:
-                return f"Revision requested but scheduling may be delayed. Task ID: {task_id}"
-
-        except Exception as e:
-            logger.error(f"Failed to request correction: {e}")
-            return f"ERROR: Failed to request correction: {str(e)}"
 
 
 # Module-level singleton

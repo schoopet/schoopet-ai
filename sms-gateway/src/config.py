@@ -97,6 +97,3 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def agent_type_for_channel(channel: str) -> str:
-    """Return the agent type for a given channel name. Always 'personal'."""
-    return "personal"

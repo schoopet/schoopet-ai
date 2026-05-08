@@ -3,8 +3,7 @@
 This module handles:
 1. Loading task definitions from Firestore
 2. Delegating execution to the deployed Agent Engine (full tool access)
-3. Notifying SMS Gateway for root agent review
-4. Processing revision requests
+3. Notifying SMS Gateway to deliver result directly to user
 """
 import json
 import logging
@@ -118,26 +117,16 @@ class TaskWorker:
             return {"success": True, "message": f"Task already in status: {prior_status}"}
 
         try:
-            # Execute via deployed Agent Engine (full tool access)
-            if prior_status == "revision_requested":
-                prompt = self._build_revision_prompt(task)
-            else:
-                prompt = self._build_task_prompt(task)
-
+            prompt = self._build_task_prompt(task)
             result = await self._execute_task(task, prompt)
 
             # Update task with results
-            await self._update_task_result(
-                task_id=task_id,
-                result=result,
-                status="awaiting_review"
-            )
+            await self._update_task_result(task_id=task_id, result=result)
 
-            # Notify SMS Gateway for root agent review
-            await self._notify_for_review(
+            # Notify SMS Gateway to deliver result to user
+            await self._notify_user(
                 task_id=task_id,
                 user_id=task["user_id"],
-                agent_type=task.get("agent_type", "personal"),
                 result=result
             )
 
@@ -151,26 +140,14 @@ class TaskWorker:
             await self._update_task_error(task_id, str(e))
 
             # Notify about failure
-            await self._notify_for_review(
+            await self._notify_user(
                 task_id=task_id,
                 user_id=task["user_id"],
-                agent_type=task.get("agent_type", "personal"),
                 result=None,
                 error=str(e)
             )
 
             return {"success": False, "error": str(e)}
-
-    async def _get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """Get task document from Firestore."""
-        firestore_client = self._get_firestore_client()
-        if not firestore_client:
-            return None
-
-        doc = firestore_client.collection("async_tasks").document(task_id).get()
-        if doc.exists:
-            return doc.to_dict()
-        return None
 
     async def _claim_task_for_execution(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Claim a task for execution with an optimistic concurrency check."""
@@ -187,7 +164,7 @@ class TaskWorker:
 
         task = doc.to_dict()
         status = task.get("status")
-        if status not in ["pending", "scheduled", "revision_requested"]:
+        if status not in ["pending", "scheduled"]:
             return {"claimed": False, "prior_status": status, "task": task}
 
         started_at = datetime.now(timezone.utc)
@@ -214,34 +191,14 @@ class TaskWorker:
         task["started_at"] = started_at
         return {"claimed": True, "prior_status": status, "task": task}
 
-    async def _update_task_status(self, task_id: str, status: str):
-        """Update task status in Firestore."""
-        firestore_client = self._get_firestore_client()
-        if not firestore_client:
-            return
-
-        update_data = {
-            "status": status,
-        }
-
-        if status == "running":
-            update_data["started_at"] = datetime.now(timezone.utc)
-
-        firestore_client.collection("async_tasks").document(task_id).update(update_data)
-
-    async def _update_task_result(
-        self,
-        task_id: str,
-        result: str,
-        status: str
-    ):
+    async def _update_task_result(self, task_id: str, result: str):
         """Update task with execution result."""
         firestore_client = self._get_firestore_client()
         if not firestore_client:
             return
 
         firestore_client.collection("async_tasks").document(task_id).update({
-            "status": status,
+            "status": "completed",
             "result": result,
             "completed_at": datetime.now(timezone.utc),
         })
@@ -349,34 +306,14 @@ class TaskWorker:
 
         return "\n".join(parts)
 
-    def _build_revision_prompt(self, task: Dict[str, Any]) -> str:
-        """Build the revision prompt with feedback."""
-        parts = [
-            f"Revise this {task['task_type']} task based on feedback:",
-            "",
-            "Original instruction:",
-            task["instruction"],
-            "",
-            "Previous result:",
-            task.get("result", "(no previous result)"),
-            "",
-            "Revision feedback:",
-            task.get("revision_feedback", "(no feedback)"),
-            "",
-            "Provide an improved result that addresses the feedback.",
-        ]
-
-        return "\n".join(parts)
-
-    async def _notify_for_review(
+    async def _notify_user(
         self,
         task_id: str,
         user_id: str,
-        agent_type: str,
         result: Optional[str],
         error: Optional[str] = None
     ):
-        """Notify SMS Gateway for root agent review.
+        """Notify SMS Gateway to deliver the task result to the user.
 
         Sends request to /internal/task-review endpoint.
         """
@@ -391,7 +328,6 @@ class TaskWorker:
             payload = {
                 "task_id": task_id,
                 "user_id": user_id,
-                "agent_type": agent_type,
                 "result": result,
                 "error": error,
             }
@@ -410,13 +346,13 @@ class TaskWorker:
 
             async with http_client.post(url, json=payload, headers=headers) as response:
                 if response.status == 200:
-                    logger.info(f"Review notification sent for task {task_id}")
+                    logger.info(f"User notification sent for task {task_id}")
                 else:
                     text = await response.text()
-                    logger.error(f"Review notification failed: {response.status} - {text}")
+                    logger.error(f"User notification failed: {response.status} - {text}")
 
         except Exception as e:
-            logger.error(f"Failed to notify for review: {e}")
+            logger.error(f"Failed to notify user: {e}")
 
     async def requeue_scheduled_tasks(self) -> Dict[str, int]:
         """Create Cloud Tasks for scheduled tasks entering the 30-day window.

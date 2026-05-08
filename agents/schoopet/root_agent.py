@@ -193,20 +193,6 @@ def _personal_prompt() -> str:
         "- 'Check my calendar tomorrow and summarize' -> create_async_task('analysis', '...', schedule_at='...')\n"
         "- 'Remind me every Monday at 9am to send the weekly update' -> schedule first instance, save recurrence pattern\n\n"
 
-        "## Task Supervision\n"
-        "Review completed async tasks before results reach the user.\n\n"
-
-        "**When you receive INTERNAL_TASK_REVIEW:**\n"
-        "1. Call review_task_result(task_id) to see the full result\n"
-        "2. If good: call approve_task(task_id) to deliver it to the user\n"
-        "3. If not good: call request_correction(task_id, 'specific feedback')\n"
-        "You MUST notify the user — this notification is not shown to them automatically.\n\n"
-
-        "**Review criteria:**\n"
-        "- Does it address the original request?\n"
-        "- Is it accurate and well-organized?\n"
-        "- Is the length appropriate for the delivery channel?\n\n"
-
         "**When you receive INTERNAL_TASK_COMPLETE:**\n"
         "Inform the user about the completed task conversationally.\n\n"
 
@@ -286,10 +272,6 @@ def create_agent(
     check_task_status = FunctionTool(func=async_task_tool.check_task_status)
     cancel_task = FunctionTool(func=async_task_tool.cancel_task, require_confirmation=True)
     list_pending_tasks = FunctionTool(func=async_task_tool.list_pending_tasks)
-    review_task_result = FunctionTool(func=async_task_tool.review_task_result)
-    approve_task = FunctionTool(func=async_task_tool.approve_task, require_confirmation=True)
-    request_correction = FunctionTool(func=async_task_tool.request_correction, require_confirmation=True)
-
     # Calendar tools
     list_events_tool = FunctionTool(func=calendar_tool.list_calendar_events)
     create_event_tool = FunctionTool(func=calendar_tool.create_calendar_event, require_confirmation=True)
@@ -403,9 +385,6 @@ def create_agent(
         get_cloud_task_status_tool,
         list_scheduled_tasks_tool,
         debug_task_tool,
-        review_task_result,
-        approve_task,
-        request_correction,
     ]
 
     email_tool = EmailTool()

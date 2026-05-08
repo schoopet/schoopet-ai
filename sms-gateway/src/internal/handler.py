@@ -1,8 +1,8 @@
 """Internal service endpoints for async task communication.
 
 These endpoints handle:
-1. Task review notifications from Task Worker
-2. User notifications after task approval
+1. Task completion notifications from Task Worker — delivers directly to user
+2. User notifications for scheduled reminders
 
 All endpoints require authentication via OIDC or HMAC signatures.
 """
@@ -58,15 +58,14 @@ def init_internal_services(
 class TaskReviewRequest(BaseModel):
     """Request payload from Task Worker when async task completes."""
 
-    task_id: str = Field(..., description="Task ID to review")
+    task_id: str = Field(..., description="Task ID")
     user_id: str = Field(..., description="User's phone number")
-    agent_type: str = Field(default="personal", description="Kept for backward compat, ignored")
     result: Optional[str] = Field(default=None, description="Task result")
     error: Optional[str] = Field(default=None, description="Error if task failed")
 
 
 class UserNotifyRequest(BaseModel):
-    """Request payload for user notification after task approval."""
+    """Request payload for direct user notification (scheduled reminders)."""
 
     user_id: str = Field(..., description="User's phone number")
     task_id: str = Field(..., description="Task ID that was completed")
@@ -98,6 +97,65 @@ async def _mark_task_notified(task_id: str) -> None:
         logger.warning(f"Failed to mark task {task_id} as notified: {e}")
 
 
+async def _deliver_notification(user_id: str, task_id: str, message: str, channel: str) -> str:
+    """Send a message to the user and mark the task notified.
+
+    If the user has an active session, routes through the agent so the
+    message is delivered conversationally. Otherwise sends directly.
+
+    Returns the delivery method used: 'session' or 'direct'.
+    """
+    from ..channel import MessageChannel
+
+    user_session = await _session_manager.get_user_session(user_id)
+    session_channel = user_session.channel if user_session else channel
+
+    if user_session and _session_manager.is_session_active(user_session) and _agent_client:
+        agent_response = await _agent_client.send_message(
+            user_id=user_id,
+            session_id=user_session.agent_session_id,
+            message=f"INTERNAL_TASK_COMPLETE: {message}",
+        )
+        response_len = len(agent_response) if agent_response else 0
+        logger.info(
+            f"Agent response for task {task_id}: len={response_len}, "
+            f"preview={(agent_response or '')[:100]!r}"
+        )
+        if agent_response:
+            if session_channel == "discord" and _discord_sender:
+                await _discord_sender.send(user_id, agent_response)
+            elif session_channel == "telegram" and _telegram_sender:
+                await _telegram_sender.send(user_id, agent_response)
+            elif session_channel == "slack" and _slack_sender:
+                await _slack_sender.send(user_id, agent_response)
+            elif _sms_sender:
+                ch = MessageChannel.WHATSAPP if session_channel == "whatsapp" else MessageChannel.SMS
+                await _sms_sender.send(to_number=user_id, body=agent_response, channel=ch)
+            logger.info(f"Notification sent via {session_channel} after agent processing")
+            await _mark_task_notified(task_id)
+            return "session"
+        else:
+            logger.warning(
+                f"Agent returned empty response for task {task_id}; "
+                f"skipping send and NOT marking task as notified"
+            )
+            return "session_empty"
+
+    # No active session — send directly
+    if channel == "discord" and _discord_sender:
+        await _discord_sender.send(user_id, message)
+    elif channel == "telegram" and _telegram_sender:
+        await _telegram_sender.send(user_id, message)
+    elif channel == "slack" and _slack_sender:
+        await _slack_sender.send(user_id, message)
+    elif _sms_sender:
+        ch = MessageChannel.WHATSAPP if channel == "whatsapp" else MessageChannel.SMS
+        await _sms_sender.send(to_number=user_id, body=message, channel=ch)
+    logger.info(f"Notification sent directly via {channel}")
+    await _mark_task_notified(task_id)
+    return "direct"
+
+
 # ========== Endpoints ==========
 
 
@@ -107,58 +165,52 @@ async def trigger_task_review(
     payload: TaskReviewRequest,
     caller: str = Depends(verify_internal_request),
 ):
-    """Handle task completion notification from Task Worker.
-
-    When an async task completes, the Task Worker calls this endpoint
-    to trigger root agent review in a supervisor session.
+    """Handle task completion from Task Worker — deliver result directly to user.
 
     Security: Requires valid OIDC token from an allowed service account.
 
     Flow:
     1. Task Worker completes async task execution
-    2. Task Worker calls this endpoint with task result
-    3. This endpoint creates/gets supervisor session for the task
-    4. Sends internal message to root agent for review
-    5. Root agent reviews and either approves or requests correction
+    2. Task Worker calls this endpoint with the result
+    3. This endpoint fetches notification_channel from Firestore
+    4. Delivers result directly to the user (via active session or direct send)
     """
-    if not _session_manager or not _agent_client:
-        raise HTTPException(
-            status_code=503,
-            detail="Internal services not initialized"
-        )
+    if not _session_manager or not _firestore_client:
+        raise HTTPException(status_code=503, detail="Internal services not initialized")
 
     logger.info(
-        f"Task review triggered by {caller} for task {payload.task_id}, "
-        f"user {payload.user_id}"
+        f"Task completed, notifying user {payload.user_id} for task {payload.task_id} "
+        f"(caller={caller})"
     )
 
     try:
-        # Get or create supervisor session for this task
-        supervisor_session = await _session_manager.get_supervisor_session(
-            phone_number=payload.user_id,
+        # Fetch notification_channel from Firestore task doc
+        doc = await _firestore_client.collection("async_tasks").document(payload.task_id).get()
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail=f"Task {payload.task_id} not found")
+        channel = doc.to_dict().get("notification_channel", "sms")
+
+        if payload.error:
+            message = f"Your background task encountered an error: {payload.error}"
+        elif payload.result:
+            message = payload.result
+        else:
+            logger.warning(f"Task {payload.task_id} completed with no result or error")
+            return InternalResponse(status="skipped", message="No result to deliver")
+
+        method = await _deliver_notification(
+            user_id=payload.user_id,
             task_id=payload.task_id,
+            message=message,
+            channel=channel,
         )
 
-        # Build internal review message for root agent
-        review_message = _build_review_message(payload)
+        return InternalResponse(status="notified", message=f"Delivered via {method}")
 
-        response = await _agent_client.send_message(
-            user_id=f"{payload.user_id}_supervisor",
-            session_id=supervisor_session.agent_session_id,
-            message=review_message,
-        )
-
-        logger.info(
-            f"Review request sent to supervisor session {supervisor_session.agent_session_id}"
-        )
-
-        return InternalResponse(
-            status="review_triggered",
-            message=f"Review initiated in session {supervisor_session.agent_session_id}"
-        )
-
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to trigger task review: {e}")
+        logger.error(f"Failed to notify user for task {payload.task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -168,15 +220,11 @@ async def notify_user(
     payload: UserNotifyRequest,
     caller: str = Depends(verify_internal_request),
 ):
-    """Send notification to user after task approval.
-
-    Called when:
-    1. Root agent approves an async task result
-    2. A scheduled notification/reminder triggers
+    """Send a direct notification to a user (used for scheduled reminders).
 
     Delivery method:
     - If user has active session: Send via root agent in user session
-    - If no active session: Send directly via SMS
+    - If no active session: Send directly via the channel sender
 
     Security: Requires valid OIDC token from an allowed service account.
     """
@@ -189,94 +237,13 @@ async def notify_user(
     )
 
     try:
-        # Check if user has an active session
-        user_session = await _session_manager.get_user_session(payload.user_id)
-
-        session_channel = user_session.channel if user_session else payload.channel
-        logger.info(
-            f"notify_user session lookup: user_id={payload.user_id}, "
-            f"session_found={user_session is not None}, "
-            f"session_channel={session_channel!r}, payload_channel={payload.channel!r}, "
-            f"agent_session_id={getattr(user_session, 'agent_session_id', None)!r}"
+        method = await _deliver_notification(
+            user_id=payload.user_id,
+            task_id=payload.task_id,
+            message=payload.message,
+            channel=payload.channel,
         )
-
-        if user_session and _session_manager.is_session_active(user_session) and _agent_client:
-            agent_response = await _agent_client.send_message(
-                user_id=payload.user_id,
-                session_id=user_session.agent_session_id,
-                message=f"INTERNAL_TASK_COMPLETE: {payload.message}",
-            )
-            response_len = len(agent_response) if agent_response else 0
-            logger.info(
-                f"Agent response for task notification: len={response_len}, "
-                f"preview={(agent_response or '')[:100]!r}"
-            )
-
-            if agent_response:
-                from ..channel import MessageChannel
-                try:
-                    if session_channel == "discord" and _discord_sender:
-                        await _discord_sender.send(payload.user_id, agent_response)
-                    elif session_channel == "telegram" and _telegram_sender:
-                        await _telegram_sender.send(payload.user_id, agent_response)
-                    elif session_channel == "slack" and _slack_sender:
-                        await _slack_sender.send(payload.user_id, agent_response)
-                    elif _sms_sender:
-                        channel = MessageChannel.WHATSAPP if session_channel == "whatsapp" else MessageChannel.SMS
-                        await _sms_sender.send(
-                            to_number=payload.user_id,
-                            body=agent_response,
-                            channel=channel,
-                        )
-                except Exception as send_err:
-                    logger.exception(
-                        f"Sender failed for channel={session_channel!r}, "
-                        f"user_id={payload.user_id}: {send_err}"
-                    )
-                    raise
-                logger.info(f"Notification sent via {session_channel} after agent processing")
-                await _mark_task_notified(payload.task_id)
-            else:
-                logger.warning(
-                    f"Agent returned empty response for task {payload.task_id}; "
-                    f"skipping send and NOT marking task as notified"
-                )
-
-            return InternalResponse(
-                status="notified_via_session",
-                message="User notified through active session"
-            )
-
-        # No active session - send directly
-        from ..channel import MessageChannel
-        try:
-            if payload.channel == "discord" and _discord_sender:
-                await _discord_sender.send(payload.user_id, payload.message)
-            elif payload.channel == "telegram" and _telegram_sender:
-                await _telegram_sender.send(payload.user_id, payload.message)
-            elif payload.channel == "slack" and _slack_sender:
-                await _slack_sender.send(payload.user_id, payload.message)
-            elif _sms_sender:
-                channel = MessageChannel.WHATSAPP if payload.channel == "whatsapp" else MessageChannel.SMS
-                await _sms_sender.send(
-                    to_number=payload.user_id,
-                    body=payload.message,
-                    channel=channel,
-                )
-        except Exception as send_err:
-            logger.exception(
-                f"Direct sender failed for channel={payload.channel!r}, "
-                f"user_id={payload.user_id}: {send_err}"
-            )
-            raise
-
-        logger.info(f"Notification sent directly via {payload.channel}")
-        await _mark_task_notified(payload.task_id)
-
-        return InternalResponse(
-            status="notified_via_direct",
-            message=f"User notified via {payload.channel}"
-        )
+        return InternalResponse(status=f"notified_via_{method}", message=f"Delivered via {method}")
 
     except Exception as e:
         logger.error(f"Failed to notify user: {e}")
@@ -295,36 +262,3 @@ async def internal_health():
     )
 
 
-# ========== Helper Functions ==========
-
-
-def _build_review_message(payload: TaskReviewRequest) -> str:
-    """Build the internal review message for root agent.
-
-    The message includes a special prefix that the root agent recognizes
-    as an internal task review request.
-    """
-    parts = [
-        "INTERNAL_TASK_REVIEW",
-        f"Task ID: {payload.task_id}",
-        "",
-    ]
-
-    if payload.error:
-        parts.append(f"Status: FAILED")
-        parts.append(f"Error: {payload.error}")
-    else:
-        parts.append(f"Status: Awaiting Review")
-        if payload.result:
-            parts.append("")
-            parts.append("Result:")
-            parts.append(payload.result)
-
-    parts.append("")
-    parts.append("Use review_task_result(task_id) for full details.")
-    parts.append("Then use approve_task(task_id) or request_correction(task_id, feedback).")
-    parts.append("")
-    parts.append("IMPORTANT: This notification is NOT shown to the user.")
-    parts.append("You MUST notify the user of this notification and provide any information they should know.")
-
-    return "\n".join(parts)

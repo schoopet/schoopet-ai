@@ -67,47 +67,6 @@ class SessionInfo(BaseModel):
     is_new_session: bool = False
     opted_in: bool = False
     is_new_user: bool = False
-    session_type: str = Field(default="user", description="Session type: user or supervisor")
-    task_id: Optional[str] = Field(default=None, description="Associated task ID for supervisor sessions")
     channel: str = Field(default="sms", description="Communication channel: sms, whatsapp, slack, etc.")
 
 
-class SupervisorSessionDocument(BaseModel):
-    """Firestore document model for supervisor sessions.
-
-    Supervisor sessions are used by the root agent to review async task results
-    independently of user sessions.
-
-    Document ID in Firestore is: {normalized_phone}_supervisor_{task_id}
-    Collection: supervisor_sessions
-    """
-
-    phone_number: str = Field(..., description="E.164 format phone number")
-    agent_session_id: str = Field(..., description="Vertex AI Agent Engine session ID")
-    session_type: str = Field(default="supervisor", description="Session type identifier")
-    task_id: str = Field(..., description="Associated async task ID")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    last_activity: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    def to_firestore(self) -> dict:
-        """Convert to Firestore-compatible dictionary."""
-        return {
-            "phone_number": self.phone_number,
-            "agent_session_id": self.agent_session_id,
-            "session_type": self.session_type,
-            "task_id": self.task_id,
-            "created_at": self.created_at,
-            "last_activity": self.last_activity,
-        }
-
-    @classmethod
-    def from_firestore(cls, data: dict) -> "SupervisorSessionDocument":
-        """Create instance from Firestore document data."""
-        return cls(
-            phone_number=data["phone_number"],
-            agent_session_id=data["agent_session_id"],
-            session_type=data.get("session_type", "supervisor"),
-            task_id=data["task_id"],
-            created_at=data["created_at"],
-            last_activity=data.get("last_activity", data["created_at"]),
-        )
