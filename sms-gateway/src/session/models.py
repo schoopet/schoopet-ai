@@ -67,8 +67,6 @@ class SessionInfo(BaseModel):
     is_new_session: bool = False
     opted_in: bool = False
     is_new_user: bool = False
-    session_type: str = Field(default="user", description="Session type: user or supervisor")
-    task_id: Optional[str] = Field(default=None, description="Associated task ID for supervisor sessions")
     channel: str = Field(default="sms", description="Communication channel: sms, whatsapp, slack, etc.")
 
 

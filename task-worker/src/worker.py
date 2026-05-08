@@ -3,8 +3,7 @@
 This module handles:
 1. Loading task definitions from Firestore
 2. Delegating execution to the deployed Agent Engine (full tool access)
-3. Notifying SMS Gateway for root agent review
-4. Processing revision requests
+3. Notifying SMS Gateway to deliver result directly to user
 """
 import json
 import logging
@@ -122,11 +121,7 @@ class TaskWorker:
             result = await self._execute_task(task, prompt)
 
             # Update task with results
-            await self._update_task_result(
-                task_id=task_id,
-                result=result,
-                status="completed"
-            )
+            await self._update_task_result(task_id=task_id, result=result)
 
             # Notify SMS Gateway to deliver result to user
             await self._notify_user(
@@ -153,17 +148,6 @@ class TaskWorker:
             )
 
             return {"success": False, "error": str(e)}
-
-    async def _get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """Get task document from Firestore."""
-        firestore_client = self._get_firestore_client()
-        if not firestore_client:
-            return None
-
-        doc = firestore_client.collection("async_tasks").document(task_id).get()
-        if doc.exists:
-            return doc.to_dict()
-        return None
 
     async def _claim_task_for_execution(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Claim a task for execution with an optimistic concurrency check."""
@@ -207,34 +191,14 @@ class TaskWorker:
         task["started_at"] = started_at
         return {"claimed": True, "prior_status": status, "task": task}
 
-    async def _update_task_status(self, task_id: str, status: str):
-        """Update task status in Firestore."""
-        firestore_client = self._get_firestore_client()
-        if not firestore_client:
-            return
-
-        update_data = {
-            "status": status,
-        }
-
-        if status == "running":
-            update_data["started_at"] = datetime.now(timezone.utc)
-
-        firestore_client.collection("async_tasks").document(task_id).update(update_data)
-
-    async def _update_task_result(
-        self,
-        task_id: str,
-        result: str,
-        status: str
-    ):
+    async def _update_task_result(self, task_id: str, result: str):
         """Update task with execution result."""
         firestore_client = self._get_firestore_client()
         if not firestore_client:
             return
 
         firestore_client.collection("async_tasks").document(task_id).update({
-            "status": status,
+            "status": "completed",
             "result": result,
             "completed_at": datetime.now(timezone.utc),
         })

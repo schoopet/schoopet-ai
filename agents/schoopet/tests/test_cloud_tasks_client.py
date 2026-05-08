@@ -86,7 +86,7 @@ class TestCloudTasksClient:
         mock_client = MagicMock()
         mock_client.task_path.return_value = (
             "projects/test-project/locations/us-central1/queues/async-agent-tasks/"
-            "tasks/execute-task-123-rev-2"
+            "tasks/execute-task-123-initial"
         )
         mock_client.create_task.side_effect = _AlreadyExists("duplicate task")
         client = _make_client(mock_client)
@@ -95,7 +95,6 @@ class TestCloudTasksClient:
             result = client.create_task(
                 task_id="task-123",
                 user_id="user-123",
-                task_suffix="rev-2",
             )
 
         assert result == mock_client.task_path.return_value

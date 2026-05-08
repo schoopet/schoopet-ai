@@ -379,22 +379,5 @@ class SessionManager:
         )
 
     def is_session_active(self, session: Optional[SessionInfo]) -> bool:
-        """Check if a session is considered active (within timeout).
-
-        Args:
-            session: SessionInfo to check.
-
-        Returns:
-            True if session is active, False otherwise.
-        """
-        if not session or not session.agent_session_id:
-            return False
-
-        # For supervisor sessions, always consider them active
-        if session.session_type == "supervisor":
-            return True
-
-        # For user sessions, we'd need to check last_activity
-        # But since we're being called with SessionInfo (not Document),
-        # we'll assume it's active if it has a session ID
-        return True
+        """Check if a session is considered active."""
+        return bool(session and session.agent_session_id)

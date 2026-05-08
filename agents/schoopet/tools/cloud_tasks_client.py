@@ -110,7 +110,6 @@ class CloudTasksClient:
         task_id: str,
         user_id: str,
         schedule_time: Optional[datetime] = None,
-        task_suffix: str = "initial",
     ) -> Optional[str]:
         """Create a Cloud Task to execute an async task.
 
@@ -137,7 +136,7 @@ class CloudTasksClient:
 
         # Build the task payload
         payload = {"task_id": task_id, "user_id": user_id}
-        task_name = self._build_task_name("execute", f"{task_id}-{task_suffix}")
+        task_name = self._build_task_name("execute", f"{task_id}-initial")
 
         task = {
             "name": task_name,

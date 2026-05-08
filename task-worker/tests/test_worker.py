@@ -49,9 +49,7 @@ def task_worker(mock_firestore):
     worker = TaskWorker()
     with patch.dict("os.environ", {
         "GOOGLE_CLOUD_PROJECT": PROJECT_ID,
-        "AGENT_ENGINE_ID": "agent-engine-1",
         "PERSONAL_AGENT_ENGINE_ID": "personal-engine-1",
-        "TEAM_AGENT_ENGINE_ID": "team-engine-1",
         "SMS_GATEWAY_URL": "http://gateway"
     }):
         worker._ensure_initialized()
@@ -119,7 +117,7 @@ class TestTaskWorker:
             "status": "pending",
             "task_type": "research",
             "instruction": "Research AI",
-            "agent_type": "personal",
+
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
@@ -146,7 +144,7 @@ class TestTaskWorker:
         doc_ref.update.assert_any_call({
             "status": "completed",
             "result": "AI Result",
-            "completed_at": ANY
+            "completed_at": ANY,
         })
 
         # Verify notification
@@ -195,7 +193,7 @@ class TestTaskWorker:
             "status": "pending",
             "task_type": "research",
             "instruction": "Research AI",
-            "agent_type": "personal",
+
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
@@ -225,8 +223,8 @@ class TestTaskWorker:
         })
 
     @pytest.mark.asyncio
-    async def test_execute_task_defaults_to_personal_engine(self, task_worker, mock_firestore):
-        """Tasks without agent_type should default to personal engine."""
+    async def test_execute_task_uses_personal_engine(self, task_worker, mock_firestore):
+        """Tasks always execute on the personal engine."""
         mock_doc = MagicMock()
         mock_doc.exists = True
         mock_doc.update_time = object()
@@ -236,7 +234,6 @@ class TestTaskWorker:
             "status": "pending",
             "task_type": "reminder",
             "instruction": "Remind user",
-            # No agent_type field — should default to personal
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
@@ -276,7 +273,7 @@ class TestTaskWorker:
             "status": "pending",
             "task_type": "research",
             "instruction": "Research AI",
-            "agent_type": "personal",
+
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
@@ -299,7 +296,7 @@ class TestTaskWorker:
             "status": "pending",
             "task_type": "research",
             "instruction": "DEEP_RESEARCH_TASK: find restaurants",
-            "agent_type": "personal",
+
             "allowed_resource_ids": ["sheet-abc", "doc-xyz"],
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
@@ -336,7 +333,7 @@ class TestTaskWorker:
             "status": "pending",
             "task_type": "research",
             "instruction": "Research AI",
-            "agent_type": "personal",
+
         }
         mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
 
@@ -369,7 +366,7 @@ class TestTaskWorker:
             "status": "pending",
             "task_type": "research",
             "instruction": "Research AI",
-            "agent_type": "personal",
+
         }
 
         claimed_doc = MagicMock()
@@ -380,7 +377,7 @@ class TestTaskWorker:
             "status": "running",
             "task_type": "research",
             "instruction": "Research AI",
-            "agent_type": "personal",
+
         }
 
         doc_ref = mock_firestore.collection.return_value.document.return_value

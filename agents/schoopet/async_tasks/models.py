@@ -10,10 +10,9 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
-# Single source of truth for valid notification channels and agent types.
+# Single source of truth for valid notification channels.
 # Add new channels here when adding a new messaging integration.
 VALID_CHANNELS = {"sms", "whatsapp", "telegram", "discord", "slack", "email"}
-VALID_AGENT_TYPES = {"personal", "team"}
 
 
 class TaskStatus(str, Enum):
@@ -57,9 +56,6 @@ class AsyncTaskDocument(BaseModel):
     )
 
     # Routing
-    agent_type: str = Field(
-        default="personal", description="Agent engine to use: personal or team"
-    )
     notification_channel: str = Field(
         default="sms", description="Channel to notify user on completion: sms, discord, slack, etc."
     )
@@ -67,14 +63,6 @@ class AsyncTaskDocument(BaseModel):
     allowed_resource_ids: List[str] = Field(
         default_factory=list,
         description="Resource IDs pre-authorized for offline access (flat list of IDs)",
-    )
-
-    # Session tracking
-    user_session_id: Optional[str] = Field(
-        default=None, description="Original user session for context/notification"
-    )
-    async_session_id: Optional[str] = Field(
-        default=None, description="Async agent's working session ID"
     )
 
     # Status & Results
@@ -107,7 +95,6 @@ class AsyncTaskDocument(BaseModel):
             "task_type": self.task_type,
             "instruction": self.instruction,
             "context": self.context,
-            "agent_type": self.agent_type,
             "notification_channel": self.notification_channel,
             "status": self.status.value,
             "created_at": self.created_at,
@@ -120,10 +107,6 @@ class AsyncTaskDocument(BaseModel):
             data["scheduled_at"] = self.scheduled_at
         if self.cloud_task_name:
             data["cloud_task_name"] = self.cloud_task_name
-        if self.user_session_id:
-            data["user_session_id"] = self.user_session_id
-        if self.async_session_id:
-            data["async_session_id"] = self.async_session_id
         if self.result:
             data["result"] = self.result
         if self.error:
@@ -153,10 +136,7 @@ class AsyncTaskDocument(BaseModel):
             allowed_resource_ids=data.get("allowed_resource_ids", []),
             scheduled_at=data.get("scheduled_at"),
             cloud_task_name=data.get("cloud_task_name"),
-            agent_type=data.get("agent_type", "personal"),
             notification_channel=data.get("notification_channel", "sms"),
-            user_session_id=data.get("user_session_id"),
-            async_session_id=data.get("async_session_id"),
             status=TaskStatus(raw_status),
             result=data.get("result"),
             error=data.get("error"),
@@ -165,10 +145,6 @@ class AsyncTaskDocument(BaseModel):
             completed_at=data.get("completed_at"),
             notified_at=data.get("notified_at"),
         )
-
-    def can_execute(self) -> bool:
-        """Check if task can be executed."""
-        return self.status == TaskStatus.PENDING
 
     def can_cancel(self) -> bool:
         """Check if task can be cancelled."""

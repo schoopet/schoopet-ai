@@ -60,7 +60,6 @@ class TaskReviewRequest(BaseModel):
 
     task_id: str = Field(..., description="Task ID")
     user_id: str = Field(..., description="User's phone number")
-    agent_type: str = Field(default="personal", description="Kept for backward compat, ignored")
     result: Optional[str] = Field(default=None, description="Task result")
     error: Optional[str] = Field(default=None, description="Error if task failed")
 

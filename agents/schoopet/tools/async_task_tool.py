@@ -86,19 +86,6 @@ class AsyncTaskTool:
         )
         return "sms"
 
-    def _get_session_id(self, tool_context: Optional[ToolContext]) -> Optional[str]:
-        """Extract session_id from tool context safely."""
-        if not tool_context:
-            return None
-        # Try different attribute names based on ADK version
-        if hasattr(tool_context, "session_id") and tool_context.session_id:
-            return tool_context.session_id
-        if hasattr(tool_context, "_invocation_context"):
-            invocation = tool_context._invocation_context
-            if hasattr(invocation, "session") and hasattr(invocation.session, "id"):
-                return invocation.session.id
-        return None
-
     def create_async_task(
         self,
         task_type: str,
@@ -114,7 +101,7 @@ class AsyncTaskTool:
 
         Use this to delegate long-running tasks or schedule future tasks like reminders.
         The task runs on the deployed Agent Engine with full tool access (calendar, search,
-        drive, sheets, memory). You will be notified when the task completes for your review.
+        drive, sheets, memory). You will be notified when the task completes.
 
         Args:
             task_type: Type of task - one of:
@@ -174,9 +161,6 @@ class AsyncTaskTool:
         # Generate task ID
         task_id = str(uuid.uuid4())
 
-        # Get current session ID for context
-        session_id = self._get_session_id(tool_context)
-
         # Determine channel from session state
         notification_channel = self._get_channel(tool_context)
 
@@ -190,7 +174,6 @@ class AsyncTaskTool:
             allowed_resource_ids=allowed_resource_ids or [],
             scheduled_at=scheduled_at_dt,
             notification_channel=notification_channel,
-            user_session_id=session_id,
             status=TaskStatus.SCHEDULED if scheduled_at_dt else TaskStatus.PENDING,
         )
 
