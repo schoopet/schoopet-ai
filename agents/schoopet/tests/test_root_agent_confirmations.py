@@ -6,8 +6,6 @@ from pathlib import Path
 # Tools that keep require_confirmation=True (one-shot, non-repeatable)
 REQUIRE_CONFIRMATION_BOOL = {
     "cancel_task",
-    "approve_task",
-    "request_correction",
     "create_calendar_event",
     "update_calendar_event",
     "save_file_to_drive",
@@ -42,7 +40,6 @@ NO_CONFIRMATION = {
     "create_async_task",
     "check_task_status",
     "list_pending_tasks",
-    "review_task_result",
     "list_calendar_events",
     "get_calendar_status",
     "list_drive_files",
