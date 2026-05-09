@@ -249,6 +249,48 @@ class TestTaskReview:
         discord_sender.send.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_discord_channel_task_result_includes_context_for_agent(
+        self, agent_client, session_manager, discord_sender, mock_firestore
+    ):
+        """Scoped Discord task completions carry channel context into the agent turn."""
+        mock_firestore.collection.return_value.document.return_value.get = AsyncMock(
+            return_value=MagicMock(
+                exists=True,
+                to_dict=MagicMock(
+                    return_value={
+                        "notification_channel": "discord",
+                        "notification_session_scope": "discord:guild:g1:channel:c1",
+                        "discord_channel_id": "c1",
+                        "discord_channel_name": "project-alpha",
+                    }
+                ),
+            )
+        )
+        session_manager.get_user_session = AsyncMock(
+            return_value=_user_session(channel="discord")
+        )
+        session_manager.is_session_active = MagicMock(return_value=True)
+        agent_client.extract_text = MagicMock(return_value="Agent response")
+
+        init_internal_services(
+            session_manager=session_manager,
+            agent_client=agent_client,
+            discord_sender=discord_sender,
+            firestore_client=mock_firestore,
+        )
+
+        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Done.")
+        await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
+
+        message = agent_client.send_message_events.await_args.kwargs["message"]
+        assert "Discord context:" in message
+        assert "session_scope: discord:guild:g1:channel:c1" in message
+        assert "channel_id: c1" in message
+        assert "channel_name: project-alpha" in message
+        assert "INTERNAL_TASK_COMPLETE: Done." in message
+        discord_sender.send_channel.assert_awaited_once_with("c1", "Agent response")
+
+    @pytest.mark.asyncio
     async def test_marks_task_notified_after_delivery(
         self, agent_client, session_manager, discord_sender, mock_firestore
     ):

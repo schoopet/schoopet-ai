@@ -71,6 +71,7 @@ class UserNotifyRequest(BaseModel):
     channel: str = Field(default="discord", description="Notification channel (discord/telegram/slack)")
     notification_session_scope: str = Field(default="", description="Optional scoped session for notification")
     discord_channel_id: str = Field(default="", description="Optional Discord channel target")
+    discord_channel_name: str = Field(default="", description="Optional Discord channel name")
 
 
 class InternalResponse(BaseModel):
@@ -126,6 +127,28 @@ async def _send_direct_notification(
     return channel
 
 
+def _format_agent_notification_message(
+    message: str,
+    channel: str,
+    notification_session_scope: str = "",
+    discord_channel_id: str = "",
+    discord_channel_name: str = "",
+) -> str:
+    """Build the notification prompt sent into an active agent session."""
+    if channel != "discord" or not (notification_session_scope or discord_channel_id or discord_channel_name):
+        return f"INTERNAL_TASK_COMPLETE: {message}"
+
+    lines = ["Discord context:"]
+    if notification_session_scope:
+        lines.append(f"session_scope: {notification_session_scope}")
+    if discord_channel_id:
+        lines.append(f"channel_id: {discord_channel_id}")
+    if discord_channel_name:
+        lines.append(f"channel_name: {discord_channel_name}")
+    lines.extend(["", f"INTERNAL_TASK_COMPLETE: {message}"])
+    return "\n".join(lines)
+
+
 async def _deliver_notification(
     user_id: str,
     task_id: str,
@@ -133,6 +156,7 @@ async def _deliver_notification(
     channel: str,
     notification_session_scope: str = "",
     discord_channel_id: str = "",
+    discord_channel_name: str = "",
 ) -> str:
     """Send a message to the user and mark the task notified.
 
@@ -154,7 +178,13 @@ async def _deliver_notification(
             events = await _agent_client.send_message_events(
                 user_id=user_id,
                 session_id=user_session.agent_session_id,
-                message=f"INTERNAL_TASK_COMPLETE: {message}",
+                message=_format_agent_notification_message(
+                    message,
+                    channel=channel,
+                    notification_session_scope=notification_session_scope,
+                    discord_channel_id=discord_channel_id,
+                    discord_channel_name=discord_channel_name,
+                ),
             )
         except asyncio.TimeoutError:
             logger.warning(f"Agent timeout delivering task {task_id}, falling back to direct send")
@@ -244,6 +274,7 @@ async def trigger_task_review(
         channel = task_data.get("notification_channel", "discord")
         notification_session_scope = task_data.get("notification_session_scope", "")
         discord_channel_id = task_data.get("discord_channel_id", "")
+        discord_channel_name = task_data.get("discord_channel_name", "")
 
         if payload.error:
             message = f"Your background task encountered an error: {payload.error}"
@@ -260,6 +291,7 @@ async def trigger_task_review(
             channel=channel,
             notification_session_scope=notification_session_scope,
             discord_channel_id=discord_channel_id,
+            discord_channel_name=discord_channel_name,
         )
 
         return InternalResponse(status="notified", message=f"Delivered via {method}")
@@ -301,6 +333,7 @@ async def notify_user(
             channel=payload.channel,
             notification_session_scope=payload.notification_session_scope,
             discord_channel_id=payload.discord_channel_id,
+            discord_channel_name=payload.discord_channel_name,
         )
         return InternalResponse(status=f"notified_via_{method}", message=f"Delivered via {method}")
 
