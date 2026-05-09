@@ -19,8 +19,13 @@ import time
 import discord
 from google.genai import types
 
+from .context import (
+    DiscordContext,
+    context_from_discord_channel,
+    wrap_message_with_discord_context,
+)
 from .sender import _split_message
-from ..messages import RATE_LIMIT_MSG, WELCOME_MSG
+from ..messages import RATE_LIMIT_MSG
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +50,27 @@ def _summarize_confirmation_args(args: dict) -> str:
 def _format_confirmation_prompt(confirmation) -> str:
     args = _summarize_confirmation_args(confirmation.tool_args)
     return f"Approve this action?\n{confirmation.tool_name}({args})"
+
+
+async def _get_pending_confirmation(session_manager, user_id: str, pending_id: str, session_scope: str = ""):
+    if session_scope:
+        return await session_manager.get_pending_confirmation(
+            user_id,
+            pending_id,
+            session_scope=session_scope,
+        )
+    return await session_manager.get_pending_confirmation(user_id, pending_id)
+
+
+async def _clear_pending_confirmation(session_manager, user_id: str, pending_id: str, session_scope: str = ""):
+    if session_scope:
+        await session_manager.clear_pending_confirmation(
+            user_id,
+            pending_id,
+            session_scope=session_scope,
+        )
+        return
+    await session_manager.clear_pending_confirmation(user_id, pending_id)
 
 
 async def _build_discord_message_content(
@@ -96,11 +122,18 @@ async def _build_discord_message_content(
 class _ConfirmationView(discord.ui.View):
     """Discord buttons for resolving one pending ADK confirmation."""
 
-    def __init__(self, gateway: "SchoopetGateway", user_id: str, pending_id: str):
+    def __init__(
+        self,
+        gateway: "SchoopetGateway",
+        user_id: str,
+        pending_id: str,
+        session_scope: str = "",
+    ):
         super().__init__(timeout=15 * 60)
         self._gateway = gateway
         self._user_id = user_id
         self._pending_id = pending_id
+        self._session_scope = session_scope
 
         approve = discord.ui.Button(
             label="Approve",
@@ -124,6 +157,7 @@ class _ConfirmationView(discord.ui.View):
             pending_id=self._pending_id,
             confirmed=True,
             view=self,
+            session_scope=self._session_scope,
         )
 
     async def _reject(self, interaction: discord.Interaction) -> None:
@@ -133,6 +167,7 @@ class _ConfirmationView(discord.ui.View):
             pending_id=self._pending_id,
             confirmed=False,
             view=self,
+            session_scope=self._session_scope,
         )
 
     def disable_buttons(self) -> None:
@@ -162,11 +197,7 @@ class SchoopetGateway(discord.Client):
         if message.author == self.user or message.author.bot:
             return
 
-        is_dm = isinstance(message.channel, discord.DMChannel)
         is_mention = self.user in message.mentions
-
-        if not is_dm and not is_mention:
-            return
 
         # Strip @mention prefix from server messages
         text = message.content
@@ -184,7 +215,8 @@ class SchoopetGateway(discord.Client):
         user_id = str(message.author.id)
         logger.info(
             f"Discord gateway message: user={user_id} "
-            f"source={'DM' if is_dm else 'mention'} len={len(text)} "
+            f"scope={context_from_discord_channel(message.channel).session_scope} "
+            f"len={len(text)} "
             f"attachments={len(message.attachments)}"
         )
 
@@ -210,7 +242,12 @@ class SchoopetGateway(discord.Client):
 
         typing_task = asyncio.create_task(_keep_typing())
         try:
-            await self._handle_gateway_message(user_id, content, message.channel)
+            await self._handle_gateway_message(
+                user_id,
+                content,
+                message.channel,
+                discord_context=context_from_discord_channel(message.channel),
+            )
         finally:
             typing_task.cancel()
 
@@ -223,9 +260,11 @@ class SchoopetGateway(discord.Client):
         user_id: str,
         message: str | types.Content,
         channel,
+        discord_context: DiscordContext | None = None,
     ) -> None:
-        """Event-aware Discord processing for DMs and mentions."""
+        """Event-aware Discord processing for DMs and guild channels."""
         start_time = time.time()
+        discord_context = discord_context or context_from_discord_channel(channel)
 
         try:
             if self._rate_limiter:
@@ -238,14 +277,15 @@ class SchoopetGateway(discord.Client):
                     return
 
             session_info = await self._session_manager.get_or_create_session(
-                user_id, channel="discord"
+                user_id,
+                channel="discord",
+                session_scope=discord_context.session_scope,
+                state_extra=discord_context.state_extra,
             )
-            if session_info.is_new_user:
-                await self._send_channel_text(channel, WELCOME_MSG)
-
             logger.info(
                 f"Forwarding gateway message to agent for Discord user {user_id}: "
                 f"session={session_info.agent_session_id}, "
+                f"scope={discord_context.session_scope}, "
                 f"is_new_session={session_info.is_new_session}"
             )
 
@@ -253,7 +293,7 @@ class SchoopetGateway(discord.Client):
                 events = await self._agent_client.send_message_events(
                     user_id=user_id,
                     session_id=session_info.agent_session_id,
-                    message=message,
+                    message=wrap_message_with_discord_context(message, discord_context),
                 )
             except asyncio.TimeoutError:
                 logger.error(f"Agent timeout for Discord gateway user {user_id}")
@@ -271,12 +311,22 @@ class SchoopetGateway(discord.Client):
                         confirmation=confirmation,
                         session_id=session_info.agent_session_id,
                         channel="discord",
+                        session_scope=discord_context.session_scope,
                     )
                     await channel.send(
                         _format_confirmation_prompt(confirmation),
-                        view=_ConfirmationView(self, user_id, pending["id"]),
+                        view=_ConfirmationView(
+                            self,
+                            user_id,
+                            pending["id"],
+                            session_scope=discord_context.session_scope,
+                        ),
                     )
-                await self._session_manager.update_last_activity(user_id, channel="discord")
+                await self._session_manager.update_last_activity(
+                    user_id,
+                    channel="discord",
+                    session_scope=discord_context.session_scope,
+                )
                 return
 
             response = self._agent_client.extract_text(events)
@@ -288,7 +338,11 @@ class SchoopetGateway(discord.Client):
                 return
 
             await self._send_channel_text(channel, response)
-            await self._session_manager.update_last_activity(user_id, channel="discord")
+            await self._session_manager.update_last_activity(
+                user_id,
+                channel="discord",
+                session_scope=discord_context.session_scope,
+            )
 
             processing_time = (time.time() - start_time) * 1000
             logger.info(
@@ -306,6 +360,7 @@ class SchoopetGateway(discord.Client):
         pending_id: str,
         confirmed: bool,
         view: _ConfirmationView,
+        session_scope: str = "",
     ) -> None:
         """Resolve a stored ADK confirmation from a Discord button click."""
         clicking_user_id = str(interaction.user.id)
@@ -316,7 +371,12 @@ class SchoopetGateway(discord.Client):
             )
             return
 
-        pending = await self._session_manager.get_pending_confirmation(user_id, pending_id)
+        pending = await _get_pending_confirmation(
+            self._session_manager,
+            user_id,
+            pending_id,
+            session_scope=session_scope,
+        )
         if not pending:
             view.disable_buttons()
             await interaction.response.edit_message(view=view)
@@ -330,7 +390,12 @@ class SchoopetGateway(discord.Client):
                 confirmation_function_call_id=pending["adk_confirmation_function_call_id"],
                 confirmed=confirmed,
             )
-            await self._session_manager.clear_pending_confirmation(user_id, pending_id)
+            await _clear_pending_confirmation(
+                self._session_manager,
+                user_id,
+                pending_id,
+                session_scope=session_scope,
+            )
             view.disable_buttons()
             await interaction.response.edit_message(view=view)
 
@@ -342,17 +407,27 @@ class SchoopetGateway(discord.Client):
                         confirmation=conf,
                         session_id=pending["agent_session_id"],
                         channel="discord",
+                        session_scope=session_scope,
                     )
                     await interaction.followup.send(
                         _format_confirmation_prompt(conf),
-                        view=_ConfirmationView(self, user_id, new_pending["id"]),
+                        view=_ConfirmationView(
+                            self,
+                            user_id,
+                            new_pending["id"],
+                            session_scope=session_scope,
+                        ),
                     )
             else:
                 response = self._agent_client.extract_text(events)
                 if response:
                     for chunk in _split_message(response):
                         await interaction.followup.send(chunk)
-            await self._session_manager.update_last_activity(user_id, channel="discord")
+            await self._session_manager.update_last_activity(
+                user_id,
+                channel="discord",
+                session_scope=session_scope,
+            )
         except Exception as e:
             logger.exception(f"Failed to resolve Discord confirmation for {user_id}: {e}")
             await interaction.response.send_message(

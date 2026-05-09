@@ -89,6 +89,7 @@ For each meaningful conversation produce ONE summary fact that captures:
 - WHEN: rough timeframe (today, yesterday morning, last week)
 - TOPIC: what the conversation was about
 - OUTCOME / OPEN THREAD: decisions made, tasks created or scheduled, questions left unanswered, follow-ups the user is expecting
+- DISCORD CHANNEL: if the transcript includes Discord context with session_scope and channel_name, preserve it at the start of channel-specific summaries using `[session_scope | #channel_name]`.
 
 Format the summary as a single dense sentence or two — enough that re-reading it makes the prior session feel continuous. Do NOT generate summaries for trivial exchanges (greetings only, single-question lookups with no follow-up). Do NOT duplicate facts already captured by the other topics — this is for narrative continuity, not atomic facts."""
                     }}

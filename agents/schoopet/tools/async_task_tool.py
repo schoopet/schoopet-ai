@@ -87,6 +87,33 @@ class AsyncTaskTool:
         )
         return "sms"
 
+    def _get_notification_context(self, tool_context: Optional[ToolContext]) -> Dict[str, str]:
+        """Extract optional scoped notification metadata from session state."""
+        if not tool_context:
+            return {}
+        try:
+            state = tool_context.state or {}
+        except Exception:
+            return {}
+
+        channel = state.get("channel")
+        if channel != "discord":
+            return {}
+
+        session_scope = str(state.get("session_scope") or "")
+        discord_channel_id = str(state.get("discord_channel_id") or "")
+        discord_channel_name = str(state.get("discord_channel_name") or "")
+
+        data: Dict[str, str] = {}
+        if session_scope:
+            data["notification_session_scope"] = session_scope
+        if discord_channel_id:
+            data["notification_target_type"] = "discord_channel"
+            data["discord_channel_id"] = discord_channel_id
+        if discord_channel_name:
+            data["discord_channel_name"] = discord_channel_name
+        return data
+
     def create_async_task(
         self,
         task_type: str,
@@ -164,6 +191,7 @@ class AsyncTaskTool:
 
         # Determine channel from session state
         notification_channel = self._get_channel(tool_context)
+        notification_context = self._get_notification_context(tool_context)
 
         # Create task document
         task = AsyncTaskDocument(
@@ -175,6 +203,10 @@ class AsyncTaskTool:
             allowed_resource_ids=allowed_resource_ids or [],
             scheduled_at=scheduled_at_dt,
             notification_channel=notification_channel,
+            notification_session_scope=notification_context.get("notification_session_scope", ""),
+            notification_target_type=notification_context.get("notification_target_type", ""),
+            discord_channel_id=notification_context.get("discord_channel_id", ""),
+            discord_channel_name=notification_context.get("discord_channel_name", ""),
             status=TaskStatus.SCHEDULED if scheduled_at_dt else TaskStatus.PENDING,
         )
 

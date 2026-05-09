@@ -69,6 +69,8 @@ class UserNotifyRequest(BaseModel):
     task_id: str = Field(..., description="Task ID that was completed")
     message: str = Field(..., description="Message to send to user")
     channel: str = Field(default="discord", description="Notification channel (discord/telegram/slack)")
+    notification_session_scope: str = Field(default="", description="Optional scoped session for notification")
+    discord_channel_id: str = Field(default="", description="Optional Discord channel target")
 
 
 class InternalResponse(BaseModel):
@@ -95,7 +97,43 @@ async def _mark_task_notified(task_id: str) -> None:
         logger.warning(f"Failed to mark task {task_id} as notified: {e}")
 
 
-async def _deliver_notification(user_id: str, task_id: str, message: str, channel: str) -> str:
+async def _send_direct_notification(
+    user_id: str,
+    message: str,
+    channel: str,
+    discord_channel_id: str = "",
+) -> str:
+    """Deliver without agent processing and return the concrete channel used."""
+    if channel == "discord" and _discord_sender:
+        if discord_channel_id and hasattr(_discord_sender, "send_channel"):
+            try:
+                await _discord_sender.send_channel(discord_channel_id, message)
+                return "discord_channel"
+            except Exception as e:
+                logger.warning(
+                    f"Discord channel delivery failed for {discord_channel_id}; "
+                    f"falling back to DM: {e}"
+                )
+        await _discord_sender.send(user_id, message)
+        return "discord_dm"
+    if channel == "telegram" and _telegram_sender:
+        await _telegram_sender.send(user_id, message)
+        return "telegram"
+    if channel == "slack" and _slack_sender:
+        await _slack_sender.send(user_id, message)
+        return "slack"
+    logger.warning(f"No sender available for channel {channel!r}")
+    return channel
+
+
+async def _deliver_notification(
+    user_id: str,
+    task_id: str,
+    message: str,
+    channel: str,
+    notification_session_scope: str = "",
+    discord_channel_id: str = "",
+) -> str:
     """Send a message to the user and mark the task notified.
 
     If the user has an active session, routes through the agent so the
@@ -105,7 +143,10 @@ async def _deliver_notification(user_id: str, task_id: str, message: str, channe
 
     Returns the delivery method used: 'session' or 'direct'.
     """
-    user_session = await _session_manager.get_user_session(user_id)
+    user_session = await _session_manager.get_user_session(
+        user_id,
+        session_scope=notification_session_scope or None,
+    )
     session_channel = user_session.channel if user_session else channel
 
     if user_session and _session_manager.is_session_active(user_session) and _agent_client:
@@ -134,7 +175,12 @@ async def _deliver_notification(user_id: str, task_id: str, message: str, channe
                 # non-interactive channels like 'email' that have no outbound sender.
                 effective_channel = session_channel if session_channel in ("discord", "telegram", "slack") else channel
                 if effective_channel == "discord" and _discord_sender:
-                    await _discord_sender.send(user_id, agent_response)
+                    await _send_direct_notification(
+                        user_id,
+                        agent_response,
+                        effective_channel,
+                        discord_channel_id=discord_channel_id,
+                    )
                 elif effective_channel == "telegram" and _telegram_sender:
                     await _telegram_sender.send(user_id, agent_response)
                 elif effective_channel == "slack" and _slack_sender:
@@ -151,15 +197,13 @@ async def _deliver_notification(user_id: str, task_id: str, message: str, channe
                 # Fall through to direct send
 
     # No active session OR empty agent response OR confirmations blocked text — send directly
-    if channel == "discord" and _discord_sender:
-        await _discord_sender.send(user_id, message)
-    elif channel == "telegram" and _telegram_sender:
-        await _telegram_sender.send(user_id, message)
-    elif channel == "slack" and _slack_sender:
-        await _slack_sender.send(user_id, message)
-    else:
-        logger.warning(f"No sender available for channel {channel!r}")
-    logger.info(f"Notification sent directly via {channel}")
+    direct_channel = await _send_direct_notification(
+        user_id,
+        message,
+        channel,
+        discord_channel_id=discord_channel_id,
+    )
+    logger.info(f"Notification sent directly via {direct_channel}")
     await _mark_task_notified(task_id)
     return "direct"
 
@@ -196,7 +240,10 @@ async def trigger_task_review(
         doc = await _firestore_client.collection("async_tasks").document(payload.task_id).get()
         if not doc.exists:
             raise HTTPException(status_code=404, detail=f"Task {payload.task_id} not found")
-        channel = doc.to_dict().get("notification_channel", "discord")
+        task_data = doc.to_dict()
+        channel = task_data.get("notification_channel", "discord")
+        notification_session_scope = task_data.get("notification_session_scope", "")
+        discord_channel_id = task_data.get("discord_channel_id", "")
 
         if payload.error:
             message = f"Your background task encountered an error: {payload.error}"
@@ -211,6 +258,8 @@ async def trigger_task_review(
             task_id=payload.task_id,
             message=message,
             channel=channel,
+            notification_session_scope=notification_session_scope,
+            discord_channel_id=discord_channel_id,
         )
 
         return InternalResponse(status="notified", message=f"Delivered via {method}")
@@ -250,6 +299,8 @@ async def notify_user(
             task_id=payload.task_id,
             message=payload.message,
             channel=payload.channel,
+            notification_session_scope=payload.notification_session_scope,
+            discord_channel_id=payload.discord_channel_id,
         )
         return InternalResponse(status=f"notified_via_{method}", message=f"Delivered via {method}")
 
@@ -268,5 +319,3 @@ async def internal_health():
         status="healthy",
         message="Internal endpoints operational"
     )
-
-

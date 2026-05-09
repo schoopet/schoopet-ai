@@ -59,6 +59,18 @@ class AsyncTaskDocument(BaseModel):
     notification_channel: str = Field(
         default="sms", description="Channel to notify user on completion: sms, discord, slack, etc."
     )
+    notification_session_scope: str = Field(
+        default="", description="Optional scoped session to use for completion notification"
+    )
+    notification_target_type: str = Field(
+        default="", description="Optional target type such as discord_channel"
+    )
+    discord_channel_id: str = Field(
+        default="", description="Discord channel ID for channel-scoped notifications"
+    )
+    discord_channel_name: str = Field(
+        default="", description="Discord channel name for channel-scoped notifications"
+    )
 
     allowed_resource_ids: List[str] = Field(
         default_factory=list,
@@ -96,6 +108,10 @@ class AsyncTaskDocument(BaseModel):
             "instruction": self.instruction,
             "context": self.context,
             "notification_channel": self.notification_channel,
+            "notification_session_scope": self.notification_session_scope,
+            "notification_target_type": self.notification_target_type,
+            "discord_channel_id": self.discord_channel_id,
+            "discord_channel_name": self.discord_channel_name,
             "status": self.status.value,
             "created_at": self.created_at,
         }
@@ -137,6 +153,10 @@ class AsyncTaskDocument(BaseModel):
             scheduled_at=data.get("scheduled_at"),
             cloud_task_name=data.get("cloud_task_name"),
             notification_channel=data.get("notification_channel", "sms"),
+            notification_session_scope=data.get("notification_session_scope", ""),
+            notification_target_type=data.get("notification_target_type", ""),
+            discord_channel_id=data.get("discord_channel_id", ""),
+            discord_channel_name=data.get("discord_channel_name", ""),
             status=TaskStatus(raw_status),
             result=data.get("result"),
             error=data.get("error"),
@@ -153,5 +173,4 @@ class AsyncTaskDocument(BaseModel):
             TaskStatus.SCHEDULED,
             TaskStatus.RUNNING,
         ]
-
 

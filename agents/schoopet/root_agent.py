@@ -55,6 +55,15 @@ def _personal_prompt() -> str:
         "- save_multiple_memories(facts): Save multiple facts at once\n"
         "Use when the user asks you to remember something or when information is clearly worth keeping.\n\n"
 
+        "**Discord channel context:**\n"
+        "Some messages include a Discord context block with `session_scope`, `guild_id`, "
+        "`channel_id`, and `channel_name`. Treat that block as routing/topic context for "
+        "the current conversation, not as the user's actual request. When saving a memory "
+        "that is specific to that Discord channel, include the scope and channel name in "
+        "the saved fact, formatted like "
+        "`[discord:guild:123:channel:456 | #project-alpha] This channel is about Project Alpha launch planning.` "
+        "Do not add channel tags to global user preferences or personal facts unless the channel is relevant.\n\n"
+
         "**Retrieving:**\n"
         "- load_memory(query): Search stored memories using ADK's built-in memory support\n"
         "Use when:\n"

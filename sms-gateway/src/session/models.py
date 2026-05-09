@@ -19,6 +19,8 @@ class SessionDocument(BaseModel):
     opted_in: bool = Field(default=False, description="Whether user has opted in to receive messages")
     opt_in_requested_at: Optional[datetime] = Field(default=None, description="When opt-in was first requested")
     channel: str = Field(default="sms", description="Last used channel: sms, whatsapp, slack, etc.")
+    session_scope: str = Field(default="", description="Optional channel/thread scope for scoped sessions")
+    state_extra: dict = Field(default_factory=dict, description="Extra state passed to Agent Engine session")
     slack_team_id: Optional[str] = Field(default=None, description="Slack workspace team_id")
     pending_confirmations: list[dict] = Field(default_factory=list, description="Pending ADK confirmation states")
 
@@ -32,6 +34,8 @@ class SessionDocument(BaseModel):
             "message_count": self.message_count,
             "opted_in": self.opted_in,
             "channel": self.channel,
+            "session_scope": self.session_scope,
+            "state_extra": self.state_extra,
         }
         if self.opt_in_requested_at:
             data["opt_in_requested_at"] = self.opt_in_requested_at
@@ -54,6 +58,8 @@ class SessionDocument(BaseModel):
             opted_in=data.get("opted_in", False),
             opt_in_requested_at=data.get("opt_in_requested_at"),
             channel=data.get("channel", "sms"),
+            session_scope=data.get("session_scope", ""),
+            state_extra=data.get("state_extra", {}),
             slack_team_id=data.get("slack_team_id"),
             pending_confirmations=data.get("pending_confirmations", []),
         )
@@ -68,5 +74,6 @@ class SessionInfo(BaseModel):
     opted_in: bool = False
     is_new_user: bool = False
     channel: str = Field(default="sms", description="Communication channel: sms, whatsapp, slack, etc.")
-
+    session_scope: str = Field(default="", description="Optional channel/thread scope for scoped sessions")
+    state_extra: dict = Field(default_factory=dict, description="Extra session routing metadata")
 

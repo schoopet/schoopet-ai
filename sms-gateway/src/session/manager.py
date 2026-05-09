@@ -1,6 +1,7 @@
 """Session management with Firestore storage."""
 import logging
 import secrets
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -38,6 +39,27 @@ class SessionManager:
         self._agent_client = agent_client
         self._timeout = timedelta(minutes=timeout_minutes)
         self._collection = self._db.collection(COLLECTION_NAME)
+
+    def _doc_id(self, user_id: str, session_scope: str | None = None) -> str:
+        """Return the Firestore document ID for a user/session scope."""
+        normalized = normalize_user_id(user_id)
+        if not session_scope:
+            return normalized
+        scope_hash = hashlib.sha256(session_scope.encode("utf-8")).hexdigest()[:16]
+        return f"{normalized}__{scope_hash}"
+
+    @staticmethod
+    def _build_session_state(
+        channel: str | None,
+        session_scope: str | None = None,
+        state_extra: dict | None = None,
+    ) -> dict:
+        state = dict(state_extra or {})
+        if channel:
+            state["channel"] = channel
+        if session_scope:
+            state["session_scope"] = session_scope
+        return state
 
     async def get_or_create_user(self, phone_number: str) -> SessionInfo:
         """Get existing user or create a new user record.
@@ -155,7 +177,13 @@ class SessionManager:
         """
         await self._agent_client.delete_session(user_id, session_id)
 
-    async def get_or_create_session(self, phone_number: str, channel: str) -> SessionInfo:
+    async def get_or_create_session(
+        self,
+        phone_number: str,
+        channel: str,
+        session_scope: str | None = None,
+        state_extra: dict | None = None,
+    ) -> SessionInfo:
         """Get existing session or create a new one.
 
         Creates a new Agent Engine session if:
@@ -168,11 +196,13 @@ class SessionManager:
         Args:
             phone_number: User identifier (phone for SMS, snowflake/user_id for other channels).
             channel: Originating channel (e.g., "sms", "discord") — stored in agent session state and on the Firestore session doc.
+            session_scope: Optional channel/thread scope for separate concurrent sessions.
+            state_extra: Optional metadata stored in session state and Firestore.
 
         Returns:
             SessionInfo with `is_new_user` set when the Firestore doc was just created.
         """
-        doc_id = normalize_user_id(phone_number)
+        doc_id = self._doc_id(phone_number, session_scope)
         doc_ref = self._collection.document(doc_id)
 
         doc = await doc_ref.get()
@@ -201,6 +231,9 @@ class SessionManager:
                     is_new_session=False,
                     opted_in=session_doc.opted_in,
                     is_new_user=False,
+                    channel=session_doc.channel,
+                    session_scope=session_doc.session_scope,
+                    state_extra=session_doc.state_extra,
                 )
             else:
                 logger.info(
@@ -215,10 +248,8 @@ class SessionManager:
             await self._retire_session(phone_number, stale_session_id)
 
         # Create new Agent Engine session
-        logger.info(f"Creating new session for {phone_number}")
-        state: dict = {}
-        if channel:
-            state["channel"] = channel
+        logger.info(f"Creating new session for {phone_number} scope={session_scope or 'default'}")
+        state = self._build_session_state(channel, session_scope, state_extra)
         agent_session_id = await self._agent_client.create_session(
             user_id=phone_number, state=state
         )
@@ -229,6 +260,8 @@ class SessionManager:
             update_fields = {
                 "personal_agent_session_id": agent_session_id,
                 "last_activity": now,
+                "session_scope": session_scope or "",
+                "state_extra": state_extra or {},
             }
             if channel:
                 update_fields["channel"] = channel
@@ -242,6 +275,8 @@ class SessionManager:
                 opted_in=True,
                 personal_agent_session_id=agent_session_id,
                 channel=channel or "sms",
+                session_scope=session_scope or "",
+                state_extra=state_extra or {},
             )
             await doc_ref.set(session_doc.to_firestore())
 
@@ -251,9 +286,18 @@ class SessionManager:
             is_new_session=True,
             opted_in=True,
             is_new_user=is_new_user,
+            channel=channel or "sms",
+            session_scope=session_scope or "",
+            state_extra=state_extra or {},
         )
 
-    async def update_last_activity(self, phone_number: str, channel: str, slack_team_id: str = "") -> None:
+    async def update_last_activity(
+        self,
+        phone_number: str,
+        channel: str,
+        slack_team_id: str = "",
+        session_scope: str | None = None,
+    ) -> None:
         """Update session's last activity timestamp, channel, and increment message count.
 
         Args:
@@ -261,7 +305,7 @@ class SessionManager:
             channel: The channel used for this message (sms or whatsapp).
             slack_team_id: Slack workspace team_id (optional, only stored when non-empty).
         """
-        doc_id = normalize_user_id(phone_number)
+        doc_id = self._doc_id(phone_number, session_scope)
         doc_ref = self._collection.document(doc_id)
 
         update_data = {
@@ -273,7 +317,11 @@ class SessionManager:
             update_data["slack_team_id"] = slack_team_id
         await doc_ref.update(update_data)
 
-    async def get_session(self, phone_number: str) -> Optional[SessionDocument]:
+    async def get_session(
+        self,
+        phone_number: str,
+        session_scope: str | None = None,
+    ) -> Optional[SessionDocument]:
         """Get session document if it exists.
 
         Args:
@@ -282,7 +330,7 @@ class SessionManager:
         Returns:
             SessionDocument if exists, None otherwise.
         """
-        doc_id = normalize_user_id(phone_number)
+        doc_id = self._doc_id(phone_number, session_scope)
         doc_ref = self._collection.document(doc_id)
 
         doc = await doc_ref.get()
@@ -296,9 +344,10 @@ class SessionManager:
         confirmation,
         session_id: str,
         channel: str,
+        session_scope: str | None = None,
     ) -> dict:
         """Append one pending ADK confirmation to the user's confirmation list."""
-        doc_id = normalize_user_id(user_id)
+        doc_id = self._doc_id(user_id, session_scope)
         doc_ref = self._collection.document(doc_id)
         pending_id = secrets.token_urlsafe(9)
         confirmation_data = (
@@ -319,6 +368,7 @@ class SessionManager:
             "payload": confirmation_data.get("payload"),
             "created_at": datetime.now(timezone.utc),
             "channel": channel,
+            "session_scope": session_scope or "",
         }
         await doc_ref.update({"pending_confirmations": firestore.ArrayUnion([pending])})
         return pending
@@ -327,9 +377,10 @@ class SessionManager:
         self,
         user_id: str,
         pending_id: str,
+        session_scope: str | None = None,
     ) -> Optional[dict]:
         """Return the pending confirmation matching pending_id, or None."""
-        session = await self.get_session(user_id)
+        session = await self.get_session(user_id, session_scope=session_scope)
         if not session:
             return None
         return next(
@@ -337,17 +388,26 @@ class SessionManager:
             None,
         )
 
-    async def clear_pending_confirmation(self, user_id: str, pending_id: str) -> None:
+    async def clear_pending_confirmation(
+        self,
+        user_id: str,
+        pending_id: str,
+        session_scope: str | None = None,
+    ) -> None:
         """Remove one pending confirmation by ID from the user's confirmation list."""
-        session = await self.get_session(user_id)
+        session = await self.get_session(user_id, session_scope=session_scope)
         if not session:
             return
         remaining = [c for c in session.pending_confirmations if c.get("id") != pending_id]
-        doc_id = normalize_user_id(user_id)
+        doc_id = self._doc_id(user_id, session_scope)
         doc_ref = self._collection.document(doc_id)
         await doc_ref.update({"pending_confirmations": remaining})
 
-    async def get_user_session(self, phone_number: str) -> Optional[SessionInfo]:
+    async def get_user_session(
+        self,
+        phone_number: str,
+        session_scope: str | None = None,
+    ) -> Optional[SessionInfo]:
         """Get the user's active session if one exists.
 
         This is used to check if a user has an active session for
@@ -359,7 +419,7 @@ class SessionManager:
         Returns:
             SessionInfo if active session exists, None otherwise.
         """
-        session = await self.get_session(phone_number)
+        session = await self.get_session(phone_number, session_scope=session_scope)
         if not session or not session.opted_in:
             return None
 
@@ -374,8 +434,9 @@ class SessionManager:
             is_new_session=False,
             opted_in=True,
             is_new_user=False,
-            session_type="user",
             channel=session.channel,
+            session_scope=session.session_scope,
+            state_extra=session.state_extra,
         )
 
     def is_session_active(self, session: Optional[SessionInfo]) -> bool:

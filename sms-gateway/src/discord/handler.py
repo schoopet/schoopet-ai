@@ -10,7 +10,12 @@ from fastapi.responses import JSONResponse
 from google.genai import types
 
 from ..config import get_settings
-from ..messages import RATE_LIMIT_MSG, WELCOME_MSG
+from ..messages import RATE_LIMIT_MSG
+from .context import (
+    DiscordContext,
+    build_discord_context,
+    wrap_message_with_discord_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,39 @@ def init_services(validator, session_manager, agent_client, discord_sender, rate
     _agent_client = agent_client
     _discord_sender = discord_sender
     _rate_limiter = rate_limiter
+
+
+def _context_from_interaction(data: dict) -> DiscordContext:
+    channel_id = str(data.get("channel_id") or "")
+    guild_id = str(data.get("guild_id") or "")
+    channel_data = data.get("channel") or {}
+    channel_name = str(channel_data.get("name") or "")
+    return build_discord_context(
+        channel_id=channel_id,
+        guild_id=guild_id,
+        channel_name=channel_name,
+    )
+
+
+async def _get_pending_confirmation(user_id: str, pending_id: str, session_scope: str = ""):
+    if session_scope:
+        return await _session_manager.get_pending_confirmation(
+            user_id,
+            pending_id,
+            session_scope=session_scope,
+        )
+    return await _session_manager.get_pending_confirmation(user_id, pending_id)
+
+
+async def _clear_pending_confirmation(user_id: str, pending_id: str, session_scope: str = ""):
+    if session_scope:
+        await _session_manager.clear_pending_confirmation(
+            user_id,
+            pending_id,
+            session_scope=session_scope,
+        )
+        return
+    await _session_manager.clear_pending_confirmation(user_id, pending_id)
 
 
 @router.post("/webhook/discord")
@@ -103,10 +141,11 @@ async def handle_discord_webhook(
             return JSONResponse({"type": RESPONSE_DEFERRED_CHANNEL_MESSAGE})
 
         interaction_token = data.get("token", "")
+        discord_context = _context_from_interaction(data)
 
         logger.info(
             f"Received Discord /chat command: user={user_id}, "
-            f"text length={len(text)}"
+            f"scope={discord_context.session_scope}, text length={len(text)}"
         )
 
         # Acknowledge immediately with a deferred response, then process in background
@@ -115,6 +154,7 @@ async def handle_discord_webhook(
             user_id=user_id,
             text=text,
             interaction_token=interaction_token,
+            discord_context=discord_context,
         )
         return JSONResponse({"type": RESPONSE_DEFERRED_CHANNEL_MESSAGE})
 
@@ -124,6 +164,7 @@ async def handle_discord_webhook(
         user_data = (data.get("member") or {}).get("user") or data.get("user") or {}
         user_id = str(user_data.get("id", ""))
         interaction_token = data.get("token", "")
+        discord_context = _context_from_interaction(data)
 
         if not user_id or ":" not in custom_id:
             return JSONResponse({
@@ -144,7 +185,11 @@ async def handle_discord_webhook(
                 },
             })
 
-        pending = await _session_manager.get_pending_confirmation(user_id, pending_id)
+        pending = await _get_pending_confirmation(
+            user_id,
+            pending_id,
+            session_scope=discord_context.session_scope,
+        )
         if not pending:
             return JSONResponse({
                 "type": RESPONSE_CHANNEL_MESSAGE,
@@ -165,6 +210,7 @@ async def handle_discord_webhook(
             pending_id=pending_id,
             interaction_token=interaction_token,
             confirmed=confirmed,
+            session_scope=discord_context.session_scope,
         )
 
         content = "Approved. Working on it..." if confirmed else "Rejected. Working on it..."
@@ -184,6 +230,7 @@ async def process_discord_message(
     user_id: str,
     text: Union[str, types.Content],
     interaction_token: str,
+    discord_context: DiscordContext | None = None,
 ) -> None:
     """Process a Discord /chat slash command in the background."""
     async def _reply(message: str) -> None:
@@ -192,7 +239,7 @@ async def process_discord_message(
         except Exception as e:
             logger.error(f"Failed to send Discord followup to {user_id}: {e}")
 
-    await _handle_discord_message(user_id, text, _reply)
+    await _handle_discord_message(user_id, text, _reply, discord_context=discord_context)
 
 
 async def process_discord_confirmation_component(
@@ -200,10 +247,15 @@ async def process_discord_confirmation_component(
     pending_id: str,
     interaction_token: str,
     confirmed: bool,
+    session_scope: str = "",
 ) -> None:
     """Resolve an ADK confirmation from a Discord component webhook."""
     try:
-        pending = await _session_manager.get_pending_confirmation(user_id, pending_id)
+        pending = await _get_pending_confirmation(
+            user_id,
+            pending_id,
+            session_scope=session_scope,
+        )
         if not pending:
             await _discord_sender.send_followup(
                 interaction_token,
@@ -217,12 +269,20 @@ async def process_discord_confirmation_component(
             confirmation_function_call_id=pending["adk_confirmation_function_call_id"],
             confirmed=confirmed,
         )
-        await _session_manager.clear_pending_confirmation(user_id, pending_id)
+        await _clear_pending_confirmation(
+            user_id,
+            pending_id,
+            session_scope=session_scope,
+        )
 
         response = _agent_client.extract_text(events)
         if response:
             await _discord_sender.send_followup(interaction_token, response)
-        await _session_manager.update_last_activity(user_id, channel="discord")
+        await _session_manager.update_last_activity(
+            user_id,
+            channel="discord",
+            session_scope=session_scope,
+        )
     except Exception as e:
         logger.exception(f"Failed to resolve Discord component confirmation for {user_id}: {e}")
         try:
@@ -238,6 +298,7 @@ async def _handle_discord_message(
     user_id: str,
     message: Union[str, types.Content],
     reply_fn,
+    discord_context: DiscordContext | None = None,
 ) -> None:
     """Shared processing pipeline for all Discord message sources.
 
@@ -252,6 +313,7 @@ async def _handle_discord_message(
     4. Deliver reply via reply_fn.
     """
     start_time = time.time()
+    discord_context = discord_context or build_discord_context(channel_id="")
 
     try:
         # Check rate limit
@@ -266,14 +328,15 @@ async def _handle_discord_message(
 
         # Get or create agent session
         session_info = await _session_manager.get_or_create_session(
-            user_id, channel="discord"
+            user_id,
+            channel="discord",
+            session_scope=discord_context.session_scope,
+            state_extra=discord_context.state_extra,
         )
-        if session_info.is_new_user:
-            await reply_fn(WELCOME_MSG)
-
         logger.info(
             f"Forwarding to agent for Discord user {user_id}: "
             f"session={session_info.agent_session_id}, "
+            f"scope={discord_context.session_scope}, "
             f"is_new_session={session_info.is_new_session}"
         )
 
@@ -282,7 +345,7 @@ async def _handle_discord_message(
             response = await _agent_client.send_message(
                 user_id=user_id,
                 session_id=session_info.agent_session_id,
-                message=message,
+                message=wrap_message_with_discord_context(message, discord_context),
             )
         except asyncio.TimeoutError:
             logger.error(f"Agent timeout for Discord user {user_id}")
@@ -295,7 +358,11 @@ async def _handle_discord_message(
             return
 
         await reply_fn(response)
-        await _session_manager.update_last_activity(user_id, channel="discord")
+        await _session_manager.update_last_activity(
+            user_id,
+            channel="discord",
+            session_scope=discord_context.session_scope,
+        )
 
         processing_time = (time.time() - start_time) * 1000
         logger.info(

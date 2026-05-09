@@ -213,6 +213,42 @@ class TestTaskReview:
         telegram_sender.send.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_discord_channel_task_result_returns_to_origin_channel(
+        self, agent_client, session_manager, discord_sender, mock_firestore
+    ):
+        """Channel-scoped Discord tasks post back to the originating channel."""
+        mock_firestore.collection.return_value.document.return_value.get = AsyncMock(
+            return_value=MagicMock(
+                exists=True,
+                to_dict=MagicMock(
+                    return_value={
+                        "notification_channel": "discord",
+                        "notification_session_scope": "discord:guild:g1:channel:c1",
+                        "discord_channel_id": "c1",
+                    }
+                ),
+            )
+        )
+        session_manager.get_user_session = AsyncMock(return_value=None)
+
+        init_internal_services(
+            session_manager=session_manager,
+            agent_client=agent_client,
+            discord_sender=discord_sender,
+            firestore_client=mock_firestore,
+        )
+
+        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Done.")
+        await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
+
+        session_manager.get_user_session.assert_awaited_once_with(
+            USER_ID,
+            session_scope="discord:guild:g1:channel:c1",
+        )
+        discord_sender.send_channel.assert_awaited_once_with("c1", "Done.")
+        discord_sender.send.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_marks_task_notified_after_delivery(
         self, agent_client, session_manager, discord_sender, mock_firestore
     ):

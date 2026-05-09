@@ -6,7 +6,7 @@ import time
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
 from ..config import get_settings
-from ..messages import RATE_LIMIT_MSG, WELCOME_MSG
+from ..messages import RATE_LIMIT_MSG
 
 logger = logging.getLogger(__name__)
 

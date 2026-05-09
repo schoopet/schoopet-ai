@@ -6,7 +6,7 @@ import time
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
 from ..config import get_settings
-from ..messages import RATE_LIMIT_MSG, WELCOME_MSG
+from ..messages import RATE_LIMIT_MSG
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ async def process_telegram_message(
     """Process incoming Telegram message in the background.
 
     Flow:
-    1. /start -> create session + welcome message.
+    1. /start -> create session and update activity.
     2. All other messages -> rate limit, then forward to agent.
     """
     start_time = time.time()
@@ -101,7 +101,6 @@ async def process_telegram_message(
         # Handle /start command
         if message == "/start":
             await _session_manager.get_or_create_session(user_id, channel="telegram")
-            await _telegram_sender.send(chat_id, WELCOME_MSG)
             await _session_manager.update_last_activity(user_id, channel="telegram")
             return
 
@@ -113,10 +112,8 @@ async def process_telegram_message(
                 await _telegram_sender.send(chat_id, RATE_LIMIT_MSG)
                 return
 
-        # Get or create agent session (welcome message on first contact)
+        # Get or create agent session
         session_info = await _session_manager.get_or_create_session(user_id, channel="telegram")
-        if session_info.is_new_user:
-            await _telegram_sender.send(chat_id, WELCOME_MSG)
 
         logger.info(
             f"Forwarding to agent for Telegram user {user_id}: "

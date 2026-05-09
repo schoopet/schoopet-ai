@@ -121,6 +121,28 @@ class DiscordSender:
                 f"Sent Discord DM part {i}/{len(chunks)} to user {discord_user_id}"
             )
 
+    async def send_channel(self, channel_id: str, text: str) -> None:
+        """Send a message directly to a Discord channel."""
+        if not text:
+            text = "(empty response)"
+
+        chunks = _split_message(text)
+        for i, chunk in enumerate(chunks, start=1):
+            response = await self._client.post(
+                f"{DISCORD_API_BASE}/channels/{channel_id}/messages",
+                json={"content": chunk},
+            )
+            if response.status_code >= 400:
+                logger.error(
+                    f"Discord channel post failed for channel {channel_id} "
+                    f"part {i}/{len(chunks)}: status={response.status_code}, "
+                    f"body={response.text!r}"
+                )
+                response.raise_for_status()
+            logger.info(
+                f"Sent Discord channel message part {i}/{len(chunks)} to {channel_id}"
+            )
+
     async def close(self):
         """Close the underlying HTTP client."""
         await self._client.aclose()

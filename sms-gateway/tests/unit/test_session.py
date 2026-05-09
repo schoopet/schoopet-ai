@@ -356,6 +356,42 @@ class TestSessionManager:
         )
 
     @pytest.mark.asyncio
+    async def test_scoped_discord_session_uses_distinct_doc_and_state(
+        self, mock_firestore, mock_agent_client, session_manager
+    ):
+        """Scoped sessions keep user_id shared while separating Firestore docs."""
+        client, doc_ref = mock_firestore
+        mock_doc = MagicMock()
+        mock_doc.exists = False
+        doc_ref.get.return_value = mock_doc
+
+        result = await session_manager.get_or_create_session(
+            "user-123",
+            channel="discord",
+            session_scope="discord:guild:g1:channel:c1",
+            state_extra={
+                "discord_guild_id": "g1",
+                "discord_channel_id": "c1",
+                "discord_channel_name": "project-alpha",
+            },
+        )
+
+        assert result.session_scope == "discord:guild:g1:channel:c1"
+        assert result.channel == "discord"
+        doc_id = client.collection.return_value.document.call_args.args[0]
+        assert doc_id.startswith("user123__")
+        mock_agent_client.create_session.assert_called_once_with(
+            user_id="user-123",
+            state={
+                "channel": "discord",
+                "session_scope": "discord:guild:g1:channel:c1",
+                "discord_guild_id": "g1",
+                "discord_channel_id": "c1",
+                "discord_channel_name": "project-alpha",
+            },
+        )
+
+    @pytest.mark.asyncio
     async def test_opt_in_passes_channel_in_state(
         self, mock_firestore, mock_agent_client, session_manager
     ):

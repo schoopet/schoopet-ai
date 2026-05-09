@@ -9,7 +9,3 @@ RATE_LIMIT_MSG_SMS = (
     "You've reached your daily message limit. "
     "Please try again tomorrow. Reply HELP for assistance."
 )
-
-WELCOME_MSG = (
-    "Welcome to Schoopet! Send me a message and I'll help you out."
-)

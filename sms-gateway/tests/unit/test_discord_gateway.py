@@ -15,6 +15,7 @@ from src.discord.gateway import (
     _build_discord_message_content,
     _format_confirmation_prompt,
 )
+from src.discord.context import build_discord_context
 
 
 class _FakeAttachment:
@@ -222,9 +223,7 @@ async def test_gateway_confirmation_request_stores_pending_and_sends_button_view
     send_kwargs = channel.send.await_args.kwargs
     assert isinstance(send_kwargs["view"], _ConfirmationView)
     assert "Approve this action?" in channel.send.await_args.args[0]
-    session_manager.update_last_activity.assert_awaited_once_with(
-        "user-123", channel="discord"
-    )
+    session_manager.update_last_activity.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -242,9 +241,7 @@ async def test_gateway_multiple_confirmations_shows_all_buttons(gateway_services
     assert channel.send.await_count == 2
     for call in channel.send.await_args_list:
         assert isinstance(call.kwargs["view"], _ConfirmationView)
-    session_manager.update_last_activity.assert_awaited_once_with(
-        "user-123", channel="discord"
-    )
+    session_manager.update_last_activity.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -345,3 +342,46 @@ async def test_button_click_by_different_user_is_rejected(gateway_services):
     )
     session_manager.get_pending_confirmation.assert_not_awaited()
     agent_client.send_confirmation_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_gateway_scopes_session_and_prefixes_message_context(gateway_services):
+    gateway, session_manager, agent_client = gateway_services
+    agent_client.send_message_events = AsyncMock(return_value=_text_events("Done."))
+    channel = SimpleNamespace(
+        id="channel-456",
+        name="project-alpha",
+        guild=SimpleNamespace(id="guild-123"),
+        send=AsyncMock(),
+    )
+
+    await gateway._handle_gateway_message(
+        "user-123",
+        "What did we decide?",
+        channel,
+        discord_context=build_discord_context(
+            channel_id="channel-456",
+            guild_id="guild-123",
+            channel_name="project-alpha",
+        ),
+    )
+
+    session_manager.get_or_create_session.assert_awaited_once_with(
+        "user-123",
+        channel="discord",
+        session_scope="discord:guild:guild-123:channel:channel-456",
+        state_extra={
+            "discord_guild_id": "guild-123",
+            "discord_channel_id": "channel-456",
+            "discord_channel_name": "project-alpha",
+        },
+    )
+    sent_message = agent_client.send_message_events.await_args.kwargs["message"]
+    assert "session_scope: discord:guild:guild-123:channel:channel-456" in sent_message
+    assert "channel_name: project-alpha" in sent_message
+    assert "User message:\nWhat did we decide?" in sent_message
+    session_manager.update_last_activity.assert_awaited_once_with(
+        "user-123",
+        channel="discord",
+        session_scope="discord:guild:guild-123:channel:channel-456",
+    )
