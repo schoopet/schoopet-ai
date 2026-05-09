@@ -163,7 +163,7 @@ def _personal_prompt() -> str:
         "read/write Drive and Sheets, and use all your other tools.\n\n"
 
         "**Creating tasks:**\n"
-        "- create_async_task(task_type, instruction, context, schedule_delay_minutes, schedule_at)\n"
+        "- create_async_task(task_type, instruction, context, schedule_delay_minutes, schedule_at, allowed_resource_ids)\n"
         "- check_task_status(task_id)\n"
         "- cancel_task(task_id)\n"
         "- list_pending_tasks()\n"
@@ -180,6 +180,11 @@ def _personal_prompt() -> str:
         "**Scheduling:**\n"
         "- schedule_delay_minutes: delay by N minutes from now\n"
         "- schedule_at: specific datetime in ISO 8601 format (e.g., '2025-06-01T09:00:00')\n\n"
+
+        "**Offline resource writes:**\n"
+        "When a background task needs to write to an existing Sheet, Doc, or Drive folder, always pass "
+        "those IDs in allowed_resource_ids. This pre-authorizes the resource so the offline task does "
+        "not pause on an interactive confirmation request.\n\n"
 
         "**Recurring tasks:**\n"
         "When the user asks for a recurring reminder or workflow (e.g., 'every Monday', 'daily at 8am'), "

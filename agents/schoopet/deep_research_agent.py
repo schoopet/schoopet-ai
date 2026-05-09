@@ -130,6 +130,12 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "You only write to existing resources — Sheet IDs and Doc IDs are provided in the plan and "
         "pre-authorized. You cannot create new sheets, docs, or Drive files.\n\n"
 
+        "When the plan names a Google Doc or Sheet output destination, the write is mandatory. "
+        "Call the appropriate write tool (`append_to_google_doc`, `replace_text_in_google_doc`, "
+        "`ensure_sheet_headers`, `append_record_to_sheet`, or `update_sheet_row`) before your final "
+        "response. Do not place the full output only in your final response and assume another agent "
+        "will save it. If the write tool returns an error, report that error explicitly.\n\n"
+
         "## Reading the Research Plan\n"
         "Your input arrives as a message starting with DEEP_RESEARCH_TASK: followed by the approved plan. "
         "The plan contains everything you need: category, location, output destination (Sheet ID / Doc ID), "

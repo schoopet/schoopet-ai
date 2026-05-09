@@ -302,7 +302,15 @@ class TaskWorker:
                 parts.append(f"  {key}: {value}")
 
         parts.append("")
-        parts.append("Provide a clear, concise result.")
+        parts.append(
+            "If the instruction asks you to write to Google Docs, Sheets, or Drive, "
+            "perform that write with the available tool before finishing. Do not return "
+            "the would-be document or sheet content as the final result instead of writing it."
+        )
+        parts.append(
+            "After any requested writes are complete, provide a clear, concise result "
+            "that states what was written and where."
+        )
 
         return "\n".join(parts)
 

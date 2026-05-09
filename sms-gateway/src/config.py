@@ -57,6 +57,7 @@ class Settings(BaseSettings):
         "google": [
             "https://www.googleapis.com/auth/calendar.events",
             "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/documents",
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/gmail.readonly",
             "https://www.googleapis.com/auth/gmail.labels",
@@ -66,6 +67,7 @@ class Settings(BaseSettings):
         "workspace_system": [
             "https://www.googleapis.com/auth/gmail.readonly",
             "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/documents",
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/calendar.events",
             "https://www.googleapis.com/auth/userinfo.email",
@@ -89,5 +91,4 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
-
 
