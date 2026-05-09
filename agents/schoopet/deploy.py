@@ -43,6 +43,12 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
         "SMS_GATEWAY_URL": os.getenv("SMS_GATEWAY_URL", "https://api.schoopet.com"),
         # Personal agent display name (falls back to "Schoopet" if unset)
         "PERSONAL_AGENT_NAME": os.getenv("PERSONAL_AGENT_NAME", ""),
+        # OpenTelemetry
+        "OTEL_SERVICE_NAME": "schoopet-agent",
+        "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true",
+        "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+        "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false",
     }
     # Filter out empty values
     env_vars = {k: v for k, v in env_vars_raw.items() if v}

@@ -200,9 +200,19 @@ class SchoopetGateway(discord.Client):
             )
             return
 
-        # Show typing indicator while the agent thinks
-        async with message.channel.typing():
+        # Fire typing indicator as a background task so it never blocks message processing.
+        async def _keep_typing():
+            try:
+                async with message.channel.typing():
+                    await asyncio.sleep(300)  # context manager keeps refreshing; cancelled when done
+            except Exception:
+                pass
+
+        typing_task = asyncio.create_task(_keep_typing())
+        try:
             await self._handle_gateway_message(user_id, content, message.channel)
+        finally:
+            typing_task.cancel()
 
     async def _send_channel_text(self, channel, response_text: str) -> None:
         for chunk in _split_message(response_text):
@@ -351,6 +361,18 @@ class SchoopetGateway(discord.Client):
             )
 
 
+async def _run_gateway_with_retry(client: "SchoopetGateway", bot_token: str) -> None:
+    """Run the gateway, retrying with backoff if the connection fails."""
+    delay = 30
+    while True:
+        try:
+            await client.start(bot_token)
+        except Exception as e:
+            logger.warning(f"Discord gateway disconnected ({e}), retrying in {delay}s")
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 300)  # cap at 5 minutes
+
+
 async def start_gateway(bot_token: str, session_manager, agent_client, rate_limiter=None) -> SchoopetGateway:
     """Create and start the gateway client as a background asyncio task.
 
@@ -361,6 +383,6 @@ async def start_gateway(bot_token: str, session_manager, agent_client, rate_limi
         agent_client=agent_client,
         rate_limiter=rate_limiter,
     )
-    asyncio.create_task(client.start(bot_token))
+    asyncio.create_task(_run_gateway_with_retry(client, bot_token))
     logger.info("Discord gateway task started")
     return client

@@ -6,6 +6,7 @@ These endpoints handle:
 
 All endpoints require authentication via OIDC or HMAC signatures.
 """
+import asyncio
 import logging
 from typing import Optional
 
@@ -21,7 +22,6 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 # Global references (initialized by main.py)
 _session_manager = None
 _agent_client = None
-_sms_sender = None
 _telegram_sender = None
 _slack_sender = None
 _discord_sender = None
@@ -31,7 +31,6 @@ _firestore_client = None
 def init_internal_services(
     session_manager,
     agent_client,
-    sms_sender,
     firestore_client=None,
     telegram_sender=None,
     slack_sender=None,
@@ -41,10 +40,9 @@ def init_internal_services(
 
     Called by main.py during application startup.
     """
-    global _session_manager, _agent_client, _sms_sender, _telegram_sender, _slack_sender, _discord_sender, _firestore_client
+    global _session_manager, _agent_client, _telegram_sender, _slack_sender, _discord_sender, _firestore_client
     _session_manager = session_manager
     _agent_client = agent_client
-    _sms_sender = sms_sender
     _firestore_client = firestore_client
     _telegram_sender = telegram_sender
     _slack_sender = slack_sender
@@ -70,7 +68,7 @@ class UserNotifyRequest(BaseModel):
     user_id: str = Field(..., description="User's phone number")
     task_id: str = Field(..., description="Task ID that was completed")
     message: str = Field(..., description="Message to send to user")
-    channel: str = Field(default="sms", description="Notification channel (sms/whatsapp/telegram)")
+    channel: str = Field(default="discord", description="Notification channel (discord/telegram/slack)")
 
 
 class InternalResponse(BaseModel):
@@ -101,56 +99,66 @@ async def _deliver_notification(user_id: str, task_id: str, message: str, channe
     """Send a message to the user and mark the task notified.
 
     If the user has an active session, routes through the agent so the
-    message is delivered conversationally. Otherwise sends directly.
+    message is delivered conversationally. Falls back to direct send if the
+    agent times out, returns empty text, or raises confirmation requests
+    (which require Discord button infrastructure unavailable here).
 
     Returns the delivery method used: 'session' or 'direct'.
     """
-    from ..channel import MessageChannel
-
     user_session = await _session_manager.get_user_session(user_id)
     session_channel = user_session.channel if user_session else channel
 
     if user_session and _session_manager.is_session_active(user_session) and _agent_client:
-        agent_response = await _agent_client.send_message(
-            user_id=user_id,
-            session_id=user_session.agent_session_id,
-            message=f"INTERNAL_TASK_COMPLETE: {message}",
-        )
-        response_len = len(agent_response) if agent_response else 0
-        logger.info(
-            f"Agent response for task {task_id}: len={response_len}, "
-            f"preview={(agent_response or '')[:100]!r}"
-        )
-        if agent_response:
-            if session_channel == "discord" and _discord_sender:
-                await _discord_sender.send(user_id, agent_response)
-            elif session_channel == "telegram" and _telegram_sender:
-                await _telegram_sender.send(user_id, agent_response)
-            elif session_channel == "slack" and _slack_sender:
-                await _slack_sender.send(user_id, agent_response)
-            elif _sms_sender:
-                ch = MessageChannel.WHATSAPP if session_channel == "whatsapp" else MessageChannel.SMS
-                await _sms_sender.send(to_number=user_id, body=agent_response, channel=ch)
-            logger.info(f"Notification sent via {session_channel} after agent processing")
-            await _mark_task_notified(task_id)
-            return "session"
-        else:
-            logger.warning(
-                f"Agent returned empty response for task {task_id}; "
-                f"skipping send and NOT marking task as notified"
+        try:
+            events = await _agent_client.send_message_events(
+                user_id=user_id,
+                session_id=user_session.agent_session_id,
+                message=f"INTERNAL_TASK_COMPLETE: {message}",
             )
-            return "session_empty"
+        except asyncio.TimeoutError:
+            logger.warning(f"Agent timeout delivering task {task_id}, falling back to direct send")
+            events = []
 
-    # No active session — send directly
+        confirmations = _agent_client.extract_confirmation_requests(events)
+        if confirmations:
+            logger.warning(
+                f"Agent requested {len(confirmations)} confirmation(s) during notification for "
+                f"task {task_id} — personal agent should not write during INTERNAL_TASK_COMPLETE; "
+                f"falling back to direct send"
+            )
+            # Fall through to direct send (Discord button infrastructure not available here)
+        else:
+            agent_response = _agent_client.extract_text(events)
+            if agent_response:
+                # Use the session channel, but fall back to the task's channel for
+                # non-interactive channels like 'email' that have no outbound sender.
+                effective_channel = session_channel if session_channel in ("discord", "telegram", "slack") else channel
+                if effective_channel == "discord" and _discord_sender:
+                    await _discord_sender.send(user_id, agent_response)
+                elif effective_channel == "telegram" and _telegram_sender:
+                    await _telegram_sender.send(user_id, agent_response)
+                elif effective_channel == "slack" and _slack_sender:
+                    await _slack_sender.send(user_id, agent_response)
+                else:
+                    logger.warning(f"No sender available for channel {effective_channel!r} (session={session_channel!r})")
+                logger.info(f"Notification sent via {effective_channel} after agent processing")
+                await _mark_task_notified(task_id)
+                return "session"
+            else:
+                logger.warning(
+                    f"Agent returned empty response for task {task_id}; falling back to direct send"
+                )
+                # Fall through to direct send
+
+    # No active session OR empty agent response OR confirmations blocked text — send directly
     if channel == "discord" and _discord_sender:
         await _discord_sender.send(user_id, message)
     elif channel == "telegram" and _telegram_sender:
         await _telegram_sender.send(user_id, message)
     elif channel == "slack" and _slack_sender:
         await _slack_sender.send(user_id, message)
-    elif _sms_sender:
-        ch = MessageChannel.WHATSAPP if channel == "whatsapp" else MessageChannel.SMS
-        await _sms_sender.send(to_number=user_id, body=message, channel=ch)
+    else:
+        logger.warning(f"No sender available for channel {channel!r}")
     logger.info(f"Notification sent directly via {channel}")
     await _mark_task_notified(task_id)
     return "direct"
@@ -188,7 +196,7 @@ async def trigger_task_review(
         doc = await _firestore_client.collection("async_tasks").document(payload.task_id).get()
         if not doc.exists:
             raise HTTPException(status_code=404, detail=f"Task {payload.task_id} not found")
-        channel = doc.to_dict().get("notification_channel", "sms")
+        channel = doc.to_dict().get("notification_channel", "discord")
 
         if payload.error:
             message = f"Your background task encountered an error: {payload.error}"
@@ -228,7 +236,7 @@ async def notify_user(
 
     Security: Requires valid OIDC token from an allowed service account.
     """
-    if not _session_manager or (not _sms_sender and not _telegram_sender and not _slack_sender and not _discord_sender):
+    if not _session_manager or (not _telegram_sender and not _slack_sender and not _discord_sender):
         raise HTTPException(status_code=503, detail="Internal services not initialized")
 
     logger.info(

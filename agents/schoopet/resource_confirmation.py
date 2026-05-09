@@ -13,9 +13,12 @@ The session-state key format is ``_RESOURCE_CONFIRMED_PREFIX + resource_id``.
 The task-worker seeds these keys from the flat ``allowed_resource_ids`` list stored
 on the task document, so any pre-authorized ID bypasses the confirmation prompt.
 """
+import logging
 from typing import Any
 
 from google.adk.tools import ToolContext
+
+logger = logging.getLogger(__name__)
 
 # Session-state key prefix shared with the task-worker service.
 # task-worker/src/worker.py mirrors this value to pre-seed approved resources.
@@ -34,10 +37,17 @@ def make_resource_confirmation(id_arg: str):
         state_key = f"{_RESOURCE_CONFIRMED_PREFIX}{resource_id}"
 
         if tool_context is None:
+            logger.warning("resource_confirmation: no tool_context, requiring confirmation")
             return True
 
-        # Already approved this resource earlier in the session.
-        if tool_context.state.get(state_key):
+        state_keys = list(tool_context.state.to_dict().keys())
+        found = bool(tool_context.state.get(state_key))
+        logger.info(
+            "resource_confirmation: id_arg=%s resource_id=%s found=%s state_keys=%s",
+            id_arg, resource_id, found, state_keys,
+        )
+
+        if found:
             return False
 
         # ADK re-invokes the tool after the user confirms.  Detect that and
@@ -45,8 +55,10 @@ def make_resource_confirmation(id_arg: str):
         confirmation = getattr(tool_context, "tool_confirmation", None)
         if confirmation is not None and confirmation.confirmed:
             tool_context.state[state_key] = True
+            logger.info("resource_confirmation: user confirmed %s, storing in state", state_key)
             return False
 
+        logger.warning("resource_confirmation: requiring confirmation for %s", state_key)
         return True
 
     return _check

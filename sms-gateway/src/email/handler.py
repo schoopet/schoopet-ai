@@ -36,7 +36,6 @@ _db = None  # AsyncFirestore client
 _agent_client = None
 _session_manager = None
 _slack_sender: Optional[SlackSender] = None
-_sms_sender = None
 _telegram_sender = None
 _discord_sender = None
 
@@ -86,19 +85,17 @@ def init_email_services(
     agent_client,
     session_manager,
     slack_sender: Optional[SlackSender] = None,
-    sms_sender=None,
     telegram_sender=None,
     discord_sender=None,
 ) -> None:
     """Initialize module-level service references. Called by main.py."""
     global _oauth_manager, _db, _agent_client
-    global _session_manager, _slack_sender, _sms_sender, _telegram_sender, _discord_sender
+    global _session_manager, _slack_sender, _telegram_sender, _discord_sender
     _oauth_manager = oauth_manager
     _db = db
     _agent_client = agent_client
     _session_manager = session_manager
     _slack_sender = slack_sender
-    _sms_sender = sms_sender
     _telegram_sender = telegram_sender
     _discord_sender = discord_sender
     logger.info("Email handler services initialized")
@@ -382,14 +379,6 @@ async def _send_response(user_id: str, channel: str, message: str) -> None:
             await _telegram_sender.send(user_id, message)
         elif channel == "discord" and _discord_sender:
             await _discord_sender.send(user_id, message)
-        elif channel in ("whatsapp", "sms") and _sms_sender:
-            from ..channel import MessageChannel
-            ch = MessageChannel.WHATSAPP if channel == "whatsapp" else MessageChannel.SMS
-            await _sms_sender.send(to_number=user_id, body=message, channel=ch)
-        elif _sms_sender:
-            # Fallback to SMS for any unknown channel
-            from ..channel import MessageChannel
-            await _sms_sender.send(to_number=user_id, body=message, channel=MessageChannel.SMS)
         else:
             logger.warning(f"No sender available for channel {channel!r}")
     except Exception as e:

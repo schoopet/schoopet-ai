@@ -19,6 +19,9 @@ locals {
     "roles/secretmanager.secretAccessor",
     "roles/bigquery.dataEditor",
     "roles/bigquery.jobUser",
+    "roles/cloudtrace.agent",
+    "roles/logging.logWriter",
+    "roles/monitoring.metricWriter",
   ]
 
   # Map of role → {principal, role} for the personal agent

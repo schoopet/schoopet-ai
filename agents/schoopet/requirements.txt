@@ -13,3 +13,9 @@ pypdf==6.7.4
 python-dotenv==1.2.2
 pyOpenSSL==26.0.0
 google-api-python-client==2.194.0
+opentelemetry-instrumentation-google-genai>=0.4b0
+opentelemetry-instrumentation-sqlite3
+opentelemetry-exporter-gcp-logging
+opentelemetry-exporter-gcp-monitoring
+opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-instrumentation-vertexai>=2.0b0

@@ -4,7 +4,7 @@ Covers:
 - /internal/task-review delivers result directly to user (no agent review step)
 - /internal/user-notify marks the task NOTIFIED in Firestore only after
   confirmed delivery (status race fix)
-- Channel routing for Discord, Telegram, Slack, SMS
+- Channel routing for Discord, Telegram, Slack
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, ANY
@@ -20,7 +20,7 @@ from src.internal.handler import (
 )
 
 TASK_ID = "task-abc123"
-USER_ID = "+14155550001"
+USER_ID = "789673338217037825"
 USER_SESSION_ID = "user-sess-111"
 
 
@@ -32,7 +32,6 @@ def reset_globals():
     """Reset all module-level globals before each test."""
     handler._session_manager = None
     handler._agent_client = None
-    handler._sms_sender = None
     handler._telegram_sender = None
     handler._slack_sender = None
     handler._discord_sender = None
@@ -43,13 +42,10 @@ def reset_globals():
 @pytest.fixture
 def agent_client():
     c = AsyncMock()
-    c.send_message = AsyncMock(return_value="Agent notification response")
+    c.send_message_events = AsyncMock(return_value=[])
+    c.extract_confirmation_requests = MagicMock(return_value=[])
+    c.extract_text = MagicMock(return_value="Agent notification response")
     return c
-
-
-@pytest.fixture
-def sms_sender():
-    return AsyncMock()
 
 
 @pytest.fixture
@@ -69,17 +65,13 @@ def slack_sender():
 
 @pytest.fixture
 def mock_firestore():
-    """Firestore AsyncClient mock.
-
-    .collection() and .document() are sync calls that return MagicMock.
-    .get() and .update() are awaitables.
-    """
+    """Firestore AsyncClient mock."""
     client = MagicMock()
     doc_ref = MagicMock()
     doc_ref.update = AsyncMock()
     doc = MagicMock()
     doc.exists = True
-    doc.to_dict.return_value = {"notification_channel": "sms"}
+    doc.to_dict.return_value = {"notification_channel": "discord"}
     doc_ref.get = AsyncMock(return_value=doc)
     client.collection.return_value.document.return_value = doc_ref
     return client
@@ -92,7 +84,7 @@ def session_manager():
     return mgr
 
 
-def _user_session(channel="sms", session_id=USER_SESSION_ID):
+def _user_session(channel="discord", session_id=USER_SESSION_ID):
     s = MagicMock()
     s.agent_session_id = session_id
     s.channel = channel
@@ -107,7 +99,7 @@ class TestTaskReview:
 
     @pytest.mark.asyncio
     async def test_result_delivered_directly_when_no_session(
-        self, agent_client, session_manager, sms_sender, mock_firestore
+        self, agent_client, session_manager, discord_sender, mock_firestore
     ):
         """Task result is sent directly to the user when no active session."""
         session_manager.get_user_session = AsyncMock(return_value=None)
@@ -115,44 +107,45 @@ class TestTaskReview:
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=sms_sender,
+            discord_sender=discord_sender,
             firestore_client=mock_firestore,
         )
 
         payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Research done.")
         await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
 
-        sms_sender.send.assert_awaited_once()
+        discord_sender.send.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_result_delivered_via_active_session(
-        self, agent_client, session_manager, sms_sender, mock_firestore
+        self, agent_client, session_manager, discord_sender, mock_firestore
     ):
         """When user has an active session, result is routed through the agent."""
         session_manager.get_user_session = AsyncMock(
-            return_value=_user_session(channel="sms")
+            return_value=_user_session(channel="discord")
         )
         session_manager.is_session_active = MagicMock(return_value=True)
-        agent_client.send_message = AsyncMock(return_value="Here's your result!")
+        agent_client.send_message_events = AsyncMock(return_value=[])
+        agent_client.extract_text = MagicMock(return_value="Here's your result!")
 
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=sms_sender,
+            discord_sender=discord_sender,
             firestore_client=mock_firestore,
         )
 
         payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Research done.")
         await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
 
-        agent_client.send_message.assert_awaited_once()
-        call_args = agent_client.send_message.call_args
+        agent_client.send_message_events.assert_awaited_once()
+        call_args = agent_client.send_message_events.call_args
         assert "INTERNAL_TASK_COMPLETE" in call_args.kwargs["message"]
-        sms_sender.send.assert_awaited_once()
+        discord_sender.send.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_error_task_notifies_user_with_error_message(
-        self, agent_client, session_manager, sms_sender, mock_firestore
+        self, agent_client, session_manager, discord_sender, mock_firestore
     ):
         """Failed tasks send an error message directly to the user."""
         session_manager.get_user_session = AsyncMock(return_value=None)
@@ -160,7 +153,7 @@ class TestTaskReview:
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=sms_sender,
+            discord_sender=discord_sender,
             firestore_client=mock_firestore,
         )
 
@@ -169,14 +162,14 @@ class TestTaskReview:
         )
         await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
 
-        sms_sender.send.assert_awaited_once()
-        sent_body = sms_sender.send.call_args.kwargs.get("body") or sms_sender.send.call_args[1].get("body")
-        assert "error" in sent_body.lower()
-        assert "Agent crashed" in sent_body
+        discord_sender.send.assert_awaited_once()
+        sent_text = discord_sender.send.call_args[0][1]
+        assert "error" in sent_text.lower()
+        assert "Agent crashed" in sent_text
 
     @pytest.mark.asyncio
     async def test_no_result_and_no_error_is_skipped(
-        self, agent_client, session_manager, sms_sender, mock_firestore
+        self, agent_client, session_manager, discord_sender, mock_firestore
     ):
         """Tasks with neither result nor error produce no notification."""
         session_manager.get_user_session = AsyncMock(return_value=None)
@@ -184,14 +177,14 @@ class TestTaskReview:
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=sms_sender,
+            discord_sender=discord_sender,
             firestore_client=mock_firestore,
         )
 
         payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result=None, error=None)
         response = await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
 
-        sms_sender.send.assert_not_awaited()
+        discord_sender.send.assert_not_awaited()
         assert response.status == "skipped"
 
     @pytest.mark.asyncio
@@ -210,7 +203,6 @@ class TestTaskReview:
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=AsyncMock(),
             telegram_sender=telegram_sender,
             firestore_client=mock_firestore,
         )
@@ -222,7 +214,7 @@ class TestTaskReview:
 
     @pytest.mark.asyncio
     async def test_marks_task_notified_after_delivery(
-        self, agent_client, session_manager, sms_sender, mock_firestore
+        self, agent_client, session_manager, discord_sender, mock_firestore
     ):
         """Task is marked NOTIFIED in Firestore after successful delivery."""
         session_manager.get_user_session = AsyncMock(return_value=None)
@@ -230,7 +222,7 @@ class TestTaskReview:
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=sms_sender,
+            discord_sender=discord_sender,
             firestore_client=mock_firestore,
         )
 
@@ -252,52 +244,52 @@ class TestUserNotify:
 
     @pytest.mark.asyncio
     async def test_delivers_via_agent_when_session_active(
-        self, agent_client, session_manager, sms_sender, mock_firestore
+        self, agent_client, session_manager, discord_sender, mock_firestore
     ):
         """Active session → message routed through the agent, not directly."""
         session_manager.get_user_session = AsyncMock(
-            return_value=_user_session(channel="sms")
+            return_value=_user_session(channel="discord")
         )
         session_manager.is_session_active = MagicMock(return_value=True)
-        agent_client.send_message = AsyncMock(return_value="Here's your result!")
+        agent_client.send_message_events = AsyncMock(return_value=[])
+        agent_client.extract_text = MagicMock(return_value="Here's your result!")
 
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=sms_sender,
+            discord_sender=discord_sender,
             firestore_client=mock_firestore,
         )
 
         payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Research done.", channel="sms"
+            user_id=USER_ID, task_id=TASK_ID, message="Research done.", channel="discord"
         )
         await notify_user(request=MagicMock(), payload=payload, caller="svc")
 
-        agent_client.send_message.assert_awaited_once()
-        # Should deliver the agent's response, not the raw payload message
-        sent_body = sms_sender.send.call_args.kwargs.get("body") or sms_sender.send.call_args[1].get("body")
-        assert sent_body == "Here's your result!"
+        agent_client.send_message_events.assert_awaited_once()
+        discord_sender.send.assert_awaited_once_with(USER_ID, "Here's your result!")
 
     @pytest.mark.asyncio
     async def test_marks_notified_after_active_session_delivery(
-        self, agent_client, session_manager, sms_sender, mock_firestore
+        self, agent_client, session_manager, discord_sender, mock_firestore
     ):
         """NOTIFIED status must be written to Firestore after delivery via session."""
         session_manager.get_user_session = AsyncMock(
-            return_value=_user_session(channel="sms")
+            return_value=_user_session(channel="discord")
         )
         session_manager.is_session_active = MagicMock(return_value=True)
-        agent_client.send_message = AsyncMock(return_value="Result delivered.")
+        agent_client.send_message_events = AsyncMock(return_value=[])
+        agent_client.extract_text = MagicMock(return_value="Result delivered.")
 
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=sms_sender,
+            discord_sender=discord_sender,
             firestore_client=mock_firestore,
         )
 
         payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="sms"
+            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="discord"
         )
         await notify_user(request=MagicMock(), payload=payload, caller="svc")
 
@@ -309,7 +301,7 @@ class TestUserNotify:
 
     @pytest.mark.asyncio
     async def test_delivers_directly_when_no_active_session(
-        self, agent_client, session_manager, sms_sender, mock_firestore
+        self, agent_client, session_manager, discord_sender, mock_firestore
     ):
         """No active session → raw message sent directly, no agent call."""
         session_manager.get_user_session = AsyncMock(return_value=None)
@@ -317,21 +309,21 @@ class TestUserNotify:
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=sms_sender,
+            discord_sender=discord_sender,
             firestore_client=mock_firestore,
         )
 
         payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Your task is done.", channel="sms"
+            user_id=USER_ID, task_id=TASK_ID, message="Your task is done.", channel="discord"
         )
         await notify_user(request=MagicMock(), payload=payload, caller="svc")
 
         agent_client.send_message.assert_not_awaited()
-        sms_sender.send.assert_awaited_once()
+        discord_sender.send.assert_awaited_once_with(USER_ID, "Your task is done.")
 
     @pytest.mark.asyncio
     async def test_marks_notified_after_direct_delivery(
-        self, session_manager, sms_sender, mock_firestore
+        self, session_manager, discord_sender, mock_firestore
     ):
         """NOTIFIED status must also be written when there is no active session."""
         session_manager.get_user_session = AsyncMock(return_value=None)
@@ -339,12 +331,12 @@ class TestUserNotify:
         init_internal_services(
             session_manager=session_manager,
             agent_client=AsyncMock(),
-            sms_sender=sms_sender,
+            discord_sender=discord_sender,
             firestore_client=mock_firestore,
         )
 
         payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="sms"
+            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="discord"
         )
         await notify_user(request=MagicMock(), payload=payload, caller="svc")
 
@@ -355,31 +347,37 @@ class TestUserNotify:
         })
 
     @pytest.mark.asyncio
-    async def test_does_not_mark_notified_when_agent_returns_empty(
-        self, agent_client, session_manager, sms_sender, mock_firestore
+    async def test_empty_agent_response_falls_back_to_direct_send(
+        self, agent_client, session_manager, discord_sender, mock_firestore
     ):
-        """If the agent returns no response, message is not sent and task is not marked notified."""
+        """If the agent returns no text, fall back to sending the raw message directly."""
         session_manager.get_user_session = AsyncMock(
-            return_value=_user_session(channel="sms")
+            return_value=_user_session(channel="discord")
         )
         session_manager.is_session_active = MagicMock(return_value=True)
-        agent_client.send_message = AsyncMock(return_value="")  # empty response
+        agent_client.send_message_events = AsyncMock(return_value=[])
+        agent_client.extract_text = MagicMock(return_value="")  # empty response
 
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=sms_sender,
+            discord_sender=discord_sender,
             firestore_client=mock_firestore,
         )
 
         payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="sms"
+            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="discord"
         )
         await notify_user(request=MagicMock(), payload=payload, caller="svc")
 
-        sms_sender.send.assert_not_awaited()
+        # Raw message sent directly as fallback
+        discord_sender.send.assert_awaited_once_with(USER_ID, "Done.")
+        # Task still marked notified after direct send
         doc_ref = mock_firestore.collection.return_value.document.return_value
-        doc_ref.update.assert_not_awaited()
+        doc_ref.update.assert_awaited_once_with({
+            "status": "notified",
+            "notified_at": ANY,
+        })
 
     @pytest.mark.asyncio
     async def test_routes_to_discord(
@@ -391,7 +389,6 @@ class TestUserNotify:
         init_internal_services(
             session_manager=session_manager,
             agent_client=AsyncMock(),
-            sms_sender=AsyncMock(),
             discord_sender=discord_sender,
             firestore_client=mock_firestore,
         )
@@ -413,7 +410,6 @@ class TestUserNotify:
         init_internal_services(
             session_manager=session_manager,
             agent_client=AsyncMock(),
-            sms_sender=AsyncMock(),
             telegram_sender=telegram_sender,
             firestore_client=mock_firestore,
         )
@@ -435,7 +431,6 @@ class TestUserNotify:
         init_internal_services(
             session_manager=session_manager,
             agent_client=AsyncMock(),
-            sms_sender=AsyncMock(),
             slack_sender=slack_sender,
             firestore_client=mock_firestore,
         )
@@ -456,13 +451,13 @@ class TestUserNotify:
             return_value=_user_session(channel="slack")
         )
         session_manager.is_session_active = MagicMock(return_value=True)
-        agent_client.send_message = AsyncMock(return_value="Result delivered.")
+        agent_client.send_message_events = AsyncMock(return_value=[])
+        agent_client.extract_text = MagicMock(return_value="Result delivered.")
         slack_sender = AsyncMock()
 
         init_internal_services(
             session_manager=session_manager,
             agent_client=agent_client,
-            sms_sender=AsyncMock(),
             slack_sender=slack_sender,
             firestore_client=mock_firestore,
         )
@@ -472,7 +467,7 @@ class TestUserNotify:
         )
         await notify_user(request=MagicMock(), payload=payload, caller="svc")
 
-        agent_client.send_message.assert_awaited_once()
+        agent_client.send_message_events.assert_awaited_once()
         slack_sender.send.assert_awaited_once()
 
 
@@ -501,7 +496,6 @@ class TestMarkTaskNotified:
     async def test_does_nothing_when_no_firestore(self):
         """Should silently skip if Firestore client is not initialized."""
         handler._firestore_client = None
-        # Should not raise
         await _mark_task_notified(TASK_ID)
 
     @pytest.mark.asyncio

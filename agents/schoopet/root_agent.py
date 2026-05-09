@@ -194,7 +194,9 @@ def _personal_prompt() -> str:
         "- 'Remind me every Monday at 9am to send the weekly update' -> schedule first instance, save recurrence pattern\n\n"
 
         "**When you receive INTERNAL_TASK_COMPLETE:**\n"
-        "Inform the user about the completed task conversationally.\n\n"
+        "Inform the user about the completed task conversationally. "
+        "Do NOT call any write tools (sheets, docs, drive) — the background task already "
+        "completed all writes. Just deliver the summary to the user.\n\n"
 
         "## Gmail\n"
         "You can monitor the user's Gmail inbox and proactively act on incoming emails.\n\n"

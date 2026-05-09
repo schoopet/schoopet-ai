@@ -70,7 +70,6 @@ def email_services(monkeypatch):
     )
     senders = {
         "slack": AsyncMock(),
-        "sms": AsyncMock(),
         "telegram": AsyncMock(),
         "discord": AsyncMock(),
     }
@@ -80,7 +79,6 @@ def email_services(monkeypatch):
     monkeypatch.setattr(handler, "_agent_client", agent_client)
     monkeypatch.setattr(handler, "_session_manager", session_manager)
     monkeypatch.setattr(handler, "_slack_sender", senders["slack"])
-    monkeypatch.setattr(handler, "_sms_sender", senders["sms"])
     monkeypatch.setattr(handler, "_telegram_sender", senders["telegram"])
     monkeypatch.setattr(handler, "_discord_sender", senders["discord"])
 
@@ -124,7 +122,6 @@ async def test_route_email_to_agent_normal_response_routes_to_configured_channel
     )
     senders["slack"].send.assert_not_awaited()
     senders["telegram"].send.assert_not_awaited()
-    senders["sms"].send.assert_not_awaited()
 
 
 @pytest.mark.asyncio

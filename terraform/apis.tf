@@ -11,6 +11,9 @@ locals {
     "bigquery.googleapis.com",
     "iam.googleapis.com",
     "cloudscheduler.googleapis.com",
+    "cloudtrace.googleapis.com",
+    "logging.googleapis.com",
+    "monitoring.googleapis.com",
   ]
 }
 

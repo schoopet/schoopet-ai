@@ -13,12 +13,6 @@ class Settings(BaseSettings):
     GOOGLE_CLOUD_LOCATION: str = "us-central1"
     PERSONAL_AGENT_ENGINE_ID: str = ""
 
-    # Twilio Configuration
-    TWILIO_ACCOUNT_SID: str
-    TWILIO_AUTH_TOKEN: str
-    TWILIO_PHONE_NUMBER: str
-    TWILIO_WHATSAPP_NUMBER: str = ""  # Optional, defaults to TWILIO_PHONE_NUMBER
-
     # Service Configuration
     SESSION_TIMEOUT_MINUTES: int = 30
     AGENT_TIMEOUT_SECONDS: int = 900

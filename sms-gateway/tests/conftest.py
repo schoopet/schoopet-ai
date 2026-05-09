@@ -23,14 +23,3 @@ def mock_agent_client():
     client.create_session = AsyncMock(return_value="test-session-id")
     client.send_message = AsyncMock(return_value="Hello from agent!")
     return client
-
-
-@pytest.fixture
-def mock_twilio_client():
-    """Create a mock Twilio client."""
-    client = MagicMock()
-    message = MagicMock()
-    message.sid = "SM1234567890"
-    message.status = "queued"
-    client.messages.create.return_value = message
-    return client

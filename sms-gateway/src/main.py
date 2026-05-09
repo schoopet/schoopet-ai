@@ -15,7 +15,6 @@ from .oauth.manager import OAuthManager
 from .oauth.secret_manager import SecretManagerClient
 from .ratelimit.limiter import RateLimiter
 from .session.manager import SessionManager
-from .sms.sender import SMSSender
 from .email.handler import router as email_router, init_email_services
 from .slack.handler import router as slack_router, init_slack_services
 from .slack.sender import SlackSender
@@ -27,9 +26,6 @@ from .discord.validator import DiscordValidator
 from .telegram.handler import router as telegram_router, init_services as init_telegram_services
 from .telegram.sender import TelegramSender
 from .telegram.validator import TelegramValidator
-from .webhook.handler import router as webhook_router, init_services
-from .webhook.validator import TwilioValidator
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -72,17 +68,6 @@ async def lifespan(app: FastAPI):
         timeout_minutes=settings.SESSION_TIMEOUT_MINUTES,
     )
 
-    # Initialize SMS/WhatsApp Sender
-    sms_sender = SMSSender(
-        account_sid=settings.TWILIO_ACCOUNT_SID,
-        auth_token=settings.TWILIO_AUTH_TOKEN,
-        from_number=settings.TWILIO_PHONE_NUMBER,
-        whatsapp_from_number=settings.TWILIO_WHATSAPP_NUMBER or settings.TWILIO_PHONE_NUMBER,
-    )
-
-    # Initialize Twilio Validator
-    validator = TwilioValidator(settings.TWILIO_AUTH_TOKEN)
-
     # Initialize Rate Limiter
     rate_limiter = RateLimiter(
         firestore_client=firestore_client,
@@ -90,15 +75,6 @@ async def lifespan(app: FastAPI):
         excluded_phones=settings.RATE_LIMIT_EXCLUDED_PHONES,
     )
     logger.info(f"Rate limiting: {settings.DAILY_MESSAGE_LIMIT}/day, {len(settings.RATE_LIMIT_EXCLUDED_PHONES)} excluded phones")
-
-    # Initialize services for webhook handler (SMS/WhatsApp → personal agent)
-    init_services(
-        validator=validator,
-        session_manager=session_manager,
-        agent_client=agent_client,
-        sms_sender=sms_sender,
-        rate_limiter=rate_limiter,
-    )
 
     # Initialize Discord services (if configured)
     discord_sender = None
@@ -167,7 +143,6 @@ async def lifespan(app: FastAPI):
     init_internal_services(
         session_manager=session_manager,
         agent_client=agent_client,
-        sms_sender=sms_sender,
         firestore_client=firestore_client,
         telegram_sender=telegram_sender,
         slack_sender=slack_sender,
@@ -218,7 +193,6 @@ async def lifespan(app: FastAPI):
             agent_client=agent_client,
             session_manager=session_manager,
             slack_sender=slack_sender,
-            sms_sender=sms_sender,
             telegram_sender=telegram_sender,
             discord_sender=discord_sender,
         )
@@ -245,14 +219,13 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI application
 app = FastAPI(
-    title="Schoopet SMS Gateway",
-    description="Twilio SMS integration for Vertex AI Agent Engine",
+    title="Schoopet Gateway",
+    description="Discord/Telegram/Slack/Email gateway for Vertex AI Agent Engine",
     version="1.0.0",
     lifespan=lifespan,
 )
 
 # Include routers
-app.include_router(webhook_router)
 app.include_router(discord_router)
 app.include_router(telegram_router)
 app.include_router(slack_router)
