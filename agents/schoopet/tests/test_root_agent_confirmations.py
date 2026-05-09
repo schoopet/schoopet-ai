@@ -39,6 +39,7 @@ NO_CONFIRMATION = {
     "save_multiple_memories",
     "create_async_task",
     "check_task_status",
+    "get_task_result",
     "list_pending_tasks",
     "list_calendar_events",
     "get_calendar_status",

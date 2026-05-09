@@ -138,6 +138,119 @@ class TestAsyncTaskTool:
         assert "Status: completed" in result
         assert "Result preview: AI is cool" in result
 
+    def test_get_task_result_completed_for_owner(self, async_task_tool, tool_context, mock_firestore):
+        """Should return the stored task result for the owning user."""
+        completed_at = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": USER_ID,
+            "task_type": "research",
+            "instruction": "Research AI",
+            "status": "notified",
+            "result": "Full research result",
+            "created_at": datetime.now(timezone.utc),
+            "completed_at": completed_at,
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        result = async_task_tool.get_task_result(TASK_ID, tool_context=tool_context)
+
+        assert f"task_id: {TASK_ID}" in result
+        assert "task_type: research" in result
+        assert "status: notified" in result
+        assert f"completed_at: {completed_at.isoformat()}" in result
+        assert "truncated: false" in result
+        assert "Full research result" in result
+
+    def test_get_task_result_truncates_to_requested_limit(self, async_task_tool, tool_context, mock_firestore):
+        """Should truncate long stored results and mark truncated=true."""
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": USER_ID,
+            "task_type": "research",
+            "instruction": "Research AI",
+            "status": "completed",
+            "result": "abcdef",
+            "created_at": datetime.now(timezone.utc),
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        result = async_task_tool.get_task_result(
+            TASK_ID,
+            max_chars=3,
+            tool_context=tool_context,
+        )
+
+        assert "truncated: true" in result
+        assert result.endswith("abc")
+        assert "abcdef" not in result
+
+    def test_get_task_result_wrong_user_not_found(self, async_task_tool, tool_context, mock_firestore):
+        """Should not expose task results across users."""
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": "other-user",
+            "task_type": "research",
+            "instruction": "Research AI",
+            "status": "completed",
+            "result": "Secret result",
+            "created_at": datetime.now(timezone.utc),
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        result = async_task_tool.get_task_result(TASK_ID, tool_context=tool_context)
+
+        assert result == f"Task {TASK_ID} not found."
+
+    def test_get_task_result_pending_has_no_result(self, async_task_tool, tool_context, mock_firestore):
+        """Should return status metadata when result is not ready yet."""
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": USER_ID,
+            "task_type": "analysis",
+            "instruction": "Analyze calendar",
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc),
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        result = async_task_tool.get_task_result(TASK_ID, tool_context=tool_context)
+
+        assert f"task_id: {TASK_ID}" in result
+        assert "task_type: analysis" in result
+        assert "status: pending" in result
+        assert "truncated: false" in result
+        assert "result: Result not available yet." in result
+
+    def test_get_task_result_failed_returns_error(self, async_task_tool, tool_context, mock_firestore):
+        """Should return the stored error for failed tasks."""
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": USER_ID,
+            "task_type": "research",
+            "instruction": "Research AI",
+            "status": "failed",
+            "error": "Worker timed out",
+            "created_at": datetime.now(timezone.utc),
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        result = async_task_tool.get_task_result(TASK_ID, tool_context=tool_context)
+
+        assert "status: failed" in result
+        assert "truncated: false" in result
+        assert "error: Worker timed out" in result
+
     def test_cancel_task_success(self, async_task_tool, tool_context, mock_firestore, mock_cloud_tasks):
         """Should cancel pending task."""
         mock_doc = MagicMock()
@@ -161,4 +274,3 @@ class TestAsyncTaskTool:
             "status": "cancelled",
             "completed_at": ANY
         })
-

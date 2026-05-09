@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Firestore collection for async tasks
 ASYNC_TASKS_COLLECTION = "async_tasks"
+MAX_TASK_RESULT_CHARS = 50000
 
 
 class AsyncTaskTool:
@@ -261,6 +262,89 @@ class AsyncTaskTool:
         except Exception as e:
             logger.error(f"Failed to check task status: {e}")
             return f"ERROR: Failed to check task status: {str(e)}"
+
+    def get_task_result(
+        self,
+        task_id: str,
+        max_chars: int = 12000,
+        tool_context: Optional[ToolContext] = None,
+    ) -> str:
+        """
+        Retrieve the full stored result for an async task, bounded by max_chars.
+
+        Args:
+            task_id: The task ID returned by create_async_task
+            max_chars: Maximum result characters to return, capped at 50000
+
+        Returns:
+            Task metadata and the stored result or error, scoped to the current user.
+        """
+        user_id = self._get_user_id(tool_context)
+        if not user_id:
+            return "ERROR: Cannot retrieve task result - no user_id available."
+
+        firestore_client = self._get_firestore_client()
+        if not firestore_client:
+            return "ERROR: Task system not initialized."
+
+        try:
+            requested_chars = int(max_chars)
+        except (TypeError, ValueError):
+            requested_chars = 12000
+        bounded_max_chars = max(0, min(requested_chars, MAX_TASK_RESULT_CHARS))
+
+        try:
+            doc = firestore_client.collection(ASYNC_TASKS_COLLECTION).document(task_id).get()
+
+            if not doc.exists:
+                return f"Task {task_id} not found."
+
+            data = doc.to_dict()
+
+            # Security: verify task belongs to user
+            if data.get("user_id") != user_id:
+                return f"Task {task_id} not found."
+
+            task = AsyncTaskDocument.from_firestore(data)
+            completed_at = (
+                task.completed_at.isoformat()
+                if task.completed_at
+                else "None"
+            )
+            lines = [
+                f"task_id: {task.task_id}",
+                f"task_type: {task.task_type}",
+                f"status: {task.status.value}",
+                f"completed_at: {completed_at}",
+            ]
+
+            if task.status == TaskStatus.FAILED:
+                lines.append("truncated: false")
+                lines.append(f"error: {task.error or ''}")
+                return "\n".join(lines)
+
+            if task.status not in [TaskStatus.COMPLETED, TaskStatus.NOTIFIED]:
+                lines.extend([
+                    "truncated: false",
+                    "result: Result not available yet.",
+                ])
+                return "\n".join(lines)
+
+            result = task.result or ""
+            truncated = len(result) > bounded_max_chars
+            if truncated:
+                result = result[:bounded_max_chars]
+
+            lines.extend([
+                f"truncated: {str(truncated).lower()}",
+                "result:",
+                result,
+            ])
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Failed to retrieve task result: {e}")
+            return f"ERROR: Failed to retrieve task result: {str(e)}"
 
     def cancel_task(
         self,

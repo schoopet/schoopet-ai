@@ -165,6 +165,7 @@ def _personal_prompt() -> str:
         "**Creating tasks:**\n"
         "- create_async_task(task_type, instruction, context, schedule_delay_minutes, schedule_at, allowed_resource_ids)\n"
         "- check_task_status(task_id)\n"
+        "- get_task_result(task_id, max_chars)\n"
         "- cancel_task(task_id)\n"
         "- list_pending_tasks()\n"
         "- get_cloud_task_status(task_id, cloud_task_name)\n"
@@ -201,7 +202,9 @@ def _personal_prompt() -> str:
         "**When you receive INTERNAL_TASK_COMPLETE:**\n"
         "Inform the user about the completed task conversationally. "
         "Do NOT call any write tools (sheets, docs, drive) — the background task already "
-        "completed all writes. Just deliver the summary to the user.\n\n"
+        "completed all writes. Just deliver the summary to the user. "
+        "If the user follows up about a background-task notification and the task result is missing "
+        "from conversation context, call get_task_result(task_id) to recover the stored result.\n\n"
 
         "## Gmail\n"
         "You can monitor the user's Gmail inbox and proactively act on incoming emails.\n\n"
@@ -277,6 +280,7 @@ def create_agent(
     # Async task tools
     create_async_task = FunctionTool(func=async_task_tool.create_async_task)
     check_task_status = FunctionTool(func=async_task_tool.check_task_status)
+    get_task_result = FunctionTool(func=async_task_tool.get_task_result)
     cancel_task = FunctionTool(func=async_task_tool.cancel_task, require_confirmation=True)
     list_pending_tasks = FunctionTool(func=async_task_tool.list_pending_tasks)
     # Calendar tools
@@ -387,6 +391,7 @@ def create_agent(
         # Async task tools
         create_async_task,
         check_task_status,
+        get_task_result,
         cancel_task,
         list_pending_tasks,
         get_cloud_task_status_tool,
