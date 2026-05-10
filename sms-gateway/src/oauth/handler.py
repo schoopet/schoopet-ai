@@ -1,4 +1,5 @@
 """OAuth HTTP handler for Google OAuth flow."""
+import html
 import logging
 from urllib.parse import urlencode
 
@@ -86,8 +87,8 @@ def _success_html(email: str, service_name: str = "Google Calendar") -> str:
         <div class="container">
             <div class="success-icon">&#10004;</div>
             <h1>Authorization Successful!</h1>
-            <p>Your {service_name} has been connected.</p>
-            <div class="email">{email}</div>
+            <p>Your {html.escape(service_name)} has been connected.</p>
+            <div class="email">{html.escape(email)}</div>
             <p>You can now close this window and use Schoopet.</p>
         </div>
     </body>
@@ -147,7 +148,7 @@ def _error_html(message: str) -> str:
         <div class="container">
             <div class="error-icon">&#10006;</div>
             <h1>Authorization Failed</h1>
-            <div class="message">{message}</div>
+            <div class="message">{html.escape(message)}</div>
             <p>Please try again by requesting a new authorization link from Schoopet.</p>
         </div>
     </body>

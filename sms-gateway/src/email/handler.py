@@ -109,6 +109,9 @@ async def _verify_pubsub_oidc(request: Request) -> None:
 
     token = authorization[7:]
     audience = os.getenv("SMS_GATEWAY_URL", "")
+    if not audience:
+        logger.error("SMS_GATEWAY_URL not set — cannot validate Pub/Sub OIDC audience")
+        raise HTTPException(status_code=503, detail="Server misconfigured: missing audience")
 
     try:
         from google.auth.transport import requests as google_requests
@@ -121,7 +124,7 @@ async def _verify_pubsub_oidc(request: Request) -> None:
                 id_token.verify_oauth2_token,
                 token,
                 google_requests.Request(),
-                audience=audience if audience else None,
+                audience=audience,
             ),
         )
     except Exception as e:

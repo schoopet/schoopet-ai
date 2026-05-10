@@ -66,6 +66,9 @@ async def verify_oidc_token(authorization: str) -> str:
         from google.oauth2 import id_token
 
         audience = os.getenv("SMS_GATEWAY_URL", "")
+        if not audience:
+            logger.error("SMS_GATEWAY_URL not set — cannot validate OIDC audience")
+            raise HTTPException(status_code=503, detail="Server misconfigured: missing audience")
 
         loop = asyncio.get_running_loop()
         claims = await loop.run_in_executor(
@@ -74,7 +77,7 @@ async def verify_oidc_token(authorization: str) -> str:
                 id_token.verify_oauth2_token,
                 token,
                 google_requests.Request(),
-                audience=audience if audience else None,
+                audience=audience,
             ),
         )
 

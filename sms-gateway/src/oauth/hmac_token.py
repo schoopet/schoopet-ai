@@ -70,7 +70,6 @@ def validate_oauth_init_token(token: str, secret: str) -> Optional[str]:
 
         # Decode base64
         decoded = base64.urlsafe_b64decode(token).decode()
-        logger.debug(f"Token decoded. Original len: {len(original_token)}, Decoded: {decoded[:50]}...")
 
         # Split into components (user_id may contain colons in theory, so rsplit)
         user_id, expires_str, signature = decoded.rsplit(":", 2)
@@ -90,11 +89,7 @@ def validate_oauth_init_token(token: str, secret: str) -> Optional[str]:
         ).hexdigest()
 
         if not hmac.compare_digest(signature, expected):
-            logger.warning(
-                f"OAuth token signature mismatch. User: {user_id}. "
-                f"Expected ({len(expected)}): {expected}, Got ({len(signature)}): {signature}. "
-                f"Message used: {message!r}"
-            )
+            logger.warning("OAuth token signature mismatch for user %s", user_id)
             return None
 
         return user_id
