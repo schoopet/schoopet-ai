@@ -210,13 +210,13 @@ class TestSessionManager:
         assert result.personal_agent_session_id == "session-123"
 
     @pytest.mark.asyncio
-    async def test_pending_confirmation_round_trip(self, mock_firestore, session_manager):
-        """Should store, read, and clear pending confirmation state."""
+    async def test_pending_approval_round_trip(self, mock_firestore, session_manager):
+        """Should store, read, and clear live pending approval state."""
         from datetime import timezone
         _, doc_ref = mock_firestore
 
-        confirmation = MagicMock()
-        confirmation.to_firestore.return_value = {
+        approval = MagicMock()
+        approval.to_firestore.return_value = {
             "function_call_id": "confirm-1",
             "original_function_call": {
                 "id": "tool-1",
@@ -230,9 +230,9 @@ class TestSessionManager:
             "payload": {"kind": "email"},
         }
 
-        pending = await session_manager.set_pending_confirmation(
+        pending = await session_manager.add_pending_approval(
             user_id="+14155551234",
-            confirmation=confirmation,
+            confirmation=approval,
             session_id="session-123",
             channel="discord",
         )
@@ -240,6 +240,7 @@ class TestSessionManager:
         assert pending["id"]
         assert pending["adk_confirmation_function_call_id"] == "confirm-1"
         assert pending["tool_name"] == "send_email"
+        assert pending["approval_group_id"] == "action:confirm-1"
         doc_ref.update.assert_called()
 
         existing_data = {
@@ -256,19 +257,19 @@ class TestSessionManager:
         mock_doc.to_dict.return_value = existing_data
         doc_ref.get.return_value = mock_doc
 
-        assert await session_manager.get_pending_confirmation(
+        assert await session_manager.get_pending_approval(
             "+14155551234", pending["id"]
         ) == pending
-        assert await session_manager.get_pending_confirmation(
+        assert await session_manager.get_pending_approval(
             "+14155551234", "wrong-id"
         ) is None
 
-        await session_manager.clear_pending_confirmation("+14155551234", pending["id"])
+        await session_manager.clear_pending_approval("+14155551234", pending["id"])
         assert doc_ref.update.call_args[0][0] == {"pending_confirmations": []}
 
     @pytest.mark.asyncio
-    async def test_multiple_pending_confirmations(self, mock_firestore, session_manager):
-        """Should append and selectively clear individual pending confirmations."""
+    async def test_multiple_pending_approvals(self, mock_firestore, session_manager):
+        """Should append and selectively clear individual pending approvals."""
         from datetime import timezone
         _, doc_ref = mock_firestore
 
@@ -285,13 +286,13 @@ class TestSessionManager:
             }
             return c
 
-        pending_a = await session_manager.set_pending_confirmation(
+        pending_a = await session_manager.add_pending_approval(
             user_id="+14155551234",
             confirmation=_make_confirmation("create_event", "cid-a"),
             session_id="session-123",
             channel="discord",
         )
-        pending_b = await session_manager.set_pending_confirmation(
+        pending_b = await session_manager.add_pending_approval(
             user_id="+14155551234",
             confirmation=_make_confirmation("save_file", "cid-b"),
             session_id="session-123",
@@ -318,10 +319,88 @@ class TestSessionManager:
         doc_ref.get.return_value = mock_doc
 
         # Clearing pending_a leaves only pending_b
-        await session_manager.clear_pending_confirmation("+14155551234", pending_a["id"])
+        await session_manager.clear_pending_approval("+14155551234", pending_a["id"])
         updated = doc_ref.update.call_args[0][0]["pending_confirmations"]
         assert len(updated) == 1
         assert updated[0]["id"] == pending_b["id"]
+
+    @pytest.mark.asyncio
+    async def test_workspace_resource_approvals_group_by_id_only(self, mock_firestore, session_manager):
+        """Sheet, Doc, and folder approvals sharing one Drive ID use one approval group."""
+        from datetime import timezone
+        _, doc_ref = mock_firestore
+
+        def _make_confirmation(name: str, call_id: str, args: dict):
+            c = MagicMock()
+            c.to_firestore.return_value = {
+                "function_call_id": call_id,
+                "original_function_call": {"id": call_id, "name": name, "args": args},
+                "original_function_call_id": call_id,
+                "tool_name": name,
+                "tool_args": args,
+                "hint": "",
+                "payload": None,
+            }
+            return c
+
+        first = await session_manager.add_pending_approval(
+            user_id="+14155551234",
+            confirmation=_make_confirmation(
+                "append_record_to_sheet",
+                "cid-sheet",
+                {"sheet_id": "drive-resource-1", "record": {"Name": "Ada"}},
+            ),
+            session_id="session-123",
+            channel="discord",
+        )
+
+        existing_doc = MagicMock()
+        existing_doc.exists = True
+        existing_doc.to_dict.return_value = {"pending_confirmations": [first]}
+        doc_ref.get.return_value = existing_doc
+
+        second = await session_manager.add_pending_approval(
+            user_id="+14155551234",
+            confirmation=_make_confirmation(
+                "append_to_google_doc",
+                "cid-doc",
+                {"document_id": "drive-resource-1", "text": "Hello"},
+            ),
+            session_id="session-123",
+            channel="discord",
+        )
+
+        assert first["approval_group_id"] == "resource:drive-resource-1"
+        assert second["approval_group_id"] == "resource:drive-resource-1"
+        assert second["approval_notification_id"] == first["id"]
+        assert second["is_group_notification_owner"] is False
+
+        session_doc = MagicMock()
+        session_doc.exists = True
+        session_doc.to_dict.return_value = {
+            "phone_number": "+14155551234",
+            "personal_agent_session_id": "session-123",
+            "created_at": datetime.now(timezone.utc),
+            "last_activity": datetime.now(timezone.utc),
+            "message_count": 1,
+            "opted_in": True,
+            "pending_confirmations": [first, second],
+        }
+        doc_ref.get.return_value = session_doc
+
+        group = await session_manager.get_pending_approval_group(
+            "+14155551234",
+            first["id"],
+        )
+
+        assert [pending["id"] for pending in group] == [first["id"], second["id"]]
+        assert session_manager.pending_approval_notification_id(group) == first["id"]
+        notification = session_manager.format_pending_approval_notification(group)
+        assert "Approve 2 action(s)" in notification
+        assert "drive-resource-1" in notification
+
+        await session_manager.clear_pending_approval_group("+14155551234", first["id"])
+        assert doc_ref.update.call_args[0][0]["pending_confirmations"] == []
 
     @pytest.mark.asyncio
     async def test_get_session_not_exists(self, mock_firestore, session_manager):

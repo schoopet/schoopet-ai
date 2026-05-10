@@ -21,10 +21,11 @@ _RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
 
 
 def _build_allowed_resource_state(allowed_resource_ids: list) -> dict:
-    """Build initial ADK session state that pre-approves specific resource IDs.
+    """Build initial ADK session state for offline pre-authorized resources.
 
-    Pre-populating these keys lets the task run without prompting the user for
-    resources they already approved at scheduling time.
+    Background tasks cannot wait on live pending approvals. Pre-populating these
+    keys lets the task use resources the user already approved at scheduling
+    time, using the same resource-ID scope as interactive approvals.
     """
     return {
         f"{_RESOURCE_CONFIRMED_PREFIX}{resource_id}": True
@@ -243,13 +244,27 @@ class TaskWorker:
         adk_app = client.agent_engines.get(name=engine_name)
         user_id = task["user_id"]
 
-        initial_state = _build_allowed_resource_state(task.get("allowed_resource_ids", {}))
+        allowed_resource_ids = task.get("allowed_resource_ids", [])
+        initial_state = _build_allowed_resource_state(allowed_resource_ids)
+        logger.info(
+            "Offline resource pre-authorization for task: user=%s allowed_resource_ids=%s state_keys=%s",
+            user_id,
+            allowed_resource_ids,
+            sorted(initial_state.keys()),
+        )
         session = await adk_app.async_create_session(user_id=user_id, state=initial_state)
         session_id = session["id"]
 
         logger.info(
             f"Created Agent Engine session {session_id} on engine {engine_id} "
             f"for user {user_id}"
+        )
+        logger.info(
+            "Offline task prompt for task_id=%s user=%s session_id=%s:\n%s",
+            task.get("task_id"),
+            user_id,
+            session_id,
+            prompt,
         )
 
         try:

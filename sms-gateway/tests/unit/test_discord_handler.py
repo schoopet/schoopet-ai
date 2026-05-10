@@ -70,7 +70,7 @@ async def test_component_confirmation_rejects_wrong_or_expired_pending(
     discord_handler_services,
 ):
     session_manager, _, _ = discord_handler_services
-    session_manager.get_pending_confirmation = AsyncMock(return_value=None)
+    session_manager.get_pending_approval = AsyncMock(return_value=None)
 
     response = await handler.handle_discord_webhook(
         _FakeRequest(
@@ -103,6 +103,16 @@ async def test_process_component_confirmation_sends_adk_response_and_followup(
         }
     )
     session_manager.clear_pending_confirmation = AsyncMock()
+    session_manager.get_pending_approval_group = AsyncMock(
+        return_value=[
+            {
+                "id": "pending-123",
+                "agent_session_id": "agent-session-123",
+                "adk_confirmation_function_call_id": "confirm-1",
+            }
+        ]
+    )
+    session_manager.clear_pending_approval_group = AsyncMock()
     session_manager.update_last_activity = AsyncMock()
     agent_client.send_confirmation_response = AsyncMock(return_value=["event"])
     agent_client.extract_text = lambda events: "Done."
@@ -121,5 +131,5 @@ async def test_process_component_confirmation_sends_adk_response_and_followup(
         confirmation_function_call_id="confirm-1",
         confirmed=True,
     )
-    session_manager.clear_pending_confirmation.assert_awaited_once_with("user-123", "pending-123")
+    session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-123")
     discord_sender.send_followup.assert_awaited_once_with("interaction-token", "Done.")

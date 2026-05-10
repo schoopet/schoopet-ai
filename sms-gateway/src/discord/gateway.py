@@ -12,7 +12,6 @@ The non-privileged DIRECT_MESSAGES and GUILD_MESSAGES intents are requested
 in code and do not need manual enabling.
 """
 import asyncio
-import json
 import logging
 import time
 
@@ -31,46 +30,37 @@ logger = logging.getLogger(__name__)
 
 MAX_INLINE_ATTACHMENT_BYTES = 10 * 1024 * 1024
 FALLBACK_MIME_TYPE = "application/octet-stream"
-MAX_CONFIRMATION_ARG_CHARS = 700
 
 
-def _summarize_confirmation_args(args: dict) -> str:
-    """Return a compact, stable summary for a confirmation prompt."""
-    if not args:
-        return ""
-    try:
-        text = json.dumps(args, sort_keys=True, default=str)
-    except TypeError:
-        text = str(args)
-    if len(text) > MAX_CONFIRMATION_ARG_CHARS:
-        return f"{text[:MAX_CONFIRMATION_ARG_CHARS - 3]}..."
-    return text
-
-
-def _format_confirmation_prompt(confirmation) -> str:
-    args = _summarize_confirmation_args(confirmation.tool_args)
-    return f"Approve this action?\n{confirmation.tool_name}({args})"
-
-
-async def _get_pending_confirmation(session_manager, user_id: str, pending_id: str, session_scope: str = ""):
+async def _get_pending_approval(session_manager, user_id: str, pending_id: str, session_scope: str = ""):
     if session_scope:
-        return await session_manager.get_pending_confirmation(
+        return await session_manager.get_pending_approval(
             user_id,
             pending_id,
             session_scope=session_scope,
         )
-    return await session_manager.get_pending_confirmation(user_id, pending_id)
+    return await session_manager.get_pending_approval(user_id, pending_id)
 
 
-async def _clear_pending_confirmation(session_manager, user_id: str, pending_id: str, session_scope: str = ""):
+async def _get_pending_approval_group(session_manager, user_id: str, pending_id: str, session_scope: str = ""):
     if session_scope:
-        await session_manager.clear_pending_confirmation(
+        return await session_manager.get_pending_approval_group(
+            user_id,
+            pending_id,
+            session_scope=session_scope,
+        )
+    return await session_manager.get_pending_approval_group(user_id, pending_id)
+
+
+async def _clear_pending_approval_group(session_manager, user_id: str, pending_id: str, session_scope: str = ""):
+    if session_scope:
+        await session_manager.clear_pending_approval_group(
             user_id,
             pending_id,
             session_scope=session_scope,
         )
         return
-    await session_manager.clear_pending_confirmation(user_id, pending_id)
+    await session_manager.clear_pending_approval_group(user_id, pending_id)
 
 
 async def _build_discord_message_content(
@@ -255,6 +245,51 @@ class SchoopetGateway(discord.Client):
         for chunk in _split_message(response_text):
             await channel.send(chunk)
 
+    async def _store_and_send_confirmations(
+        self,
+        user_id: str,
+        confirmations: list,
+        session_id: str,
+        channel,
+        session_scope: str,
+        followup=None,
+    ) -> None:
+        pending_by_group: dict[str, list[dict]] = {}
+        send_group: dict[str, bool] = {}
+
+        for confirmation in confirmations:
+            pending = await self._session_manager.add_pending_approval(
+                user_id=user_id,
+                confirmation=confirmation,
+                session_id=session_id,
+                channel="discord",
+                session_scope=session_scope,
+            )
+            group_id = pending.get("approval_group_id") or pending["id"]
+            pending_by_group.setdefault(group_id, []).append(pending)
+            send_group[group_id] = (
+                send_group.get(group_id, False)
+                or pending.get("is_group_notification_owner", True)
+            )
+
+        for group_id, pending_group in pending_by_group.items():
+            if not send_group.get(group_id, True):
+                continue
+            if not self._session_manager.should_send_pending_approval_notification(pending_group):
+                continue
+            notification_id = self._session_manager.pending_approval_notification_id(pending_group)
+            message = self._session_manager.format_pending_approval_notification(pending_group)
+            view = _ConfirmationView(
+                self,
+                user_id,
+                notification_id,
+                session_scope=session_scope,
+            )
+            if followup is not None:
+                await followup.send(message, view=view)
+            else:
+                await channel.send(message, view=view)
+
     async def _handle_gateway_message(
         self,
         user_id: str,
@@ -305,23 +340,13 @@ class SchoopetGateway(discord.Client):
 
             confirmations = self._agent_client.extract_confirmation_requests(events)
             if confirmations:
-                for confirmation in confirmations:
-                    pending = await self._session_manager.set_pending_confirmation(
-                        user_id=user_id,
-                        confirmation=confirmation,
-                        session_id=session_info.agent_session_id,
-                        channel="discord",
-                        session_scope=discord_context.session_scope,
-                    )
-                    await channel.send(
-                        _format_confirmation_prompt(confirmation),
-                        view=_ConfirmationView(
-                            self,
-                            user_id,
-                            pending["id"],
-                            session_scope=discord_context.session_scope,
-                        ),
-                    )
+                await self._store_and_send_confirmations(
+                    user_id=user_id,
+                    confirmations=confirmations,
+                    session_id=session_info.agent_session_id,
+                    channel=channel,
+                    session_scope=discord_context.session_scope,
+                )
                 await self._session_manager.update_last_activity(
                     user_id,
                     channel="discord",
@@ -371,7 +396,7 @@ class SchoopetGateway(discord.Client):
             )
             return
 
-        pending = await _get_pending_confirmation(
+        pending = await _get_pending_approval(
             self._session_manager,
             user_id,
             pending_id,
@@ -384,13 +409,26 @@ class SchoopetGateway(discord.Client):
             return
 
         try:
-            events = await self._agent_client.send_confirmation_response(
-                user_id=user_id,
-                session_id=pending["agent_session_id"],
-                confirmation_function_call_id=pending["adk_confirmation_function_call_id"],
-                confirmed=confirmed,
+            pending_group = await _get_pending_approval_group(
+                self._session_manager,
+                user_id,
+                pending_id,
+                session_scope=session_scope,
             )
-            await _clear_pending_confirmation(
+            if not pending_group:
+                pending_group = [pending]
+
+            all_events = []
+            for grouped_pending in pending_group:
+                events = await self._agent_client.send_confirmation_response(
+                    user_id=user_id,
+                    session_id=grouped_pending["agent_session_id"],
+                    confirmation_function_call_id=grouped_pending["adk_confirmation_function_call_id"],
+                    confirmed=confirmed,
+                )
+                all_events.extend(events)
+
+            await _clear_pending_approval_group(
                 self._session_manager,
                 user_id,
                 pending_id,
@@ -399,27 +437,18 @@ class SchoopetGateway(discord.Client):
             view.disable_buttons()
             await interaction.response.edit_message(view=view)
 
-            new_confirmations = self._agent_client.extract_confirmation_requests(events)
+            new_confirmations = self._agent_client.extract_confirmation_requests(all_events)
             if new_confirmations:
-                for conf in new_confirmations:
-                    new_pending = await self._session_manager.set_pending_confirmation(
-                        user_id=user_id,
-                        confirmation=conf,
-                        session_id=pending["agent_session_id"],
-                        channel="discord",
-                        session_scope=session_scope,
-                    )
-                    await interaction.followup.send(
-                        _format_confirmation_prompt(conf),
-                        view=_ConfirmationView(
-                            self,
-                            user_id,
-                            new_pending["id"],
-                            session_scope=session_scope,
-                        ),
-                    )
+                await self._store_and_send_confirmations(
+                    user_id=user_id,
+                    confirmations=new_confirmations,
+                    session_id=pending["agent_session_id"],
+                    channel=None,
+                    session_scope=session_scope,
+                    followup=interaction.followup,
+                )
             else:
-                response = self._agent_client.extract_text(events)
+                response = self._agent_client.extract_text(all_events)
                 if response:
                     for chunk in _split_message(response):
                         await interaction.followup.send(chunk)

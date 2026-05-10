@@ -22,7 +22,10 @@ class SessionDocument(BaseModel):
     session_scope: str = Field(default="", description="Optional channel/thread scope for scoped sessions")
     state_extra: dict = Field(default_factory=dict, description="Extra state passed to Agent Engine session")
     slack_team_id: Optional[str] = Field(default=None, description="Slack workspace team_id")
-    pending_confirmations: list[dict] = Field(default_factory=list, description="Pending ADK confirmation states")
+    pending_confirmations: list[dict] = Field(
+        default_factory=list,
+        description="Live pending ADK approvals awaiting user interaction",
+    )
 
     def to_firestore(self) -> dict:
         """Convert to Firestore-compatible dictionary."""
@@ -76,4 +79,3 @@ class SessionInfo(BaseModel):
     channel: str = Field(default="sms", description="Communication channel: sms, whatsapp, slack, etc.")
     session_scope: str = Field(default="", description="Optional channel/thread scope for scoped sessions")
     state_extra: dict = Field(default_factory=dict, description="Extra session routing metadata")
-

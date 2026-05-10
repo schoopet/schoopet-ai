@@ -67,25 +67,35 @@ def _context_from_interaction(data: dict) -> DiscordContext:
     )
 
 
-async def _get_pending_confirmation(user_id: str, pending_id: str, session_scope: str = ""):
+async def _get_pending_approval(user_id: str, pending_id: str, session_scope: str = ""):
     if session_scope:
-        return await _session_manager.get_pending_confirmation(
+        return await _session_manager.get_pending_approval(
             user_id,
             pending_id,
             session_scope=session_scope,
         )
-    return await _session_manager.get_pending_confirmation(user_id, pending_id)
+    return await _session_manager.get_pending_approval(user_id, pending_id)
 
 
-async def _clear_pending_confirmation(user_id: str, pending_id: str, session_scope: str = ""):
+async def _get_pending_approval_group(user_id: str, pending_id: str, session_scope: str = ""):
     if session_scope:
-        await _session_manager.clear_pending_confirmation(
+        return await _session_manager.get_pending_approval_group(
+            user_id,
+            pending_id,
+            session_scope=session_scope,
+        )
+    return await _session_manager.get_pending_approval_group(user_id, pending_id)
+
+
+async def _clear_pending_approval_group(user_id: str, pending_id: str, session_scope: str = ""):
+    if session_scope:
+        await _session_manager.clear_pending_approval_group(
             user_id,
             pending_id,
             session_scope=session_scope,
         )
         return
-    await _session_manager.clear_pending_confirmation(user_id, pending_id)
+    await _session_manager.clear_pending_approval_group(user_id, pending_id)
 
 
 @router.post("/webhook/discord")
@@ -185,7 +195,7 @@ async def handle_discord_webhook(
                 },
             })
 
-        pending = await _get_pending_confirmation(
+        pending = await _get_pending_approval(
             user_id,
             pending_id,
             session_scope=discord_context.session_scope,
@@ -251,7 +261,7 @@ async def process_discord_confirmation_component(
 ) -> None:
     """Resolve an ADK confirmation from a Discord component webhook."""
     try:
-        pending = await _get_pending_confirmation(
+        pending = await _get_pending_approval(
             user_id,
             pending_id,
             session_scope=session_scope,
@@ -263,19 +273,31 @@ async def process_discord_confirmation_component(
             )
             return
 
-        events = await _agent_client.send_confirmation_response(
-            user_id=user_id,
-            session_id=pending["agent_session_id"],
-            confirmation_function_call_id=pending["adk_confirmation_function_call_id"],
-            confirmed=confirmed,
+        pending_group = await _get_pending_approval_group(
+            user_id,
+            pending_id,
+            session_scope=session_scope,
         )
-        await _clear_pending_confirmation(
+        if not pending_group:
+            pending_group = [pending]
+
+        all_events = []
+        for grouped_pending in pending_group:
+            events = await _agent_client.send_confirmation_response(
+                user_id=user_id,
+                session_id=grouped_pending["agent_session_id"],
+                confirmation_function_call_id=grouped_pending["adk_confirmation_function_call_id"],
+                confirmed=confirmed,
+            )
+            all_events.extend(events)
+
+        await _clear_pending_approval_group(
             user_id,
             pending_id,
             session_scope=session_scope,
         )
 
-        response = _agent_client.extract_text(events)
+        response = _agent_client.extract_text(all_events)
         if response:
             await _discord_sender.send_followup(interaction_token, response)
         await _session_manager.update_last_activity(

@@ -8,6 +8,7 @@ from typing import Optional
 from google.cloud import firestore
 
 from .models import SessionDocument, SessionInfo
+from .approvals import PendingApprovalCoordinator
 from ..utils import normalize_user_id
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class SessionManager:
         self._agent_client = agent_client
         self._timeout = timedelta(minutes=timeout_minutes)
         self._collection = self._db.collection(COLLECTION_NAME)
+        self._approval_coordinator = PendingApprovalCoordinator()
 
     def _doc_id(self, user_id: str, session_scope: str | None = None) -> str:
         """Return the Firestore document ID for a user/session scope."""
@@ -338,7 +340,7 @@ class SessionManager:
             return SessionDocument.from_firestore(doc.to_dict())
         return None
 
-    async def set_pending_confirmation(
+    async def add_pending_approval(
         self,
         user_id: str,
         confirmation,
@@ -346,7 +348,12 @@ class SessionManager:
         channel: str,
         session_scope: str | None = None,
     ) -> dict:
-        """Append one pending ADK confirmation to the user's confirmation list."""
+        """Append one live pending ADK approval to the user's approval list.
+
+        These approvals are interactive prompts stored on the session document.
+        Offline/background tasks do not use this API; they use
+        allowed_resource_ids to pre-authorize resource IDs before execution.
+        """
         doc_id = self._doc_id(user_id, session_scope)
         doc_ref = self._collection.document(doc_id)
         pending_id = secrets.token_urlsafe(9)
@@ -355,31 +362,32 @@ class SessionManager:
             if hasattr(confirmation, "to_firestore")
             else dict(confirmation)
         )
-        pending = {
-            "id": pending_id,
-            "user_id": user_id,
-            "agent_session_id": session_id,
-            "adk_confirmation_function_call_id": confirmation_data.get("function_call_id", ""),
-            "original_function_call": confirmation_data.get("original_function_call", {}),
-            "original_function_call_id": confirmation_data.get("original_function_call_id", ""),
-            "tool_name": confirmation_data.get("tool_name", "unknown_tool"),
-            "tool_args": confirmation_data.get("tool_args", {}),
-            "hint": confirmation_data.get("hint", ""),
-            "payload": confirmation_data.get("payload"),
-            "created_at": datetime.now(timezone.utc),
-            "channel": channel,
-            "session_scope": session_scope or "",
-        }
+        existing_doc = await doc_ref.get()
+        existing_data = existing_doc.to_dict() if existing_doc.exists is True else {}
+        existing_pending = []
+        if isinstance(existing_data, dict):
+            existing_pending = existing_data.get("pending_confirmations", []) or []
+
+        pending = self._approval_coordinator.build_pending(
+            confirmation_data=confirmation_data,
+            existing_pending=existing_pending,
+            pending_id=pending_id,
+            user_id=user_id,
+            session_id=session_id,
+            channel=channel,
+            session_scope=session_scope or "",
+            created_at=datetime.now(timezone.utc),
+        )
         await doc_ref.update({"pending_confirmations": firestore.ArrayUnion([pending])})
         return pending
 
-    async def get_pending_confirmation(
+    async def get_pending_approval(
         self,
         user_id: str,
         pending_id: str,
         session_scope: str | None = None,
     ) -> Optional[dict]:
-        """Return the pending confirmation matching pending_id, or None."""
+        """Return the pending approval matching pending_id, or None."""
         session = await self.get_session(user_id, session_scope=session_scope)
         if not session:
             return None
@@ -388,13 +396,29 @@ class SessionManager:
             None,
         )
 
-    async def clear_pending_confirmation(
+    async def get_pending_approval_group(
+        self,
+        user_id: str,
+        pending_id: str,
+        session_scope: str | None = None,
+    ) -> list[dict]:
+        """Return all pending approvals sharing pending_id's approval group."""
+        session = await self.get_session(user_id, session_scope=session_scope)
+        if not session:
+            return []
+
+        return self._approval_coordinator.group_for_pending_id(
+            session.pending_confirmations,
+            pending_id,
+        )
+
+    async def clear_pending_approval(
         self,
         user_id: str,
         pending_id: str,
         session_scope: str | None = None,
     ) -> None:
-        """Remove one pending confirmation by ID from the user's confirmation list."""
+        """Remove one pending approval by ID from the user's approval list."""
         session = await self.get_session(user_id, session_scope=session_scope)
         if not session:
             return
@@ -402,6 +426,37 @@ class SessionManager:
         doc_id = self._doc_id(user_id, session_scope)
         doc_ref = self._collection.document(doc_id)
         await doc_ref.update({"pending_confirmations": remaining})
+
+    async def clear_pending_approval_group(
+        self,
+        user_id: str,
+        pending_id: str,
+        session_scope: str | None = None,
+    ) -> None:
+        """Remove all pending approvals sharing pending_id's approval group."""
+        session = await self.get_session(user_id, session_scope=session_scope)
+        if not session:
+            return
+
+        remaining = self._approval_coordinator.clear_group_for_pending_id(
+            session.pending_confirmations,
+            pending_id,
+        )
+        doc_id = self._doc_id(user_id, session_scope)
+        doc_ref = self._collection.document(doc_id)
+        await doc_ref.update({"pending_confirmations": remaining})
+
+    def should_send_pending_approval_notification(self, pending_group: list[dict]) -> bool:
+        """Return whether a grouped pending approval should emit a user prompt."""
+        return self._approval_coordinator.should_send_notification(pending_group)
+
+    def pending_approval_notification_id(self, pending_group: list[dict]) -> str:
+        """Return the pending ID that owns the grouped approval button."""
+        return self._approval_coordinator.notification_id(pending_group)
+
+    def format_pending_approval_notification(self, pending_group: list[dict]) -> str:
+        """Return user-facing text for a pending approval group."""
+        return self._approval_coordinator.format_notification(pending_group)
 
     async def get_user_session(
         self,

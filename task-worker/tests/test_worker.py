@@ -1,4 +1,5 @@
 """Unit tests for TaskWorker and AsyncTaskDocument model."""
+import logging
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch, ANY
 from src.worker import TaskWorker, _build_allowed_resource_state
@@ -320,6 +321,36 @@ class TestTaskWorker:
             "_resource_confirmed_sheet-abc": True,
             "_resource_confirmed_doc-xyz": True,
         }
+
+    @pytest.mark.asyncio
+    async def test_execute_task_logs_full_offline_prompt(self, task_worker, mock_firestore, caplog):
+        """Should log the full prompt sent to Agent Engine for offline debugging."""
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.update_time = object()
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": USER_ID,
+            "status": "pending",
+            "task_type": "research",
+            "instruction": "Line one\nLine two with sheet details",
+            "context": {"source": "unit-test"},
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        mock_adk_app = _mock_adk_app_with_response("Research done")
+        mock_vertex_client = MagicMock()
+        mock_vertex_client.agent_engines.get.return_value = mock_adk_app
+        task_worker._vertex_client = mock_vertex_client
+        task_worker._notify_user = AsyncMock()
+        caplog.set_level(logging.INFO, logger="src.worker")
+
+        await task_worker.execute_task(TASK_ID)
+
+        assert "Offline task prompt for task_id=task-123 user=user-123 session_id=session-123:" in caplog.text
+        assert "Execute this research task:" in caplog.text
+        assert "Line one\nLine two with sheet details" in caplog.text
+        assert "Additional context:\n  source: unit-test" in caplog.text
 
     @pytest.mark.asyncio
     async def test_execute_task_no_allowed_resources_passes_empty_state(self, task_worker, mock_firestore):
