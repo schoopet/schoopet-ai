@@ -121,6 +121,11 @@ class GatewayTaskExecutor:
                 message=prompt,
             )
             result = self._agent_client.extract_text(events)
+            if not result:
+                raise RuntimeError(
+                    "Agent returned an empty response. The model may have encountered "
+                    "an unrecoverable error (e.g. an unknown tool name). Check Agent Engine logs."
+                )
             logger.info("Task execution complete: %s chars", len(result))
             return result
         finally:

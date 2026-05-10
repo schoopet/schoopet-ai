@@ -185,6 +185,28 @@ class TestGatewayTaskExecutor:
         agent_client.delete_session.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_empty_agent_response_marks_failed_and_notifies(
+        self, executor, firestore_client, agent_client, discord_sender
+    ):
+        agent_client.extract_text = MagicMock(return_value="")
+
+        result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is False
+        assert "empty response" in result["error"].lower()
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        doc_ref.update.assert_any_await({
+            "status": "failed",
+            "error": ANY,
+            "completed_at": ANY,
+        })
+        discord_sender.send_channel.assert_awaited_once()
+        channel_id, text = discord_sender.send_channel.await_args.args
+        assert channel_id == "c1"
+        assert "error" in text.lower()
+        agent_client.delete_session.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_missing_discord_channel_marks_failed_without_dm_fallback(
         self, executor, firestore_client, agent_client, discord_sender
     ):
