@@ -124,7 +124,6 @@ class TestAsyncTaskTool:
         )
 
         call_args = mock_firestore.collection.return_value.document.return_value.set.call_args[0][0]
-        assert call_args["notification_channel"] == "discord"
         assert call_args["notification_session_scope"] == "discord:guild:g1:channel:c1"
         assert call_args["notification_target_type"] == "discord_channel"
         assert call_args["discord_channel_id"] == "c1"
@@ -153,7 +152,7 @@ class TestAsyncTaskTool:
         self, async_task_tool, mock_cloud_tasks, tool_context, mock_firestore
     ):
         """Only Discord task completion delivery is currently supported."""
-        tool_context.state = {"channel": "telegram"}
+        tool_context.state = {"channel": "unsupported-channel"}
 
         result = async_task_tool.create_async_task(
             task_type="research",

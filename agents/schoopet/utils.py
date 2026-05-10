@@ -7,7 +7,7 @@ def normalize_user_id(user_id: str) -> str:
 
     Strips leading '+', dashes, and spaces so the same user is always mapped
     to the same document key regardless of how their ID was formatted.
-    Non-phone user IDs (Slack IDs, Telegram IDs, etc.) pass through unchanged.
+    Non-phone user IDs pass through unchanged.
 
     Examples:
         "+1-949-413-6310" → "19494136310"

@@ -16,16 +16,10 @@ from .oauth.secret_manager import SecretManagerClient
 from .ratelimit.limiter import RateLimiter
 from .session.manager import SessionManager
 from .email.handler import router as email_router, init_email_services
-from .slack.handler import router as slack_router, init_slack_services
-from .slack.sender import SlackSender
-from .slack.validator import SlackValidator
 from .discord.handler import router as discord_router, init_services as init_discord_services
 from .discord.gateway import start_gateway
 from .discord.sender import DiscordSender
 from .discord.validator import DiscordValidator
-from .telegram.handler import router as telegram_router, init_services as init_telegram_services
-from .telegram.sender import TelegramSender
-from .telegram.validator import TelegramValidator
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -105,47 +99,11 @@ async def lifespan(app: FastAPI):
         discord_gateway = None
         logger.info("Discord not configured (DISCORD_BOT_TOKEN, DISCORD_PUBLIC_KEY, or DISCORD_APPLICATION_ID not set)")
 
-    # Initialize Telegram services (if configured) — personal agent
-    telegram_sender = None
-    if settings.TELEGRAM_BOT_TOKEN:
-        logger.info("Initializing Telegram services...")
-        telegram_sender = TelegramSender(bot_token=settings.TELEGRAM_BOT_TOKEN)
-        telegram_validator = TelegramValidator(bot_token=settings.TELEGRAM_BOT_TOKEN)
-        init_telegram_services(
-            validator=telegram_validator,
-            session_manager=session_manager,
-            agent_client=agent_client,
-            telegram_sender=telegram_sender,
-            rate_limiter=rate_limiter,
-        )
-        logger.info("Telegram services initialized")
-    else:
-        logger.info("Telegram not configured (TELEGRAM_BOT_TOKEN not set)")
-
-    # Initialize Slack services (if configured)
-    slack_sender = None
-    if settings.SLACK_BOT_TOKEN and settings.SLACK_SIGNING_SECRET:
-        logger.info("Initializing Slack services...")
-        slack_sender = SlackSender(bot_token=settings.SLACK_BOT_TOKEN)
-        slack_validator = SlackValidator(signing_secret=settings.SLACK_SIGNING_SECRET)
-        init_slack_services(
-            validator=slack_validator,
-            session_manager=session_manager,
-            agent_client=agent_client,
-            slack_sender=slack_sender,
-            rate_limiter=rate_limiter,
-        )
-        logger.info("Slack services initialized")
-    else:
-        logger.info("Slack not configured (SLACK_BOT_TOKEN or SLACK_SIGNING_SECRET not set)")
-
     # Initialize internal services
     init_internal_services(
         session_manager=session_manager,
         agent_client=agent_client,
         firestore_client=firestore_client,
-        telegram_sender=telegram_sender,
-        slack_sender=slack_sender,
         discord_sender=discord_sender,
     )
     init_allowed_service_accounts()
@@ -192,8 +150,6 @@ async def lifespan(app: FastAPI):
             db=firestore_client,
             agent_client=agent_client,
             session_manager=session_manager,
-            slack_sender=slack_sender,
-            telegram_sender=telegram_sender,
             discord_sender=discord_sender,
         )
         logger.info("Email services initialized")
@@ -211,24 +167,18 @@ async def lifespan(app: FastAPI):
         await discord_gateway.close()
     if discord_sender:
         await discord_sender.close()
-    if telegram_sender:
-        await telegram_sender.close()
-    if slack_sender:
-        await slack_sender.close()
 
 
 # Create FastAPI application
 app = FastAPI(
     title="Schoopet Gateway",
-    description="Discord/Telegram/Slack/Email gateway for Vertex AI Agent Engine",
+    description="Discord and email gateway for Vertex AI Agent Engine",
     version="1.0.0",
     lifespan=lifespan,
 )
 
 # Include routers
 app.include_router(discord_router)
-app.include_router(telegram_router)
-app.include_router(slack_router)
 app.include_router(email_router)
 app.include_router(oauth_router)
 app.include_router(internal_router)

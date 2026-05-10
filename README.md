@@ -1,6 +1,6 @@
 # Schoopet
 
-Schoopet is a personal workflow assistant built around a single Google Vertex AI Agent Engine deployment. Users reach the agent through Discord, Telegram, Slack, and Gmail-triggered automation. The agent can use memory, Google Calendar, Drive, Docs, Sheets, Gmail, search, code execution, and background tasks.
+Schoopet is a personal workflow assistant built around a single Google Vertex AI Agent Engine deployment. Users interact with the agent through Discord, with Gmail-triggered automation feeding notifications back to Discord. The agent can use memory, Google Calendar, Drive, Docs, Sheets, Gmail, search, code execution, and background tasks.
 
 ## Components
 
@@ -144,12 +144,10 @@ Web deploy:
 
 ## Channel Webhooks
 
-Configure external platforms to call the gateway:
+Configure external integrations to call the gateway:
 
 | Integration | Endpoint |
 |---|---|
-| Telegram | `POST https://<gateway>/webhook/telegram` |
-| Slack | `POST https://<gateway>/webhook/slack` |
 | Discord interactions | `POST https://<gateway>/webhook/discord` |
 | Gmail Pub/Sub push | `POST https://<gateway>/webhook/email` |
 

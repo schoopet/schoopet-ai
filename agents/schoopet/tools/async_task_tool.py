@@ -203,9 +203,9 @@ class AsyncTaskTool:
         task_id = str(uuid.uuid4())
 
         # Determine channel from session state
-        notification_channel = self._get_channel(tool_context)
+        session_channel = self._get_channel(tool_context)
         notification_context = self._get_notification_context(tool_context)
-        if notification_channel != "discord":
+        if session_channel != "discord":
             return (
                 "ERROR: Cannot create async task - background task completion "
                 "delivery currently supports Discord channels only."
@@ -225,7 +225,6 @@ class AsyncTaskTool:
             context=context or {},
             allowed_resource_ids=allowed_resource_ids or [],
             scheduled_at=scheduled_at_dt,
-            notification_channel=notification_channel,
             notification_session_scope=notification_context.get("notification_session_scope", ""),
             notification_target_type=notification_context.get("notification_target_type", ""),
             discord_channel_id=notification_context.get("discord_channel_id", ""),

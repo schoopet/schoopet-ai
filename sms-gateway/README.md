@@ -4,7 +4,7 @@ The gateway is a FastAPI Cloud Run service that connects external channels to th
 
 ## Responsibilities
 
-- Receive channel webhooks for Discord, Telegram, Slack, and Gmail Pub/Sub.
+- Receive Discord webhooks and Gmail Pub/Sub push notifications.
 - Validate platform signatures where supported.
 - Create and reuse Agent Engine sessions, with optional scoped sessions for channel/thread contexts.
 - Handle native ADK confirmation requests and persist pending approvals in Firestore.
@@ -15,7 +15,7 @@ The gateway is a FastAPI Cloud Run service that connects external channels to th
 ## Runtime Shape
 
 ```text
-Discord / Telegram / Slack / Gmail
+Discord / Gmail
                  |
                  v
           FastAPI gateway
@@ -43,8 +43,6 @@ Discord / Telegram / Slack / Gmail
 | `src/internal/handler.py` | Authenticated internal endpoints |
 | `src/internal/task_executor.py` | Gateway-owned async task execution |
 | `src/discord/` | Discord interactions, sender, Gateway WebSocket, validation |
-| `src/telegram/` | Telegram webhook, sender, validation |
-| `src/slack/` | Slack Events API webhook, sender, validation |
 | `src/email/` | Gmail Pub/Sub handling and watch setup |
 | `src/ratelimit/` | Firestore-backed daily rate limiting |
 
@@ -54,15 +52,12 @@ Discord / Telegram / Slack / Gmail
 |---|---|---|
 | `/` | GET | Service info |
 | `/health` | GET | Cloud Run health check |
-| `/webhook/telegram` | POST | Telegram webhook |
-| `/webhook/slack` | POST | Slack Events API webhook |
 | `/webhook/discord` | POST | Discord interactions endpoint |
 | `/webhook/email` | POST | Gmail Pub/Sub push endpoint |
 | `/oauth/google/initiate` | GET | Start Google OAuth |
 | `/oauth/google/callback` | GET | Google OAuth callback |
 | `/internal/tasks/execute` | POST | Cloud Tasks execution target |
 | `/internal/tasks/requeue-scheduled` | POST | Scheduler target for long-delay tasks |
-| `/internal/task-review` | POST | Legacy external task completion endpoint |
 | `/internal/user-notify` | POST | Authenticated direct notification endpoint |
 | `/internal/email/renew-watch` | GET | Gmail watch renewal |
 
@@ -89,11 +84,10 @@ Common settings:
 | `ARTIFACT_BUCKET_NAME` | `<project>-agent-artifacts` | Artifact bucket |
 | `EMAIL_PUBSUB_TOPIC` | empty | Gmail watch Pub/Sub topic |
 
-Optional channel secrets/config:
+Optional Discord secrets/config:
 
 - `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `DISCORD_APPLICATION_ID`
-- `TELEGRAM_BOT_TOKEN`
-- `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`
+
 OAuth:
 
 - `GOOGLE_OAUTH_CLIENT_ID`

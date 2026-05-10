@@ -26,7 +26,7 @@ def build_allowed_resource_state(allowed_resource_ids: list[str]) -> dict[str, b
 
 
 class GatewayTaskExecutor:
-    """Executes Firestore async tasks inside the SMS gateway service."""
+    """Executes Firestore async tasks inside the gateway service."""
 
     def __init__(self, firestore_client, agent_client, discord_sender):
         self._db = firestore_client
@@ -180,8 +180,6 @@ class GatewayTaskExecutor:
         await self._discord_sender.send_channel(task["discord_channel_id"], message)
 
     def _validate_delivery_target(self, task: dict[str, Any]) -> None:
-        if task.get("notification_channel") != "discord":
-            raise ValueError("Only Discord task notifications are supported")
         if not task.get("discord_channel_id"):
             raise ValueError("Discord task is missing discord_channel_id")
         if not self._discord_sender:

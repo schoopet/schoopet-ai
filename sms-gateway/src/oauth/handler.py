@@ -292,16 +292,8 @@ async def oauth_callback(
 
     # Set up Gmail push watch for features that include Gmail scope
     if feature == "google":
-        preferred_channel = "discord"
-        if _session_manager:
-            try:
-                session = await _session_manager.get_session(user_id)
-                if session and session.channel:
-                    preferred_channel = session.channel
-            except Exception:
-                pass
         try:
-            await register_gmail_watch(user_id, email, feature, preferred_channel)
+            await register_gmail_watch(user_id, email, feature)
         except Exception as e:
             logger.error(f"Failed to register Gmail watch for {email}: {e}")
 

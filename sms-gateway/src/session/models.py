@@ -18,10 +18,9 @@ class SessionDocument(BaseModel):
     message_count: int = Field(default=0)
     opted_in: bool = Field(default=False, description="Whether user has opted in to receive messages")
     opt_in_requested_at: Optional[datetime] = Field(default=None, description="When opt-in was first requested")
-    channel: str = Field(default="discord", description="Last used channel: discord, telegram, slack, etc.")
+    channel: str = Field(default="discord", description="Last used channel")
     session_scope: str = Field(default="", description="Optional channel/thread scope for scoped sessions")
     state_extra: dict = Field(default_factory=dict, description="Extra state passed to Agent Engine session")
-    slack_team_id: Optional[str] = Field(default=None, description="Slack workspace team_id")
     pending_confirmations: list[dict] = Field(
         default_factory=list,
         description="Live pending ADK approvals awaiting user interaction",
@@ -42,8 +41,6 @@ class SessionDocument(BaseModel):
         }
         if self.opt_in_requested_at:
             data["opt_in_requested_at"] = self.opt_in_requested_at
-        if self.slack_team_id:
-            data["slack_team_id"] = self.slack_team_id
         if self.pending_confirmations:
             data["pending_confirmations"] = self.pending_confirmations
         return data
@@ -63,7 +60,6 @@ class SessionDocument(BaseModel):
             channel=data.get("channel", "discord"),
             session_scope=data.get("session_scope", ""),
             state_extra=data.get("state_extra", {}),
-            slack_team_id=data.get("slack_team_id"),
             pending_confirmations=data.get("pending_confirmations", []),
         )
 
@@ -76,6 +72,6 @@ class SessionInfo(BaseModel):
     is_new_session: bool = False
     opted_in: bool = False
     is_new_user: bool = False
-    channel: str = Field(default="discord", description="Communication channel: discord, telegram, slack, etc.")
+    channel: str = Field(default="discord", description="Communication channel")
     session_scope: str = Field(default="", description="Optional channel/thread scope for scoped sessions")
     state_extra: dict = Field(default_factory=dict, description="Extra session routing metadata")

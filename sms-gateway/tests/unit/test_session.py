@@ -492,9 +492,9 @@ class TestSessionManager:
         doc_ref.get.return_value = mock_doc
 
         await session_manager.set_opted_in(
-            "+14155551234", channel="telegram"
+            "+14155551234", channel="discord"
         )
 
         mock_agent_client.create_session.assert_called_once_with(
-            user_id="+14155551234", state={"channel": "telegram"}
+            user_id="+14155551234", state={"channel": "discord"}
         )

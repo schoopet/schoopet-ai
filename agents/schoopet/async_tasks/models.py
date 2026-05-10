@@ -10,11 +10,6 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
-# Single source of truth for active notification channels.
-# Add new channels here when adding a new messaging integration.
-VALID_CHANNELS = {"discord"}
-
-
 class TaskStatus(str, Enum):
     """Status of an async task throughout its lifecycle."""
 
@@ -56,10 +51,6 @@ class AsyncTaskDocument(BaseModel):
     )
 
     # Routing
-    notification_channel: str = Field(
-        default="discord",
-        description="Channel to notify user on completion. Currently only discord is supported.",
-    )
     notification_session_scope: str = Field(
         default="", description="Optional scoped session to use for completion notification"
     )
@@ -108,7 +99,6 @@ class AsyncTaskDocument(BaseModel):
             "task_type": self.task_type,
             "instruction": self.instruction,
             "context": self.context,
-            "notification_channel": self.notification_channel,
             "notification_session_scope": self.notification_session_scope,
             "notification_target_type": self.notification_target_type,
             "discord_channel_id": self.discord_channel_id,
@@ -153,7 +143,6 @@ class AsyncTaskDocument(BaseModel):
             allowed_resource_ids=data.get("allowed_resource_ids", []),
             scheduled_at=data.get("scheduled_at"),
             cloud_task_name=data.get("cloud_task_name"),
-            notification_channel=data.get("notification_channel", "discord"),
             notification_session_scope=data.get("notification_session_scope", ""),
             notification_target_type=data.get("notification_target_type", ""),
             discord_channel_id=data.get("discord_channel_id", ""),

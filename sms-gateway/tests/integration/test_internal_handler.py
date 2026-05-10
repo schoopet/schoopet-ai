@@ -1,10 +1,9 @@
 """Tests for the internal task completion and notification flow.
 
 Covers:
-- /internal/task-review delivers result directly to user (no agent review step)
 - /internal/user-notify marks the task NOTIFIED in Firestore only after
   confirmed delivery (status race fix)
-- Channel routing for Discord, Telegram, Slack
+- Channel routing through Discord
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, ANY
@@ -12,10 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, ANY
 import src.internal.handler as handler
 from src.internal.handler import (
     ExecuteTaskRequest,
-    TaskReviewRequest,
     UserNotifyRequest,
     execute_task,
-    trigger_task_review,
     notify_user,
     _mark_task_notified,
     init_internal_services,
@@ -34,8 +31,6 @@ def reset_globals():
     """Reset all module-level globals before each test."""
     handler._session_manager = None
     handler._agent_client = None
-    handler._telegram_sender = None
-    handler._slack_sender = None
     handler._discord_sender = None
     handler._firestore_client = None
     handler._task_executor = None
@@ -57,16 +52,6 @@ def discord_sender():
 
 
 @pytest.fixture
-def telegram_sender():
-    return AsyncMock()
-
-
-@pytest.fixture
-def slack_sender():
-    return AsyncMock()
-
-
-@pytest.fixture
 def mock_firestore():
     """Firestore AsyncClient mock."""
     client = MagicMock()
@@ -74,7 +59,7 @@ def mock_firestore():
     doc_ref.update = AsyncMock()
     doc = MagicMock()
     doc.exists = True
-    doc.to_dict.return_value = {"notification_channel": "discord"}
+    doc.to_dict.return_value = {}
     doc_ref.get = AsyncMock(return_value=doc)
     client.collection.return_value.document.return_value = doc_ref
     return client
@@ -92,9 +77,6 @@ def _user_session(channel="discord", session_id=USER_SESSION_ID):
     s.agent_session_id = session_id
     s.channel = channel
     return s
-
-
-# ── /internal/task-review ─────────────────────────────────────────────────────
 
 
 class TestExecuteTask:
@@ -144,227 +126,6 @@ class TestExecuteTask:
         assert response.status == "failed"
         assert response.message == "Agent crashed"
 
-
-class TestTaskReview:
-    """trigger_task_review must deliver the result directly to the user."""
-
-    @pytest.mark.asyncio
-    async def test_result_delivered_directly_when_no_session(
-        self, agent_client, session_manager, discord_sender, mock_firestore
-    ):
-        """Task result is sent directly to the user when no active session."""
-        session_manager.get_user_session = AsyncMock(return_value=None)
-
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=agent_client,
-            discord_sender=discord_sender,
-            firestore_client=mock_firestore,
-        )
-
-        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Research done.")
-        await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
-
-        discord_sender.send.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_result_delivered_via_active_session(
-        self, agent_client, session_manager, discord_sender, mock_firestore
-    ):
-        """When user has an active session, result is routed through the agent."""
-        session_manager.get_user_session = AsyncMock(
-            return_value=_user_session(channel="discord")
-        )
-        session_manager.is_session_active = MagicMock(return_value=True)
-        agent_client.send_message_events = AsyncMock(return_value=[])
-        agent_client.extract_text = MagicMock(return_value="Here's your result!")
-
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=agent_client,
-            discord_sender=discord_sender,
-            firestore_client=mock_firestore,
-        )
-
-        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Research done.")
-        await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
-
-        agent_client.send_message_events.assert_awaited_once()
-        call_args = agent_client.send_message_events.call_args
-        assert "INTERNAL_TASK_COMPLETE" in call_args.kwargs["message"]
-        discord_sender.send.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_error_task_notifies_user_with_error_message(
-        self, agent_client, session_manager, discord_sender, mock_firestore
-    ):
-        """Failed tasks send an error message directly to the user."""
-        session_manager.get_user_session = AsyncMock(return_value=None)
-
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=agent_client,
-            discord_sender=discord_sender,
-            firestore_client=mock_firestore,
-        )
-
-        payload = TaskReviewRequest(
-            task_id=TASK_ID, user_id=USER_ID, result=None, error="Agent crashed"
-        )
-        await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
-
-        discord_sender.send.assert_awaited_once()
-        sent_text = discord_sender.send.call_args[0][1]
-        assert "error" in sent_text.lower()
-        assert "Agent crashed" in sent_text
-
-    @pytest.mark.asyncio
-    async def test_no_result_and_no_error_is_skipped(
-        self, agent_client, session_manager, discord_sender, mock_firestore
-    ):
-        """Tasks with neither result nor error produce no notification."""
-        session_manager.get_user_session = AsyncMock(return_value=None)
-
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=agent_client,
-            discord_sender=discord_sender,
-            firestore_client=mock_firestore,
-        )
-
-        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result=None, error=None)
-        response = await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
-
-        discord_sender.send.assert_not_awaited()
-        assert response.status == "skipped"
-
-    @pytest.mark.asyncio
-    async def test_notification_channel_read_from_firestore(
-        self, agent_client, session_manager, telegram_sender, mock_firestore
-    ):
-        """notification_channel is read from the Firestore task doc, not the payload."""
-        mock_firestore.collection.return_value.document.return_value.get = AsyncMock(
-            return_value=MagicMock(
-                exists=True,
-                to_dict=MagicMock(return_value={"notification_channel": "telegram"})
-            )
-        )
-        session_manager.get_user_session = AsyncMock(return_value=None)
-
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=agent_client,
-            telegram_sender=telegram_sender,
-            firestore_client=mock_firestore,
-        )
-
-        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Done.")
-        await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
-
-        telegram_sender.send.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_discord_channel_task_result_returns_to_origin_channel(
-        self, agent_client, session_manager, discord_sender, mock_firestore
-    ):
-        """Channel-scoped Discord tasks post back to the originating channel."""
-        mock_firestore.collection.return_value.document.return_value.get = AsyncMock(
-            return_value=MagicMock(
-                exists=True,
-                to_dict=MagicMock(
-                    return_value={
-                        "notification_channel": "discord",
-                        "notification_session_scope": "discord:guild:g1:channel:c1",
-                        "discord_channel_id": "c1",
-                    }
-                ),
-            )
-        )
-        session_manager.get_user_session = AsyncMock(return_value=None)
-
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=agent_client,
-            discord_sender=discord_sender,
-            firestore_client=mock_firestore,
-        )
-
-        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Done.")
-        await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
-
-        session_manager.get_user_session.assert_awaited_once_with(
-            USER_ID,
-            session_scope="discord:guild:g1:channel:c1",
-        )
-        discord_sender.send_channel.assert_awaited_once_with("c1", "Done.")
-        discord_sender.send.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_discord_channel_task_result_includes_context_for_agent(
-        self, agent_client, session_manager, discord_sender, mock_firestore
-    ):
-        """Scoped Discord task completions carry channel context into the agent turn."""
-        mock_firestore.collection.return_value.document.return_value.get = AsyncMock(
-            return_value=MagicMock(
-                exists=True,
-                to_dict=MagicMock(
-                    return_value={
-                        "notification_channel": "discord",
-                        "notification_session_scope": "discord:guild:g1:channel:c1",
-                        "discord_channel_id": "c1",
-                        "discord_channel_name": "project-alpha",
-                    }
-                ),
-            )
-        )
-        session_manager.get_user_session = AsyncMock(
-            return_value=_user_session(channel="discord")
-        )
-        session_manager.is_session_active = MagicMock(return_value=True)
-        agent_client.extract_text = MagicMock(return_value="Agent response")
-
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=agent_client,
-            discord_sender=discord_sender,
-            firestore_client=mock_firestore,
-        )
-
-        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Done.")
-        await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
-
-        message = agent_client.send_message_events.await_args.kwargs["message"]
-        assert "Discord context:" in message
-        assert "session_scope: discord:guild:g1:channel:c1" in message
-        assert "channel_id: c1" in message
-        assert "channel_name: project-alpha" in message
-        assert "INTERNAL_TASK_COMPLETE: Done." in message
-        discord_sender.send_channel.assert_awaited_once_with("c1", "Agent response")
-
-    @pytest.mark.asyncio
-    async def test_marks_task_notified_after_delivery(
-        self, agent_client, session_manager, discord_sender, mock_firestore
-    ):
-        """Task is marked NOTIFIED in Firestore after successful delivery."""
-        session_manager.get_user_session = AsyncMock(return_value=None)
-
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=agent_client,
-            discord_sender=discord_sender,
-            firestore_client=mock_firestore,
-        )
-
-        payload = TaskReviewRequest(task_id=TASK_ID, user_id=USER_ID, result="Done.")
-        await trigger_task_review(request=MagicMock(), payload=payload, caller="svc")
-
-        doc_ref = mock_firestore.collection.return_value.document.return_value
-        doc_ref.update.assert_awaited_once_with({
-            "status": "notified",
-            "notified_at": ANY,
-        })
-
-
 # ── /internal/user-notify ────────────────────────────────────────────────────
 
 
@@ -391,7 +152,7 @@ class TestUserNotify:
         )
 
         payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Research done.", channel="discord"
+            user_id=USER_ID, task_id=TASK_ID, message="Research done."
         )
         await notify_user(request=MagicMock(), payload=payload, caller="svc")
 
@@ -418,7 +179,7 @@ class TestUserNotify:
         )
 
         payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="discord"
+            user_id=USER_ID, task_id=TASK_ID, message="Done."
         )
         await notify_user(request=MagicMock(), payload=payload, caller="svc")
 
@@ -443,7 +204,7 @@ class TestUserNotify:
         )
 
         payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Your task is done.", channel="discord"
+            user_id=USER_ID, task_id=TASK_ID, message="Your task is done."
         )
         await notify_user(request=MagicMock(), payload=payload, caller="svc")
 
@@ -465,7 +226,7 @@ class TestUserNotify:
         )
 
         payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="discord"
+            user_id=USER_ID, task_id=TASK_ID, message="Done."
         )
         await notify_user(request=MagicMock(), payload=payload, caller="svc")
 
@@ -495,7 +256,7 @@ class TestUserNotify:
         )
 
         payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="discord"
+            user_id=USER_ID, task_id=TASK_ID, message="Done."
         )
         await notify_user(request=MagicMock(), payload=payload, caller="svc")
 
@@ -523,81 +284,11 @@ class TestUserNotify:
         )
 
         payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="discord"
+            user_id=USER_ID, task_id=TASK_ID, message="Done."
         )
         await notify_user(request=MagicMock(), payload=payload, caller="svc")
 
         discord_sender.send.assert_awaited_once_with(USER_ID, "Done.")
-
-    @pytest.mark.asyncio
-    async def test_routes_to_telegram(
-        self, session_manager, telegram_sender, mock_firestore
-    ):
-        """Telegram channel → delivered via telegram_sender."""
-        session_manager.get_user_session = AsyncMock(return_value=None)
-
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=AsyncMock(),
-            telegram_sender=telegram_sender,
-            firestore_client=mock_firestore,
-        )
-
-        payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="telegram"
-        )
-        await notify_user(request=MagicMock(), payload=payload, caller="svc")
-
-        telegram_sender.send.assert_awaited_once_with(USER_ID, "Done.")
-
-    @pytest.mark.asyncio
-    async def test_routes_to_slack(
-        self, session_manager, slack_sender, mock_firestore
-    ):
-        """Slack channel → delivered via slack_sender."""
-        session_manager.get_user_session = AsyncMock(return_value=None)
-
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=AsyncMock(),
-            slack_sender=slack_sender,
-            firestore_client=mock_firestore,
-        )
-
-        payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="slack"
-        )
-        await notify_user(request=MagicMock(), payload=payload, caller="svc")
-
-        slack_sender.send.assert_awaited_once_with(USER_ID, "Done.")
-
-    @pytest.mark.asyncio
-    async def test_slack_session_routes_through_personal_agent(
-        self, agent_client, session_manager, mock_firestore
-    ):
-        """A user with an active Slack session is notified via the personal agent."""
-        session_manager.get_user_session = AsyncMock(
-            return_value=_user_session(channel="slack")
-        )
-        session_manager.is_session_active = MagicMock(return_value=True)
-        agent_client.send_message_events = AsyncMock(return_value=[])
-        agent_client.extract_text = MagicMock(return_value="Result delivered.")
-        slack_sender = AsyncMock()
-
-        init_internal_services(
-            session_manager=session_manager,
-            agent_client=agent_client,
-            slack_sender=slack_sender,
-            firestore_client=mock_firestore,
-        )
-
-        payload = UserNotifyRequest(
-            user_id=USER_ID, task_id=TASK_ID, message="Done.", channel="slack"
-        )
-        await notify_user(request=MagicMock(), payload=payload, caller="svc")
-
-        agent_client.send_message_events.assert_awaited_once()
-        slack_sender.send.assert_awaited_once()
 
 
 # ── _mark_task_notified ───────────────────────────────────────────────────────

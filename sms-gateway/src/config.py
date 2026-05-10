@@ -1,12 +1,17 @@
 """Configuration settings for SMS Gateway."""
-import os
 from functools import lru_cache
 from pydantic import model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
     # Google Cloud Configuration
     GOOGLE_CLOUD_PROJECT: str
@@ -28,13 +33,6 @@ class Settings(BaseSettings):
     DISCORD_BOT_TOKEN: str = ""       # Empty = Discord disabled
     DISCORD_PUBLIC_KEY: str = ""      # Ed25519 public key from Discord Developer Portal
     DISCORD_APPLICATION_ID: str = ""  # Discord application (client) ID
-
-    # Telegram Configuration
-    TELEGRAM_BOT_TOKEN: str = ""  # Empty = Telegram disabled
-
-    # Slack Configuration
-    SLACK_BOT_TOKEN: str = ""  # Empty = Slack disabled
-    SLACK_SIGNING_SECRET: str = ""
 
     # OAuth Configuration
     GOOGLE_OAUTH_CLIENT_ID: str = ""
@@ -70,11 +68,6 @@ class Settings(BaseSettings):
         if not self.ARTIFACT_BUCKET_NAME:
             self.ARTIFACT_BUCKET_NAME = f"{self.GOOGLE_CLOUD_PROJECT}-agent-artifacts"
         return self
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        extra = "ignore"  # Ignore unknown environment variables
 
 
 @lru_cache

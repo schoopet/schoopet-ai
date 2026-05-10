@@ -297,7 +297,6 @@ class SessionManager:
         self,
         phone_number: str,
         channel: str,
-        slack_team_id: str = "",
         session_scope: str | None = None,
     ) -> None:
         """Update session's last activity timestamp, channel, and increment message count.
@@ -305,7 +304,6 @@ class SessionManager:
         Args:
             phone_number: User identifier.
             channel: The channel used for this message.
-            slack_team_id: Slack workspace team_id (optional, only stored when non-empty).
         """
         doc_id = self._doc_id(phone_number, session_scope)
         doc_ref = self._collection.document(doc_id)
@@ -315,8 +313,6 @@ class SessionManager:
             "message_count": firestore.Increment(1),
             "channel": channel,
         }
-        if slack_team_id:
-            update_data["slack_team_id"] = slack_team_id
         await doc_ref.update(update_data)
 
     async def get_session(

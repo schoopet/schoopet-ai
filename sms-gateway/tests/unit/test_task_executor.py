@@ -22,7 +22,6 @@ def _task_doc(status="pending", **overrides):
         "instruction": "Research AI",
         "context": {"topic": "AI"},
         "allowed_resource_ids": ["sheet-1", "doc-1"],
-        "notification_channel": "discord",
         "notification_session_scope": "discord:guild:g1:channel:c1",
         "notification_target_type": "discord_channel",
         "discord_channel_id": "c1",

@@ -6,7 +6,7 @@ Routes:
 
 All personal Gmail accounts share the same Pub/Sub topic.
 Each notification carries an emailAddress that maps to an email_state/{doc_id}
-Firestore document containing user_id, token_feature, and preferred_channel.
+Firestore document containing user_id and token_feature.
 """
 import asyncio
 import base64
@@ -23,7 +23,6 @@ from .gmail_client import (
     EMAIL_RULES_COLLECTION, get_gmail_token, get_new_messages, setup_watch,
     normalize_gmail_address,
 )
-from ..slack.sender import SlackSender
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +33,6 @@ _oauth_manager = None
 _db = None  # AsyncFirestore client
 _agent_client = None
 _session_manager = None
-_slack_sender: Optional[SlackSender] = None
-_telegram_sender = None
 _discord_sender = None
 
 _NOTIFICATION_WRAPPER = """\
@@ -47,8 +44,7 @@ Any tool that requires interactive user confirmation will be rejected — you
 will receive "This tool call is rejected." When that happens:
 - If the operation can be completed without that tool, do so.
 - Otherwise, send the user a concise message describing what you would have
-  done and ask them to follow up on an interactive channel (Telegram or
-  Discord) where they can approve it in real time.
+  done and ask them to follow up on Discord where they can approve it in real time.
 
 If no user-visible reminder or summary is needed, start your response with:
 <SUPPRESS RESPONSE>
@@ -83,19 +79,15 @@ def init_email_services(
     db,
     agent_client,
     session_manager,
-    slack_sender: Optional[SlackSender] = None,
-    telegram_sender=None,
     discord_sender=None,
 ) -> None:
     """Initialize module-level service references. Called by main.py."""
     global _oauth_manager, _db, _agent_client
-    global _session_manager, _slack_sender, _telegram_sender, _discord_sender
+    global _session_manager, _discord_sender
     _oauth_manager = oauth_manager
     _db = db
     _agent_client = agent_client
     _session_manager = session_manager
-    _slack_sender = slack_sender
-    _telegram_sender = telegram_sender
     _discord_sender = discord_sender
     logger.info("Email handler services initialized")
 
@@ -270,8 +262,6 @@ async def process_email_notification(gmail_address: str, history_id: str) -> Non
 
     user_id = watch_state.get("user_id", "")
     token_feature = watch_state.get("token_feature", "")
-    preferred_channel = watch_state.get("preferred_channel", "discord")
-
     if not user_id or not token_feature:
         logger.warning(f"Watch state for {gmail_address} is missing user_id or token_feature")
         return
@@ -306,18 +296,17 @@ async def process_email_notification(gmail_address: str, history_id: str) -> Non
     for email in emails:
         logger.info(
             f"Routing email from {email.get('from', '')[:30]}... "
-            f"(user={user_id[:4]}****, channel={preferred_channel})"
+            f"(user={user_id[:4]}****, channel=discord)"
         )
-        await _route_email_to_agent(email, user_id, preferred_channel, rules_text)
+        await _route_email_to_agent(email, user_id, rules_text)
 
 
 async def _route_email_to_agent(
     email: dict,
     user_id: str,
-    channel: str,
     rules_text: str,
 ) -> None:
-    """Send an email notification prompt to the agent and reply via channel."""
+    """Send an email notification prompt to the agent and reply via Discord."""
     if not _agent_client:
         logger.error("Agent client not initialized")
         return
@@ -362,24 +351,20 @@ async def _route_email_to_agent(
             if _should_suppress_response(response):
                 logger.info(f"Email response suppressed for {user_id[:4]}****")
                 return
-            await _send_response(user_id, channel, response)
+            await _send_response(user_id, response)
     except Exception as e:
         logger.error(f"Failed to route email for {user_id[:4]}****: {e}")
 
 
-async def _send_response(user_id: str, channel: str, message: str) -> None:
-    """Send an agent response to the user via their preferred channel."""
+async def _send_response(user_id: str, message: str) -> None:
+    """Send an agent response to the user via Discord."""
     try:
-        if channel == "slack" and _slack_sender:
-            await _slack_sender.send(user_id, message)
-        elif channel == "telegram" and _telegram_sender:
-            await _telegram_sender.send(user_id, message)
-        elif channel == "discord" and _discord_sender:
+        if _discord_sender:
             await _discord_sender.send(user_id, message)
         else:
-            logger.warning(f"No sender available for channel {channel!r}")
+            logger.warning("No Discord sender available for email response")
     except Exception as e:
-        logger.error(f"Failed to send email response via {channel}: {e}")
+        logger.error(f"Failed to send email response via Discord: {e}")
 
 
 def _extract_email_address(raw: str) -> str:
@@ -393,7 +378,6 @@ async def register_gmail_watch(
     user_id: str,
     gmail_address: str,
     feature: str,
-    preferred_channel: str = "discord",
 ) -> bool:
     """Set up Gmail push watch for a user after OAuth authorization.
 
@@ -404,7 +388,6 @@ async def register_gmail_watch(
         user_id: User identifier or Discord ID.
         gmail_address: The authorized Gmail address.
         feature: OAuth feature, currently `google`.
-        preferred_channel: Channel to deliver email notifications on.
 
     Returns:
         True if watch was set up successfully, False otherwise.
@@ -440,7 +423,6 @@ async def register_gmail_watch(
             "gmail_address": gmail_address,
             "user_id": user_id,
             "token_feature": feature,
-            "preferred_channel": preferred_channel,
             "last_history_id": history_id,
             "watch_expiration": expiration,
             "updated_at": datetime.now(timezone.utc),

@@ -9,8 +9,6 @@ Schoopet is a personal assistant system with one active ADK agent deployed to Ve
 ```text
 External channels
   Discord interactions, DMs, mentions
-  Telegram
-  Slack
   Gmail Pub/Sub
         |
         v
@@ -73,7 +71,7 @@ The root agent also uses subagents:
 
 The gateway lives in `sms-gateway/` and runs on Cloud Run.
 
-Routers are registered for Discord, Telegram, Slack, email, OAuth, and internal endpoints.
+Routers are registered for Discord, email, OAuth, and internal endpoints.
 
 `src/main.py` wires shared services during FastAPI lifespan startup:
 
@@ -81,12 +79,12 @@ Routers are registered for Discord, Telegram, Slack, email, OAuth, and internal 
 - `AgentEngineClient`
 - `SessionManager`
 - `RateLimiter`
-- channel senders and validators
+- Discord sender and validator
 - OAuth manager
 - email services
 - internal task executor
 
-Routers are registered for Discord, Telegram, Slack, email, OAuth, and internal endpoints.
+Routers are registered for Discord, email, OAuth, and internal endpoints.
 
 The gateway is also the active background-task worker.
 

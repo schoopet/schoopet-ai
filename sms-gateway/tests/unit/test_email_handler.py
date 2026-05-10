@@ -68,26 +68,20 @@ def email_services(monkeypatch):
     session_manager.get_or_create_session = AsyncMock(
         return_value=SimpleNamespace(agent_session_id="agent-session-123")
     )
-    senders = {
-        "slack": AsyncMock(),
-        "telegram": AsyncMock(),
-        "discord": AsyncMock(),
-    }
+    discord_sender = AsyncMock()
     agent_client.extract_text = AgentEngineClient.extract_text
     agent_client.extract_confirmation_requests = AgentEngineClient.extract_confirmation_requests
 
     monkeypatch.setattr(handler, "_agent_client", agent_client)
     monkeypatch.setattr(handler, "_session_manager", session_manager)
-    monkeypatch.setattr(handler, "_slack_sender", senders["slack"])
-    monkeypatch.setattr(handler, "_telegram_sender", senders["telegram"])
-    monkeypatch.setattr(handler, "_discord_sender", senders["discord"])
+    monkeypatch.setattr(handler, "_discord_sender", discord_sender)
 
-    return agent_client, session_manager, senders
+    return agent_client, session_manager, discord_sender
 
 
 @pytest.mark.asyncio
 async def test_route_email_to_agent_suppressed_response_does_not_send(email_services):
-    agent_client, _, senders = email_services
+    agent_client, _, discord_sender = email_services
     agent_client.send_message_events = AsyncMock(
         return_value=_text_events("<SUPPRESS RESPONSE>\nNo user update needed.")
     )
@@ -95,17 +89,15 @@ async def test_route_email_to_agent_suppressed_response_does_not_send(email_serv
     await handler._route_email_to_agent(
         {"from": "sender@example.com", "subject": "Promo", "id": "msg-123"},
         user_id="user-123",
-        channel="discord",
         rules_text="(no rules)",
     )
 
-    for sender in senders.values():
-        sender.send.assert_not_awaited()
+    discord_sender.send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_route_email_to_agent_normal_response_routes_to_configured_channel(email_services):
-    agent_client, _, senders = email_services
+async def test_route_email_to_agent_normal_response_routes_to_discord(email_services):
+    agent_client, _, discord_sender = email_services
     agent_client.send_message_events = AsyncMock(
         return_value=_text_events("You have an invoice due tomorrow.")
     )
@@ -113,15 +105,12 @@ async def test_route_email_to_agent_normal_response_routes_to_configured_channel
     await handler._route_email_to_agent(
         {"from": "billing@example.com", "subject": "Invoice", "id": "msg-456"},
         user_id="user-123",
-        channel="discord",
         rules_text="(no rules)",
     )
 
-    senders["discord"].send.assert_awaited_once_with(
+    discord_sender.send.assert_awaited_once_with(
         "user-123", "You have an invoice due tomorrow."
     )
-    senders["slack"].send.assert_not_awaited()
-    senders["telegram"].send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -134,7 +123,6 @@ async def test_route_email_prompt_includes_offline_safety_and_suppression_instru
     await handler._route_email_to_agent(
         {"from": "sender@example.com", "subject": "Newsletter", "id": "msg-789"},
         user_id="user-123",
-        channel="discord",
         rules_text="- Match [topic: newsletters] -> ignore",
     )
 
@@ -146,7 +134,7 @@ async def test_route_email_prompt_includes_offline_safety_and_suppression_instru
 
 @pytest.mark.asyncio
 async def test_route_email_confirmation_declines_and_forwards_fallback(email_services):
-    agent_client, _, senders = email_services
+    agent_client, _, discord_sender = email_services
     agent_client.send_message_events = AsyncMock(return_value=_confirmation_events())
     # Fallback response: agent replies naturally after the tool is declined
     agent_client.send_confirmation_response = AsyncMock(return_value=_text_events("I'll note that for you."))
@@ -154,7 +142,6 @@ async def test_route_email_confirmation_declines_and_forwards_fallback(email_ser
     await handler._route_email_to_agent(
         {"from": "sender@example.com", "subject": "Action", "id": "msg-999"},
         user_id="user-123",
-        channel="discord",
         rules_text="(no rules)",
     )
 
@@ -164,4 +151,4 @@ async def test_route_email_confirmation_declines_and_forwards_fallback(email_ser
         confirmation_function_call_id="confirm-1",
         confirmed=False,
     )
-    senders["discord"].send.assert_awaited_once_with("user-123", "I'll note that for you.")
+    discord_sender.send.assert_awaited_once_with("user-123", "I'll note that for you.")

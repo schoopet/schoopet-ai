@@ -96,33 +96,6 @@ resource "google_cloud_run_v2_service" "sms_gateway" {
         }
       }
       env {
-        name = "TELEGRAM_BOT_TOKEN"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.secrets["telegram-bot-token"].secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
-        name = "SLACK_BOT_TOKEN"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.secrets["slack-bot-token"].secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
-        name = "SLACK_SIGNING_SECRET"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.secrets["slack-signing-secret"].secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
         name = "DISCORD_BOT_TOKEN"
         value_source {
           secret_key_ref {
