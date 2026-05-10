@@ -5,10 +5,6 @@
 
 locals {
   secret_names = [
-    "twilio-account-sid",
-    "twilio-auth-token",
-    "twilio-phone-number",
-    "twilio-whatsapp-number",
     "google-oauth-client-id",
     "google-oauth-client-secret",
     "oauth-hmac-secret",

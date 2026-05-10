@@ -5,12 +5,12 @@ from pydantic import BaseModel, Field
 
 
 class SessionDocument(BaseModel):
-    """Firestore document model for SMS sessions.
+    """Firestore document model for gateway sessions.
 
-    Document ID in Firestore is the normalized phone number.
+    Document ID in Firestore is the normalized user identifier.
     """
 
-    phone_number: str = Field(..., description="E.164 format phone number")
+    phone_number: str = Field(..., description="User identifier")
     agent_session_id: str = Field(default="", description="Legacy field kept for backward-compat reads")
     personal_agent_session_id: str = Field(default="", description="Vertex AI agent session ID")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -18,7 +18,7 @@ class SessionDocument(BaseModel):
     message_count: int = Field(default=0)
     opted_in: bool = Field(default=False, description="Whether user has opted in to receive messages")
     opt_in_requested_at: Optional[datetime] = Field(default=None, description="When opt-in was first requested")
-    channel: str = Field(default="sms", description="Last used channel: sms, whatsapp, slack, etc.")
+    channel: str = Field(default="discord", description="Last used channel: discord, telegram, slack, etc.")
     session_scope: str = Field(default="", description="Optional channel/thread scope for scoped sessions")
     state_extra: dict = Field(default_factory=dict, description="Extra state passed to Agent Engine session")
     slack_team_id: Optional[str] = Field(default=None, description="Slack workspace team_id")
@@ -60,7 +60,7 @@ class SessionDocument(BaseModel):
             message_count=data.get("message_count", 0),
             opted_in=data.get("opted_in", False),
             opt_in_requested_at=data.get("opt_in_requested_at"),
-            channel=data.get("channel", "sms"),
+            channel=data.get("channel", "discord"),
             session_scope=data.get("session_scope", ""),
             state_extra=data.get("state_extra", {}),
             slack_team_id=data.get("slack_team_id"),
@@ -76,6 +76,6 @@ class SessionInfo(BaseModel):
     is_new_session: bool = False
     opted_in: bool = False
     is_new_user: bool = False
-    channel: str = Field(default="sms", description="Communication channel: sms, whatsapp, slack, etc.")
+    channel: str = Field(default="discord", description="Communication channel: discord, telegram, slack, etc.")
     session_scope: str = Field(default="", description="Optional channel/thread scope for scoped sessions")
     state_extra: dict = Field(default_factory=dict, description="Extra session routing metadata")

@@ -5,6 +5,7 @@ Usage (from project root):
     agents/schoopet/.venv/bin/python agents/schoopet/tests/fetch_email_manual.py <message-id>
 """
 import asyncio
+import os
 import pathlib
 import sys
 
@@ -23,7 +24,7 @@ from google.adk.artifacts import InMemoryArtifactService
 from agents.schoopet.email_tool import EmailTool
 
 APP_NAME = "schoopet"
-USER_ID = "email_system"
+USER_ID = os.getenv("FETCH_EMAIL_USER_ID", "")
 SESSION_ID = "manual-test"
 OUT_DIR = pathlib.Path(__file__).parent / "out"
 
@@ -56,6 +57,9 @@ def _make_ctx(svc: InMemoryArtifactService) -> AsyncMock:
 
 
 async def main(message_id: str) -> None:
+    if not USER_ID:
+        raise SystemExit("Set FETCH_EMAIL_USER_ID to the user_id whose Gmail token should be used.")
+
     svc = InMemoryArtifactService()
     ctx = _make_ctx(svc)
     tool = EmailTool()

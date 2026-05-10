@@ -17,10 +17,10 @@ COLLECTION_NAME = "sms_sessions"
 
 
 class SessionManager:
-    """Manages phone number to Agent Engine session mapping.
+    """Manages user ID to Agent Engine session mapping.
 
     Sessions expire after a configurable timeout period. When a session
-    expires, a new Agent Engine session is created for the phone number.
+    expires, a new Agent Engine session is created for the user.
     """
 
     def __init__(
@@ -70,7 +70,7 @@ class SessionManager:
         after the user opts in.
 
         Args:
-            phone_number: User's phone number in E.164 format.
+            phone_number: User identifier.
 
         Returns:
             SessionInfo with user status (opted_in, is_new_user).
@@ -116,8 +116,8 @@ class SessionManager:
         """Set user as opted in and create Agent Engine session.
 
         Args:
-            phone_number: User's phone number in E.164 format.
-            channel: Originating channel (e.g., "sms", "discord") — stored in agent session state and on the Firestore session doc.
+            phone_number: User identifier.
+            channel: Originating channel, stored in agent session state and on the Firestore session doc.
 
         Returns:
             SessionInfo with new session details.
@@ -155,7 +155,7 @@ class SessionManager:
         """Set user as opted out.
 
         Args:
-            phone_number: User's phone number in E.164 format.
+            phone_number: User identifier.
         """
         doc_id = normalize_user_id(phone_number)
         doc_ref = self._collection.document(doc_id)
@@ -192,12 +192,12 @@ class SessionManager:
         - No existing session document for the user
         - Existing session has been inactive for more than timeout_minutes
 
-        Does NOT check `opted_in` — callers that need opt-in gating (SMS) must
+        Does NOT check `opted_in` — callers that need explicit opt-in gating must
         check it themselves via `get_or_create_user()`.
 
         Args:
-            phone_number: User identifier (phone for SMS, snowflake/user_id for other channels).
-            channel: Originating channel (e.g., "sms", "discord") — stored in agent session state and on the Firestore session doc.
+            phone_number: User identifier.
+            channel: Originating channel, stored in agent session state and on the Firestore session doc.
             session_scope: Optional channel/thread scope for separate concurrent sessions.
             state_extra: Optional metadata stored in session state and Firestore.
 
@@ -276,7 +276,7 @@ class SessionManager:
                 message_count=0,
                 opted_in=True,
                 personal_agent_session_id=agent_session_id,
-                channel=channel or "sms",
+                channel=channel or "discord",
                 session_scope=session_scope or "",
                 state_extra=state_extra or {},
             )
@@ -288,7 +288,7 @@ class SessionManager:
             is_new_session=True,
             opted_in=True,
             is_new_user=is_new_user,
-            channel=channel or "sms",
+            channel=channel or "discord",
             session_scope=session_scope or "",
             state_extra=state_extra or {},
         )
@@ -303,8 +303,8 @@ class SessionManager:
         """Update session's last activity timestamp, channel, and increment message count.
 
         Args:
-            phone_number: User's phone number in E.164 format.
-            channel: The channel used for this message (sms or whatsapp).
+            phone_number: User identifier.
+            channel: The channel used for this message.
             slack_team_id: Slack workspace team_id (optional, only stored when non-empty).
         """
         doc_id = self._doc_id(phone_number, session_scope)
@@ -327,7 +327,7 @@ class SessionManager:
         """Get session document if it exists.
 
         Args:
-            phone_number: User's phone number in E.164 format.
+            phone_number: User identifier.
 
         Returns:
             SessionDocument if exists, None otherwise.
@@ -469,7 +469,7 @@ class SessionManager:
         delivering async task results.
 
         Args:
-            phone_number: User's phone number in E.164 format.
+            phone_number: User identifier.
 
         Returns:
             SessionInfo if active session exists, None otherwise.

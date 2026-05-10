@@ -115,7 +115,7 @@ class CloudTasksClient:
 
         Args:
             task_id: The Firestore task document ID (UUID)
-            user_id: User's phone number
+            user_id: User identifier
             schedule_time: When to execute (None = immediate)
 
         Returns:

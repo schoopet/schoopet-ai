@@ -36,7 +36,7 @@ resource "google_service_account_iam_member" "sms_gateway_sa_user_on_self" {
 }
 
 # ── SMS Gateway Cloud Run invoke ───────────────────────────────────────────────
-# Twilio, Slack, Telegram, and Discord all call the gateway without GCP bearer
+# Slack, Telegram, Discord, and other public channel webhooks call the gateway without GCP bearer
 # tokens, so the service must be publicly invocable. The email push endpoint
 # additionally verifies its own OIDC token (email-push SA) in the handler.
 

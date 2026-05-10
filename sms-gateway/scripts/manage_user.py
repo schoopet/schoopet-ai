@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Debug tool to manipulate user states in Firestore for the SMS Gateway.
+Debug tool to manipulate gateway user session state in Firestore.
 """
 import argparse
 import sys
@@ -27,7 +27,7 @@ def get_db():
     return firestore.Client()
 
 def normalize_user_id(phone_number: str) -> str:
-    """Normalize phone number for consistent document IDs."""
+    """Normalize user ID for consistent document IDs."""
     return phone_number.lstrip("+").replace("-", "").replace(" ", "")
 
 def get_user(phone_number):
@@ -42,7 +42,7 @@ def get_user(phone_number):
         print("-" * 40)
         print(f"Phone: {data.get('phone_number')}")
         print(f"Opted In: {data.get('opted_in')}")
-        print(f"Session ID: {data.get('agent_session_id')}")
+        print(f"Session ID: {data.get('personal_agent_session_id')}")
         print(f"Last Activity: {data.get('last_activity')}")
         print(f"Message Count: {data.get('message_count')}")
         print("-" * 40)
@@ -63,7 +63,7 @@ def register_user(phone_number):
     
     session_doc = SessionDocument(
         phone_number=phone_number,
-        agent_session_id="",
+        personal_agent_session_id="",
         created_at=now,
         last_activity=now,
         message_count=0,
@@ -92,14 +92,14 @@ def opt_in_user(phone_number, session_id=None):
     
     # Logic to handle session ID
     current_data = doc.to_dict()
-    current_session = current_data.get("agent_session_id")
+    current_session = current_data.get("personal_agent_session_id")
     
     if session_id:
-        update_data["agent_session_id"] = session_id
+        update_data["personal_agent_session_id"] = session_id
     elif not current_session:
         # Generate a dummy session if none exists and none provided
         dummy_session = f"debug-session-{int(now.timestamp())}"
-        update_data["agent_session_id"] = dummy_session
+        update_data["personal_agent_session_id"] = dummy_session
         print(f"Generated dummy session ID: {dummy_session}")
     
     doc_ref.update(update_data)
@@ -116,7 +116,7 @@ def opt_out_user(phone_number):
 
     update_data = {
         "opted_in": False,
-        "agent_session_id": "",
+        "personal_agent_session_id": "",
         "last_activity": datetime.now(timezone.utc),
     }
     doc_ref.update(update_data)
@@ -135,12 +135,12 @@ def delete_user(phone_number):
     print(f"User {phone_number} deleted.")
 
 def main():
-    parser = argparse.ArgumentParser(description="Manage SMS Gateway Users in Firestore")
+    parser = argparse.ArgumentParser(description="Manage gateway users in Firestore")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # Common argument helper
     def add_phone_arg(p):
-        p.add_argument("phone_number", help="Phone number (E.164 format preferred)")
+        p.add_argument("phone_number", help="User ID")
 
     # Get
     parser_get = subparsers.add_parser("get", help="Get user info")

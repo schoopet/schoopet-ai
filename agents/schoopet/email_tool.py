@@ -488,12 +488,10 @@ class EmailTool:
         """
         Check whether Gmail is connected.
 
-        For the personal agent: checks your own Gmail connection.
-        For the team agent: checks the shared system Gmail connection.
+        Checks the current user's Gmail connection.
 
         Returns:
-            Status string. If not connected, includes an authorization link (personal)
-            or an admin error message (team).
+            Status string. If not connected, includes an authorization link.
         """
         phone, err = require_user_id(tool_context, "gmail status")
         if err:

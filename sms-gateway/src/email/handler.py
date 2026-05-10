@@ -3,9 +3,8 @@
 Routes:
   POST /webhook/email                       - Pub/Sub push endpoint (all Gmail accounts)
   GET  /internal/email/renew-watch          - Renew Gmail watch (called by Cloud Scheduler)
-  GET  /internal/email/setup-watch          - One-time watch setup (system account)
 
-All Gmail accounts (system + personal users) share the same Pub/Sub topic.
+All personal Gmail accounts share the same Pub/Sub topic.
 Each notification carries an emailAddress that maps to an email_state/{doc_id}
 Firestore document containing user_id, token_feature, and preferred_channel.
 """
@@ -21,8 +20,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 
 from ..internal.auth import verify_internal_request
 from .gmail_client import (
-    SYSTEM_PHONE, SYSTEM_FEATURE, EMAIL_RULES_COLLECTION,
-    get_gmail_token, get_new_messages, setup_watch, normalize_gmail_address,
+    EMAIL_RULES_COLLECTION, get_gmail_token, get_new_messages, setup_watch,
+    normalize_gmail_address,
 )
 from ..slack.sender import SlackSender
 
@@ -48,8 +47,8 @@ Any tool that requires interactive user confirmation will be rejected — you
 will receive "This tool call is rejected." When that happens:
 - If the operation can be completed without that tool, do so.
 - Otherwise, send the user a concise message describing what you would have
-  done and ask them to follow up on an interactive channel (SMS, WhatsApp,
-  Telegram, or Discord) where they can approve it in real time.
+  done and ask them to follow up on an interactive channel (Telegram or
+  Discord) where they can approve it in real time.
 
 If no user-visible reminder or summary is needed, start your response with:
 <SUPPRESS RESPONSE>
@@ -158,8 +157,7 @@ async def handle_email_webhook(
       }
     }
 
-    emailAddress identifies which Gmail account triggered the notification.
-    All accounts (system + personal) are routed through process_email_notification.
+    emailAddress identifies which personal Gmail account triggered the notification.
     """
     await _verify_pubsub_oidc(request)
 
@@ -263,7 +261,6 @@ def _format_rules_for_prompt(rules: list[dict]) -> str:
 async def process_email_notification(gmail_address: str, history_id: str) -> None:
     """Fetch new messages for any Gmail account and route each to the appropriate agent.
 
-    Works identically for the system account (team agent) and personal users.
     The watch state doc drives which user_id, token, agent, and channel to use.
     """
     watch_state = await _read_watch_state(gmail_address)
@@ -273,7 +270,7 @@ async def process_email_notification(gmail_address: str, history_id: str) -> Non
 
     user_id = watch_state.get("user_id", "")
     token_feature = watch_state.get("token_feature", "")
-    preferred_channel = watch_state.get("preferred_channel", "sms")
+    preferred_channel = watch_state.get("preferred_channel", "discord")
 
     if not user_id or not token_feature:
         logger.warning(f"Watch state for {gmail_address} is missing user_id or token_feature")
@@ -396,17 +393,17 @@ async def register_gmail_watch(
     user_id: str,
     gmail_address: str,
     feature: str,
-    preferred_channel: str = "sms",
+    preferred_channel: str = "discord",
 ) -> bool:
     """Set up Gmail push watch for a user after OAuth authorization.
 
     Called automatically from the OAuth callback when a user authorizes
-    a feature that includes Gmail scope (google or workspace_system).
+    the `google` feature, which includes Gmail scope.
 
     Args:
-        user_id: User's phone number or Discord ID.
+        user_id: User identifier or Discord ID.
         gmail_address: The authorized Gmail address.
-        feature: OAuth feature (google or workspace_system).
+        feature: OAuth feature, currently `google`.
         preferred_channel: Channel to deliver email notifications on.
 
     Returns:
@@ -518,47 +515,3 @@ async def renew_gmail_watch(
         "renewed": renewed,
         "failed": failed,
     }
-
-
-@router.get("/internal/email/setup-watch")
-async def setup_gmail_watch(
-    topic: str = Query(..., description="Full Pub/Sub topic name"),
-    caller: str = Depends(verify_internal_request),
-) -> dict:
-    """One-time Gmail watch setup for system account.
-
-    Writes the unified watch state document so the system account participates
-    in the same email_state collection as personal users.
-    """
-    if not _oauth_manager or not _db:
-        raise HTTPException(status_code=503, detail="Email services not initialized")
-
-    system_email = os.getenv("SYSTEM_GMAIL_ADDRESS", "schoopet.agent@gmail.com")
-
-    token = await get_gmail_token(_oauth_manager, SYSTEM_PHONE, SYSTEM_FEATURE)
-    if not token:
-        raise HTTPException(status_code=503, detail="No workspace_system token available")
-
-    watch_result = await setup_watch(token, topic)
-    if not watch_result:
-        raise HTTPException(status_code=500, detail="Failed to set up Gmail watch")
-
-    history_id = str(watch_result.get("historyId", ""))
-    expiration = watch_result.get("expiration", "")
-
-    from datetime import datetime, timezone
-    await _write_watch_state(
-        system_email,
-        {
-            "gmail_address": system_email,
-            "user_id": SYSTEM_PHONE,
-            "token_feature": SYSTEM_FEATURE,
-            "preferred_channel": "slack",
-            "last_history_id": history_id,
-            "watch_expiration": expiration,
-            "updated_at": datetime.now(timezone.utc),
-        },
-    )
-
-    logger.info(f"System Gmail watch set up by {caller}, historyId={history_id}")
-    return {"status": "configured", "historyId": history_id, "gmail_address": system_email}

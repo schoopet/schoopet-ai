@@ -19,7 +19,6 @@ from google.adk.tools import ToolContext
 from ..async_tasks.models import (
     AsyncTaskDocument,
     TaskStatus,
-    VALID_CHANNELS,
 )
 from ..preferences_tool import PreferencesTool
 from .cloud_tasks_client import get_cloud_tasks_client
@@ -71,23 +70,23 @@ class AsyncTaskTool:
     def _get_channel(self, tool_context: Optional[ToolContext]) -> str:
         """Extract notification channel from session state."""
         if not tool_context:
-            logger.warning("_get_channel called without tool_context; defaulting to 'sms'")
-            return "sms"
+            logger.warning("_get_channel called without tool_context; defaulting to 'discord'")
+            return "discord"
         try:
             state = tool_context.state
             if state and "channel" in state:
                 channel = state["channel"]
-                if channel in VALID_CHANNELS:
+                if isinstance(channel, str):
                     return channel
         except Exception:
             pass
         user_id = getattr(tool_context, "user_id", "unknown")
         logger.warning(
-            "No valid channel in session state for user %s; defaulting to 'sms'. "
+            "No valid channel in session state for user %s; defaulting to 'discord'. "
             "Session may have been created without a channel in agent state.",
             user_id,
         )
-        return "sms"
+        return "discord"
 
     def _get_notification_context(self, tool_context: Optional[ToolContext]) -> Dict[str, str]:
         """Extract optional scoped notification metadata from session state."""
@@ -206,7 +205,12 @@ class AsyncTaskTool:
         # Determine channel from session state
         notification_channel = self._get_channel(tool_context)
         notification_context = self._get_notification_context(tool_context)
-        if notification_channel == "discord" and not notification_context.get("discord_channel_id"):
+        if notification_channel != "discord":
+            return (
+                "ERROR: Cannot create async task - background task completion "
+                "delivery currently supports Discord channels only."
+            )
+        if not notification_context.get("discord_channel_id"):
             return (
                 "ERROR: Cannot create async task - Discord channel context is missing. "
                 "Please retry from the Discord channel where the result should be posted."

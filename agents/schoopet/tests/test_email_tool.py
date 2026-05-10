@@ -235,7 +235,7 @@ async def test_fetch_email_artifact_service_failure():
 
 
 @pytest.mark.asyncio
-async def test_fetch_email_no_system_token():
+async def test_fetch_email_no_user_token():
     _, ctx = await _make_artifact_service_with_save()
     tool = _make_email_tool(None)
     tool._get_oauth_client().get_oauth_link.return_value = "https://example.com/oauth"

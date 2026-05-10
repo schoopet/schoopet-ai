@@ -13,10 +13,10 @@ COLLECTION_NAME = "sms_rate_limits"
 
 
 class RateLimiter:
-    """Daily rate limiter for SMS messages.
+    """Daily rate limiter for inbound user messages.
 
-    Tracks message counts per phone number per day using Firestore.
-    Supports an allowlist of phone numbers excluded from rate limiting.
+    Tracks message counts per user ID per day using Firestore.
+    Supports an allowlist of user IDs excluded from rate limiting.
     """
 
     def __init__(
@@ -29,8 +29,8 @@ class RateLimiter:
 
         Args:
             firestore_client: Async Firestore client instance.
-            daily_limit: Maximum messages per phone number per day.
-            excluded_phones: List of phone numbers exempt from rate limiting.
+            daily_limit: Maximum messages per user per day.
+            excluded_phones: List of user IDs exempt from rate limiting.
         """
         self._db = firestore_client
         self._daily_limit = daily_limit
@@ -42,16 +42,16 @@ class RateLimiter:
         return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     def _get_doc_id(self, phone_number: str) -> str:
-        """Generate document ID from phone number and date."""
+        """Generate document ID from user ID and date."""
         normalized = normalize_user_id(phone_number)
         date_key = self._get_date_key()
         return f"{normalized}_{date_key}"
 
     def is_excluded(self, phone_number: str) -> bool:
-        """Check if phone number is excluded from rate limiting.
+        """Check if user ID is excluded from rate limiting.
 
         Args:
-            phone_number: Phone number to check.
+            phone_number: User ID to check.
 
         Returns:
             True if excluded from rate limiting.
@@ -65,18 +65,18 @@ class RateLimiter:
         )
 
     async def check_and_increment(self, phone_number: str) -> tuple[bool, int]:
-        """Check if phone number is within rate limit and increment counter.
+        """Check if user ID is within rate limit and increment counter.
 
         Args:
-            phone_number: Phone number to check.
+            phone_number: User ID to check.
 
         Returns:
             Tuple of (is_allowed, current_count).
             is_allowed is True if under the limit or excluded.
         """
-        # Excluded phones are always allowed
+        # Excluded users are always allowed.
         if self.is_excluded(phone_number):
-            logger.debug(f"Phone {phone_number} is excluded from rate limiting")
+            logger.debug(f"User {phone_number} is excluded from rate limiting")
             return True, 0
 
         doc_id = self._get_doc_id(phone_number)
@@ -122,10 +122,10 @@ class RateLimiter:
         return is_allowed, count
 
     async def get_usage(self, phone_number: str) -> int:
-        """Get current daily usage for a phone number.
+        """Get current daily usage for a user ID.
 
         Args:
-            phone_number: Phone number to check.
+            phone_number: User ID to check.
 
         Returns:
             Current message count for today.

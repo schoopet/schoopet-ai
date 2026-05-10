@@ -23,7 +23,7 @@ def generate_oauth_init_token(user_id: str, secret: str) -> str:
     """Generate an HMAC-signed OAuth initiation token.
 
     Args:
-        user_id: The user identifier (phone number, Slack ID, etc.)
+        user_id: The user identifier.
         secret: The HMAC secret key
 
     Returns:

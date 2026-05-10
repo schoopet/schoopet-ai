@@ -13,7 +13,7 @@ def normalize_user_id(user_id: str) -> str:
         "+1-949-413-6310" → "19494136310"
         "+19494136310"    → "19494136310"
         "U123456"         → "U123456"
-        "email_system"    → "email_system"
+        "discord:123"     → "discord:123"
     """
     return user_id.lstrip("+").replace("-", "").replace(" ", "")
 

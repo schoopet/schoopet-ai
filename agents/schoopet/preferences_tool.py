@@ -85,7 +85,7 @@ class PreferencesTool:
             Confirmation message or error.
 
         Note:
-            - Requires user_id from tool_context (phone number).
+            - Requires user_id from tool_context.
             - The timezone will be used automatically by calendar tools.
 
         Common timezone examples:
@@ -129,7 +129,7 @@ class PreferencesTool:
             The user's timezone string (e.g., "America/Los_Angeles") or a message
             indicating no timezone is set.
 
-        Note: Requires user_id from tool_context (phone number).
+        Note: Requires user_id from tool_context.
         """
         phone_number, err = require_user_id(tool_context, "preferences")
         if err:
@@ -149,7 +149,7 @@ class PreferencesTool:
         to retrieve the timezone without going through the agent.
 
         Args:
-            phone_number: The user's phone number.
+            phone_number: The user identifier.
 
         Returns:
             The timezone string if set, None otherwise.

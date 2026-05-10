@@ -65,8 +65,8 @@ class OAuthManager:
         """Generate a new OAuth state parameter for CSRF protection.
 
         Args:
-            user_id: User identifier (phone number, Slack ID, etc.).
-            feature: Feature being authorized (calendar, workspace_system).
+            user_id: User identifier.
+            feature: Feature being authorized.
 
         Returns:
             State ID (UUID) to include in OAuth URL.
@@ -188,12 +188,12 @@ class OAuthManager:
         Access token goes to Firestore, refresh token to Secret Manager.
 
         Args:
-            user_id: User identifier (phone number, Slack ID, etc.).
+            user_id: User identifier.
             email: Google account email.
             access_token: OAuth access token.
             refresh_token: OAuth refresh token (may be None on refresh).
             expires_in: Token expiration time in seconds.
-            feature: Feature associated with token (calendar, workspace_system).
+            feature: Feature associated with token.
 
         Returns:
             True if successful, False otherwise.
@@ -248,8 +248,8 @@ class OAuthManager:
         refresh token.
 
         Args:
-            user_id: User identifier (phone number, Slack ID, etc.).
-            feature: Feature to get token for (calendar, workspace_system).
+            user_id: User identifier.
+            feature: Feature to get token for.
 
         Returns:
             Valid access token if available, None otherwise.
@@ -285,7 +285,7 @@ class OAuthManager:
         """Refresh an expired access token using the refresh token.
 
         Args:
-            user_id: User identifier (phone number, Slack ID, etc.).
+            user_id: User identifier.
             email: Google account email (for updating token record).
             feature: Feature to refresh token for.
 
@@ -344,7 +344,7 @@ class OAuthManager:
         """Get token information for a user.
 
         Args:
-            user_id: User identifier (phone number, Slack ID, etc.).
+            user_id: User identifier.
             feature: Feature to get info for.
 
         Returns:
@@ -364,7 +364,7 @@ class OAuthManager:
         """Check if a user has a valid (or refreshable) OAuth token.
 
         Args:
-            user_id: User identifier (phone number, Slack ID, etc.).
+            user_id: User identifier.
             feature: Feature to check.
 
         Returns:
@@ -377,7 +377,7 @@ class OAuthManager:
         """Revoke and delete all tokens for a user and feature.
 
         Args:
-            user_id: User identifier (phone number, Slack ID, etc.).
+            user_id: User identifier.
             feature: Feature to revoke.
 
         Returns:

@@ -1,63 +1,84 @@
 # Schoopet Project Context
 
-## Project Overview
+Schoopet is a personal workflow assistant built on Google ADK, Vertex AI Agent Engine, and a FastAPI Cloud Run gateway.
 
-**Schoopet** is a whimsical AI memory assistant service designed to help users with ADHD, reminders, and habit tracking via SMS. The system features a native multi-agent architecture powered by Google Vertex AI, a marketing website, and an SMS gateway.
+## Active Components
 
-## Architecture & Components
+### Agent: `agents/schoopet/`
 
-### 1. Web Frontend (`web/`)
-*   **Purpose:** Multi-page landing site and user onboarding.
-*   **Tech Stack:** Vanilla HTML, CSS, JavaScript, Vite (Bundler).
-*   **Deployment:** Firebase Hosting (via `deploy_web.sh`).
-*   **Conventions:** Uses glassmorphism styling and scroll-based animations (`src/main.js`).
+- ADK `LlmAgent` named `personal`.
+- Deployed as a Vertex AI Agent Engine app via `AdkApp`.
+- Default model is `gemini-3-flash-preview` through `GlobalGemini`.
+- Uses Vertex AI Memory Bank and explicit memory tools.
+- Uses Google Calendar, Drive, Docs, Sheets, and Gmail through the repo's custom OAuth token stack.
+- Has subagents for search, code execution, structured notes, and deep research.
+- Creates background work through `AsyncTaskTool` and Cloud Tasks.
 
-### 2. AI Agents (`agents/`)
-A sophisticated multi-agent system using Google's Agent Development Kit (ADK):
+### Gateway: `sms-gateway/`
 
-*   **Main Agent (Schoopet):** Handles conversational memory, social interactions, and relationship building. Uses `gemini-3.1-pro-preview`.
-*   **Structured Notes Subagent:** Manages queryable lists (e.g., shopping lists, book logs) via **BigQuery MCP** integration. Uses `gemini-3.1-pro-preview`.
-*   **Search Subagent:** Performs real-time Google searches using `gemini-3.1-pro-preview` (wrapped as an `AgentTool`).
-*   **Memory System:** Uses Vertex AI Native Memory Bank with automatic persistence.
-    *   **Custom Topic:** `SOCIAL_MEMORIES` (tracks people, events, and commitments).
-    *   **Managed Topics:** `USER_PERSONAL_INFO`, `USER_PREFERENCES`, etc.
+- FastAPI Cloud Run service.
+- Handles Discord, Telegram, Slack, Gmail Pub/Sub, OAuth, and internal task execution endpoints.
+- Owns session storage in Firestore.
+- Owns OAuth initiation and callbacks.
+- Handles ADK confirmations.
+- Executes background tasks at `/internal/tasks/execute`.
 
-### 3. SMS Gateway (`sms-gateway/`)
-*   **Purpose:** Bridges Twilio SMS with the Vertex AI Reasoning Engine.
-*   **Tech Stack:** Python, FastAPI, Google Cloud Run.
-*   **Key Logic:** Handles SMS segmenting (160 chars), session timeouts (10 min), and webhook security.
+### Web: `web/`
 
-## Development & Execution
+- Static Vite site.
+- Deployed through Firebase Hosting with `deploy_web.sh`.
 
-### Common Commands
+### Infrastructure: `terraform/`
 
-**Important:** Always run agent modules from the `agents` directory using the `-m` flag to preserve package context.
+- Creates Agent Engine shell, Cloud Run gateway, Cloud Tasks, Cloud Scheduler, Pub/Sub, Artifact Registry, Secret Manager secrets, GCS artifacts, Firestore config, service accounts, and IAM.
+- Agent deploy updates the existing reasoning engine after Terraform creates it.
 
-*   **Deploy Agent:** `cd agents && python -m schoopet.deploy`
-*   **Chat with Remote Agent:** Use the [agent-engine-cli](https://github.com/google/agent-engine-cli) library on GitHub.
-*   **Run Agent Locally:** `cd agents && python -m schoopet.main`
-*   **ADK Web Interface:** `cd agents && adk web`
-*   **Website Dev:** `cd web && npm run dev`
-*   **Website Deploy:** `./deploy_web.sh`
+## Request Flow
 
-### Environment Variables (`agents/schoopet/.env`)
-*   `GOOGLE_CLOUD_PROJECT`: GCP Project ID.
-*   `AGENT_ENGINE_ID`: ID of the deployed Vertex AI Reasoning Engine.
-*   `GOOGLE_GENAI_USE_VERTEXAI`: Set to `"true"`.
+```text
+Channel webhook -> sms-gateway -> Agent Engine session -> ADK agent/tools
+Cloud Task ------> sms-gateway -> temporary Agent Engine session -> task result
+```
 
-## Infrastructure
+Firestore stores sessions, OAuth state/token metadata, pending approvals, and async task documents. Secret Manager stores refresh tokens and channel/API secrets. GCS stores artifacts.
 
-*   **Google Cloud Platform:**
-    *   **Vertex AI:** Reasoning Engines & Memory Bank.
-    *   **Cloud Run:** SMS Gateway hosting.
-    *   **BigQuery:** Storage for structured notes (MCP integration).
-    *   **Firestore:** SMS session state management.
-*   **Firebase:** Web hosting.
-*   **Twilio:** SMS entry point.
+## Common Commands
 
-## Agent Flow
-1. **User Input:** Received via SMS or CLI.
-2. **Main Agent:** Processes intent; delegates to **Structured Notes** for data tasks or **Search** for factual queries.
-3. **Memory Check:** Automatically retrieves relevant user context from Memory Bank.
-4. **Tool Use:** Executes BigQuery SQL or Google Search as needed.
-5. **Persistence:** Saves session context to Memory Bank upon graceful exit.
+Run tests:
+
+```bash
+make test
+```
+
+Run the agent locally:
+
+```bash
+cd agents
+set -a && source ../environments/dev.env && set +a
+python -m schoopet.main
+```
+
+Deploy the agent:
+
+```bash
+./agents/deploy.sh --env=prod
+```
+
+Deploy the gateway:
+
+```bash
+./sms-gateway/scripts/deploy.sh --env=prod
+```
+
+Run the web app:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+## Review Docs
+
+- Architecture: [docs/architecture.md](/Users/mmontan/schoopet/docs/architecture.md)
+- Invariants: [docs/invariants.md](/Users/mmontan/schoopet/docs/invariants.md)

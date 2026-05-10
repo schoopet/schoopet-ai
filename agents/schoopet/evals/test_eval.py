@@ -20,7 +20,7 @@ def load_env():
 
 @pytest.mark.asyncio
 async def test_root_agent():
-    """Run evaluations for the personal agent (SMS/WhatsApp/Telegram)."""
+    """Run evaluations for the personal agent."""
 
     await AgentEvaluator.evaluate(
         "schoopet.root_agent",  # Module path to the personal agent

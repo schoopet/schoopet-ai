@@ -125,7 +125,7 @@ class AgentEngineClient:
         """Create a new Agent Engine session.
 
         Args:
-            user_id: User identifier (phone number for SMS gateway).
+            user_id: User identifier.
             state: Optional initial session state (e.g., {"channel": "discord"}).
 
         Returns:
@@ -166,7 +166,7 @@ class AgentEngineClient:
         into a single response string.
 
         Args:
-            user_id: User identifier (phone number).
+            user_id: User identifier.
             session_id: Agent Engine session ID.
             message: The user's message — either a plain string or a
                      types.Content with multimodal parts (text + inline_data).

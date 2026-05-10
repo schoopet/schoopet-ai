@@ -51,8 +51,7 @@ class Settings(BaseSettings):
     ARTIFACT_BUCKET_NAME: str = ""  # GCS bucket for email attachment binaries; computed from project if unset
 
     # Scopes per feature.
-    # "google"           — all personal-user scopes (calendar, drive, sheets, gmail)
-    # "workspace_system" — system account (schoopet.agent@gmail.com) for team agent
+    # "google" — all personal-user scopes (calendar, drive, docs, sheets, gmail)
     OAUTH_SCOPES: dict[str, list[str]] = {
         "google": [
             "https://www.googleapis.com/auth/calendar.events",
@@ -61,15 +60,6 @@ class Settings(BaseSettings):
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/gmail.readonly",
             "https://www.googleapis.com/auth/gmail.labels",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "openid",
-        ],
-        "workspace_system": [
-            "https://www.googleapis.com/auth/gmail.readonly",
-            "https://www.googleapis.com/auth/drive.file",
-            "https://www.googleapis.com/auth/documents",
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/calendar.events",
             "https://www.googleapis.com/auth/userinfo.email",
             "openid",
         ],
@@ -91,4 +81,3 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
-

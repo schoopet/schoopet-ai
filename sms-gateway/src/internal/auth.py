@@ -3,7 +3,6 @@
 This module provides security for internal endpoints that are called by:
 - Cloud Tasks (background task execution)
 - Cloud Scheduler (scheduled maintenance)
-- Legacy internal services during migration
 
 All callers are GCP services and authenticate via OIDC tokens issued for
 their service accounts. The allowed service account list is auto-populated
@@ -35,7 +34,6 @@ def init_allowed_service_accounts():
     if project_id:
         default_accounts = [
             f"schoopet-sms-gateway@{project_id}.iam.gserviceaccount.com",
-            f"task-worker@{project_id}.iam.gserviceaccount.com",
             f"gmail-watch-scheduler@{project_id}.iam.gserviceaccount.com",
             f"task-requeue-scheduler@{project_id}.iam.gserviceaccount.com",
         ]

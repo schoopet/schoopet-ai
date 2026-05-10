@@ -1,5 +1,5 @@
 #!/bin/bash
-# Set up Secret Manager secrets for Twilio credentials
+# Set up Secret Manager secrets for the gateway
 #
 # Usage:
 #   ./scripts/setup_secrets.sh
@@ -16,7 +16,7 @@ PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-mmontan-ml}"
 REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 
 echo "=========================================="
-echo "Setting up Secret Manager for SMS Gateway"
+echo "Setting up Secret Manager for Schoopet Gateway"
 echo "=========================================="
 echo "Project: $PROJECT_ID"
 echo "=========================================="
@@ -79,9 +79,6 @@ grant_access() {
 # Create secrets
 echo ""
 echo "Creating secrets..."
-create_secret_if_not_exists "twilio-account-sid"
-create_secret_if_not_exists "twilio-auth-token"
-create_secret_if_not_exists "twilio-phone-number"
 create_secret_if_not_exists "google-oauth-client-id"
 create_secret_if_not_exists "google-oauth-client-secret"
 create_secret_if_not_exists "oauth-hmac-secret"
@@ -102,15 +99,6 @@ read -r response
 
 if [[ "$response" =~ ^[Yy]$ ]]; then
     echo ""
-    echo "Enter your Twilio credentials:"
-    echo "(Get these from https://console.twilio.com)"
-    echo ""
-
-    add_secret_version "twilio-account-sid" "Enter TWILIO_ACCOUNT_SID (starts with AC)"
-    add_secret_version "twilio-auth-token" "Enter TWILIO_AUTH_TOKEN"
-    add_secret_version "twilio-phone-number" "Enter TWILIO_PHONE_NUMBER (E.164 format, e.g., +14155551234)"
-
-    echo ""
     echo "Enter your Google OAuth credentials:"
     echo "(Get these from https://console.cloud.google.com/apis/credentials)"
     echo ""
@@ -122,9 +110,6 @@ fi
 # Grant access
 echo ""
 echo "Granting Cloud Run access to secrets..."
-grant_access "twilio-account-sid"
-grant_access "twilio-auth-token"
-grant_access "twilio-phone-number"
 grant_access "google-oauth-client-id"
 grant_access "google-oauth-client-secret"
 grant_access "oauth-hmac-secret"
@@ -135,15 +120,12 @@ echo "Secret Manager Setup Complete!"
 echo "=========================================="
 echo ""
 echo "Secrets created:"
-echo "  - twilio-account-sid"
-echo "  - twilio-auth-token"
-echo "  - twilio-phone-number"
 echo "  - google-oauth-client-id"
 echo "  - google-oauth-client-secret"
 echo "  - oauth-hmac-secret"
 
 echo ""
 echo "Next steps:"
-echo "  1. Run ./scripts/setup_firestore.py to create Firestore collection"
+echo "  1. Run ./scripts/setup_firestore.py to create Firestore collections"
 echo "  2. Run ./scripts/deploy.sh to deploy to Cloud Run"
 echo "=========================================="

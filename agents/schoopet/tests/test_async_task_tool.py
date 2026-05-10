@@ -16,7 +16,12 @@ def tool_context():
     context = MagicMock(spec=ToolContext)
     context.user_id = USER_ID
     context.session_id = SESSION_ID
-    context.state = {}
+    context.state = {
+        "channel": "discord",
+        "session_scope": "discord:guild:g1:channel:c1",
+        "discord_channel_id": "c1",
+        "discord_channel_name": "project-alpha",
+    }
     return context
 
 @pytest.fixture
@@ -141,6 +146,22 @@ class TestAsyncTaskTool:
         )
 
         assert result.startswith("ERROR: Cannot create async task")
+        mock_firestore.collection.return_value.document.return_value.set.assert_not_called()
+        mock_cloud_tasks.create_task.assert_not_called()
+
+    def test_create_async_task_rejects_non_discord_delivery(
+        self, async_task_tool, mock_cloud_tasks, tool_context, mock_firestore
+    ):
+        """Only Discord task completion delivery is currently supported."""
+        tool_context.state = {"channel": "telegram"}
+
+        result = async_task_tool.create_async_task(
+            task_type="research",
+            instruction="Research launch risks",
+            tool_context=tool_context,
+        )
+
+        assert "supports Discord channels only" in result
         mock_firestore.collection.return_value.document.return_value.set.assert_not_called()
         mock_cloud_tasks.create_task.assert_not_called()
 

@@ -88,7 +88,7 @@ def _success_html(email: str, service_name: str = "Google Calendar") -> str:
             <h1>Authorization Successful!</h1>
             <p>Your {service_name} has been connected.</p>
             <div class="email">{email}</div>
-            <p>You can now close this window and use features via SMS.</p>
+            <p>You can now close this window and use Schoopet.</p>
         </div>
     </body>
     </html>
@@ -148,7 +148,7 @@ def _error_html(message: str) -> str:
             <div class="error-icon">&#10006;</div>
             <h1>Authorization Failed</h1>
             <div class="message">{message}</div>
-            <p>Please try again by requesting a new authorization link via SMS.</p>
+            <p>Please try again by requesting a new authorization link from Schoopet.</p>
         </div>
     </body>
     </html>
@@ -159,7 +159,7 @@ def _error_html(message: str) -> str:
 async def initiate_oauth(
     request: Request,
     token: str = Query(..., description="HMAC-signed initiation token"),
-    feature: str = Query("google", description="Feature to authorize (google or workspace_system)"),
+    feature: str = Query("google", description="Feature to authorize"),
 ):
     """Initiate Google OAuth flow using HMAC-signed token.
 
@@ -188,11 +188,7 @@ async def initiate_oauth(
             detail="Invalid or expired authorization link. Please request a new one from the assistant.",
         )
 
-    # Allow the system email key to bypass opt-in check
-    is_system_key = user_id == "email_system"
-
-    # Optionally verify user is opted in (skip for system keys)
-    if not is_system_key and _session_manager:
+    if _session_manager:
         session = await _session_manager.get_session(user_id)
         if not session or not session.opted_in:
             raise HTTPException(
@@ -295,8 +291,8 @@ async def oauth_callback(
     logger.info(f"OAuth completed for user {user_id[:4]}****, feature: {feature}, email: {email}")
 
     # Set up Gmail push watch for features that include Gmail scope
-    if feature in ("google", "workspace_system"):
-        preferred_channel = "slack" if feature == "workspace_system" else "discord"
+    if feature == "google":
+        preferred_channel = "discord"
         if _session_manager:
             try:
                 session = await _session_manager.get_session(user_id)
@@ -311,7 +307,6 @@ async def oauth_callback(
 
     service_name_map = {
         "google": "Google",
-        "workspace_system": "Google Workspace",
     }
     service_name = service_name_map.get(feature, "Google")
     return HTMLResponse(_success_html(email, service_name))
@@ -328,7 +323,7 @@ async def oauth_status(
     Args:
         request: FastAPI request (for accessing app state).
         token: HMAC-signed token containing user ID.
-        feature: Feature to check (e.g., calendar, workspace_system).
+        feature: Feature to check.
 
     Returns:
         JSON with OAuth status.

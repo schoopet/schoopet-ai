@@ -1,191 +1,163 @@
-# Schoopet SMS Gateway
+# Schoopet Gateway
 
-A Cloud Run service that bridges multiple messaging channels to the Schoopet agent on Vertex AI Agent Engine.
+The gateway is a FastAPI Cloud Run service that connects external channels to the single Schoopet personal Agent Engine. Despite the directory name, the active app is not SMS-specific.
 
-## Supported Channels
+## Responsibilities
 
-| Channel | Endpoint | Agent |
-|---------|----------|-------|
-| SMS | `POST /webhook/sms` | Personal |
-| WhatsApp | `POST /webhook/sms` | Personal |
-| Telegram | `POST /webhook/telegram` | Personal |
-| Discord | `POST /webhook/discord` + Gateway WebSocket | Personal |
-| Slack | `POST /webhook/slack` | Team |
-| Email (Gmail Pub/Sub) | `POST /webhook/email` | Team |
+- Receive channel webhooks for Discord, Telegram, Slack, and Gmail Pub/Sub.
+- Validate platform signatures where supported.
+- Create and reuse Agent Engine sessions, with optional scoped sessions for channel/thread contexts.
+- Handle native ADK confirmation requests and persist pending approvals in Firestore.
+- Run the custom Google OAuth flow and store user tokens.
+- Execute background tasks from Cloud Tasks at `/internal/tasks/execute`.
+- Deliver task results back to Discord channels or active sessions.
 
-Personal and team agents are separate Vertex AI reasoning engines. The gateway routes each channel to the correct one automatically.
+## Runtime Shape
 
-## Adding the Discord Bot to a Server
-
-The bot supports both `/chat` slash commands and @mention / DM conversations.
-
-To add the bot to a Discord server, use this invite link (replace the client ID if the app is re-created):
-
-```
-https://discord.com/api/oauth2/authorize?client_id=1495984034268975275&permissions=274877991936&scope=bot+applications.commands
-```
-
-> **Note:** The bot must be invited with both `bot` and `applications.commands` scopes. Adding it with only `applications.commands` (the default webhook flow) will make slash commands work but the bot won't appear in the member list and @mentions won't be received.
-
-## Architecture
-
-```
-SMS/WhatsApp ──┐
-Telegram ──────┤──→ Personal Agent Engine
-               │         ↕
-               │    Firestore (sessions)
-               │         ↕
-Slack ─────────┤──→ Team Agent Engine
-Email ─────────┘
+```text
+Discord / Telegram / Slack / Gmail
+                 |
+                 v
+          FastAPI gateway
+                 |
+     Firestore sessions, OAuth state,
+     tokens, approvals, async tasks
+                 |
+                 v
+       Vertex AI Agent Engine
+                 |
+       Calendar / Drive / Docs /
+       Sheets / Gmail / Search / Memory
 ```
 
-Session state is stored in Firestore (`sms_sessions` collection) with separate session IDs per agent type per user.
+## Main Modules
 
-## Prerequisites
+| Module | Purpose |
+|---|---|
+| `src/main.py` | App startup, dependency wiring, router registration |
+| `src/config.py` | Environment-backed settings |
+| `src/agent/client.py` | Vertex AI Agent Engine session and streaming client |
+| `src/session/manager.py` | Firestore-backed session lifecycle and opt-in state |
+| `src/session/approvals.py` | Pending ADK confirmation coordination |
+| `src/oauth/` | Custom Google OAuth flow, token storage, HMAC token helper |
+| `src/internal/handler.py` | Authenticated internal endpoints |
+| `src/internal/task_executor.py` | Gateway-owned async task execution |
+| `src/discord/` | Discord interactions, sender, Gateway WebSocket, validation |
+| `src/telegram/` | Telegram webhook, sender, validation |
+| `src/slack/` | Slack Events API webhook, sender, validation |
+| `src/email/` | Gmail Pub/Sub handling and watch setup |
+| `src/ratelimit/` | Firestore-backed daily rate limiting |
 
-1. **Google Cloud**
-   - Firestore database enabled
-   - Secret Manager enabled
-   - Two Vertex AI Agent Engines deployed (`PERSONAL_AGENT_ENGINE_ID` and `TEAM_AGENT_ENGINE_ID`)
+## Endpoints
 
-2. **Twilio** — Account SID, Auth Token, phone number (SMS/WhatsApp)
-
-3. **Telegram** — Bot token from BotFather
-
-4. **Slack** — Bot token and signing secret
-
-## Quick Start
-
-### 1. Configure environment
-
-Copy `environments/prod.env` as a reference for your environment file. Secrets go in `sms-gateway/.env` (gitignored).
-
-Required in `environments/<name>.env`:
-```
-GOOGLE_CLOUD_PROJECT=...
-PERSONAL_AGENT_ENGINE_ID=...   # personal agent (SMS/WhatsApp/Telegram)
-TEAM_AGENT_ENGINE_ID=...       # team agent (Slack/Email)
-```
-
-### 2. Set up secrets
-
-```bash
-./scripts/setup_secrets.sh
-```
-
-### 3. Deploy to Cloud Run
-
-```bash
-# From repo root:
-./sms-gateway/scripts/deploy.sh --env=prod
-```
-
-The script loads `environments/<name>.env` then `sms-gateway/.env` (secrets/overrides).
-
-### 4. Configure webhooks
-
-**Twilio** — set SMS webhook to `https://<service-url>/webhook/sms`
-
-**Telegram** — set webhook:
-```bash
-curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<service-url>/webhook/telegram"
-```
-
-**Slack** — set Request URL in your Slack App to `https://<service-url>/webhook/slack`
-
-**Gmail (Pub/Sub)** — set up watch via:
-```
-GET /internal/email/setup-watch?topic=projects/<project>/topics/<topic>
-```
-
-## Local Development
-
-### Install dependencies
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### Set environment variables
-
-```bash
-set -a && source ../environments/prod.env && set +a
-cp .env.example .env
-# Edit .env with your secrets
-```
-
-### Run locally
-
-```bash
-uvicorn src.main:app --reload --port 8080
-```
-
-### Run tests
-
-```bash
-pytest tests/ -v
-```
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
+| Endpoint | Method | Purpose |
+|---|---|---|
 | `/` | GET | Service info |
-| `/health` | GET | Health check |
-| `/webhook/sms` | POST | Twilio SMS/WhatsApp webhook |
-| `/webhook/telegram` | POST | Telegram bot webhook |
+| `/health` | GET | Cloud Run health check |
+| `/webhook/telegram` | POST | Telegram webhook |
 | `/webhook/slack` | POST | Slack Events API webhook |
-| `/webhook/email` | POST | Gmail Pub/Sub push notification |
-| `/oauth/google/initiate` | GET | Start Google OAuth flow |
+| `/webhook/discord` | POST | Discord interactions endpoint |
+| `/webhook/email` | POST | Gmail Pub/Sub push endpoint |
+| `/oauth/google/initiate` | GET | Start Google OAuth |
 | `/oauth/google/callback` | GET | Google OAuth callback |
-| `/internal/task-review` | POST | Async task completion (OIDC-auth) |
-| `/internal/user-notify` | POST | Send user notification (OIDC-auth) |
-| `/internal/email/setup-watch` | GET | One-time Gmail watch setup |
-| `/internal/email/renew-watch` | GET | Renew Gmail watch (Scheduler) |
+| `/internal/tasks/execute` | POST | Cloud Tasks execution target |
+| `/internal/tasks/requeue-scheduled` | POST | Scheduler target for long-delay tasks |
+| `/internal/task-review` | POST | Legacy external task completion endpoint |
+| `/internal/user-notify` | POST | Authenticated direct notification endpoint |
+| `/internal/email/renew-watch` | GET | Gmail watch renewal |
+
+Internal endpoints require `verify_internal_request`, which accepts configured OIDC callers and HMAC where supported.
 
 ## Configuration
 
-| Environment Variable | Description | Default |
-|---------------------|-------------|---------|
-| `GOOGLE_CLOUD_PROJECT` | GCP project ID | Required |
-| `GOOGLE_CLOUD_LOCATION` | GCP region | `us-central1` |
-| `PERSONAL_AGENT_ENGINE_ID` | Personal agent reasoning engine ID | Required for SMS/Telegram |
-| `TEAM_AGENT_ENGINE_ID` | Team agent reasoning engine ID | Required for Slack/Email |
-| `SESSION_TIMEOUT_MINUTES` | Session inactivity timeout | `10` |
-| `MAX_SMS_SEGMENTS` | Max SMS segments per response | `10` |
-| `AGENT_TIMEOUT_SECONDS` | Agent query timeout | `30` |
-
-Secrets (stored in Secret Manager, injected at deploy time):
-`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `TWILIO_WHATSAPP_NUMBER`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`
-
-## Session Management
-
-- Sessions stored in Firestore (`sms_sessions` collection)
-- Each user has separate session IDs for personal and team agents (`personal_agent_session_id`, `team_agent_session_id`)
-- Backward compatible: old `agent_session_id` documents are treated as team sessions on first read
-- Sessions expire after 10 minutes of inactivity
-
-## Security
-
-- Twilio webhook signatures validated on every request
-- Slack requests verified via signing secret
-- Internal endpoints (`/internal/*`) require OIDC token or HMAC signature
-- Credentials stored in Secret Manager
-- Personal and team agents use entirely separate token paths — no cross-contamination possible
-- Cloud Run handles HTTPS termination
-
-## Custom Domain
-
-The gateway is accessible at `api.schoopet.com`. To configure a custom domain:
+Required:
 
 ```bash
-gcloud beta run domain-mappings create \
-  --service schoopet-sms-gateway \
-  --domain <your-domain> \
-  --region <REGION> \
-  --project <PROJECT>
+GOOGLE_CLOUD_PROJECT=...
+GOOGLE_CLOUD_LOCATION=us-central1
+PERSONAL_AGENT_ENGINE_ID=...
 ```
 
-Add a CNAME `api → ghs.googlehosted.com.` in your DNS provider. SSL is provisioned automatically.
+Common settings:
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `SESSION_TIMEOUT_MINUTES` | `30` | Inactivity window before a new Agent Engine session is created |
+| `AGENT_TIMEOUT_SECONDS` | `900` | Agent streaming timeout |
+| `ENABLE_SIGNATURE_VALIDATION` | `true` | Platform signature validation switch |
+| `DAILY_MESSAGE_LIMIT` | `1000` | Per-user daily rate limit |
+| `ARTIFACT_BUCKET_NAME` | `<project>-agent-artifacts` | Artifact bucket |
+| `EMAIL_PUBSUB_TOPIC` | empty | Gmail watch Pub/Sub topic |
+
+Optional channel secrets/config:
+
+- `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `DISCORD_APPLICATION_ID`
+- `TELEGRAM_BOT_TOKEN`
+- `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`
+OAuth:
+
+- `GOOGLE_OAUTH_CLIENT_ID`
+- `GOOGLE_OAUTH_CLIENT_SECRET`
+- `GOOGLE_OAUTH_REDIRECT_URI`
+- `OAUTH_STATE_TTL_SECONDS`
+
+## Storage
+
+Firestore collections:
+
+| Collection | Purpose |
+|---|---|
+| `sms_sessions` | Session documents, opt-in state, channel metadata, pending confirmations |
+| `oauth_states` | Short-lived OAuth CSRF state |
+| `oauth_tokens` | User access tokens and metadata; refresh tokens are in Secret Manager |
+| `async_tasks` | Background task definitions, status, results, delivery metadata |
+
+Session documents use a normalized user ID as the base document ID. Scoped sessions append a stable hash of `session_scope` so one user can have multiple concurrent scoped conversations.
+
+## Async Tasks
+
+The agent creates tasks with `AsyncTaskTool`. That stores an `async_tasks` document and creates a Cloud Task targeting:
+
+```text
+POST <SMS_GATEWAY_URL>/internal/tasks/execute
+```
+
+The gateway claims the Firestore task with an update-time precondition before executing it. Execution happens in a fresh Agent Engine session. After execution, the gateway deletes that task session and delivers the result.
+
+Only Discord task notifications are currently supported by `GatewayTaskExecutor`.
+
+Scheduled tasks more than 720 hours out can remain in Firestore without `cloud_task_name`. Cloud Scheduler calls `/internal/tasks/requeue-scheduled` weekly to create Cloud Tasks when they enter the 30-day window.
+
+## Local Development
+
+```bash
+cd sms-gateway
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+set -a && source ../environments/dev.env && set +a
+uvicorn src.main:app --reload --port 8080
+```
+
+Run tests:
+
+```bash
+python -m pytest tests/ -v --tb=short
+```
+
+From the repo root:
+
+```bash
+make test-sms-gateway
+```
+
+## Deployment
+
+From the repo root:
+
+```bash
+./sms-gateway/scripts/deploy.sh --env=prod
+```
+
+The script builds and pushes the container, resolves the image digest, then applies Terraform. Cloud Run service configuration is managed in `terraform/sms_gateway.tf`.

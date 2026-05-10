@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Set up Firestore for SMS Gateway.
+"""Set up Firestore for Schoopet Gateway.
 
 This script:
 1. Creates the sms_sessions collection (via a dummy document)
@@ -30,7 +30,7 @@ def setup_firestore():
         sys.exit(1)
 
     print("=" * 50)
-    print("Setting up Firestore for SMS Gateway")
+    print("Setting up Firestore for Schoopet Gateway")
     print("=" * 50)
     print(f"Project: {project_id}")
     print("=" * 50)
@@ -92,13 +92,13 @@ Collection created: sms_sessions
 
 Document schema:
   - phone_number: string (E.164 format)
-  - agent_session_id: string
+  - personal_agent_session_id: string
   - created_at: timestamp
   - last_activity: timestamp
   - message_count: number
 
 Next steps:
-  1. Run ./scripts/setup_secrets.sh to configure Twilio credentials
+  1. Run ./scripts/setup_secrets.sh to configure gateway secrets
   2. Run ./scripts/deploy.sh to deploy to Cloud Run
 """)
 

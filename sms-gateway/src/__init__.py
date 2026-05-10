@@ -1,1 +1,1 @@
-"""Schoopet SMS Gateway - Twilio integration for Vertex AI Agent Engine."""
+"""Schoopet Gateway integration for Vertex AI Agent Engine."""

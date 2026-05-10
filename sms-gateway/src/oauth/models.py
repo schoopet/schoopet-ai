@@ -11,8 +11,8 @@ class OAuthState(BaseModel):
     """
 
     state_id: str = Field(..., description="UUID for state parameter")
-    user_id: str = Field(..., description="User identifier (phone number, Slack ID, etc.)")
-    feature: str = Field(default="google", description="Feature being authorized (e.g., calendar, workspace_system)")
+    user_id: str = Field(..., description="User identifier")
+    feature: str = Field(default="google", description="Feature being authorized")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = Field(..., description="State expiration time")
     used: bool = Field(default=False, description="Whether state has been consumed")
@@ -56,8 +56,8 @@ class OAuthToken(BaseModel):
     Note: Refresh tokens are stored in Secret Manager, not here.
     """
 
-    user_id: str = Field(..., description="User identifier (phone number, Slack ID, etc.)")
-    feature: str = Field(default="google", description="Feature authorized (e.g., calendar, workspace_system)")
+    user_id: str = Field(..., description="User identifier")
+    feature: str = Field(default="google", description="Feature authorized")
     email: str = Field(..., description="Google account email")
     access_token: str = Field(..., description="OAuth access token")
     token_type: str = Field(default="Bearer", description="Token type")

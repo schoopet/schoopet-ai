@@ -1,134 +1,163 @@
-# schoopet-ai
+# Schoopet
 
-A multi-component AI assistant system built on Google Vertex AI Agent Engine.
+Schoopet is a personal workflow assistant built around a single Google Vertex AI Agent Engine deployment. Users reach the agent through Discord, Telegram, Slack, and Gmail-triggered automation. The agent can use memory, Google Calendar, Drive, Docs, Sheets, Gmail, search, code execution, and background tasks.
 
 ## Components
 
-| Component | Path | Description |
-|-----------|------|-------------|
-| Agent | `agents/schoopet/` | Google ADK agent — handles all channels via personal OAuth tokens |
-| SMS Gateway | `sms-gateway/` | FastAPI Cloud Run service routing all channels and background tasks to the agent |
-| Website | `website/` | Static Vite landing page |
+| Component | Path | Runtime | Purpose |
+|---|---|---|---|
+| Agent | `agents/schoopet/` | Vertex AI Agent Engine | ADK agent, tools, subagents, memory, deployment code |
+| Gateway | `sms-gateway/` | Cloud Run / FastAPI | Webhooks, OAuth, sessions, confirmations, async task execution |
+| Web | `web/` | Firebase Hosting / Vite | Static website, signup, privacy, terms |
+| Infrastructure | `terraform/` | Terraform | Agent Engine shell, Cloud Run, Cloud Tasks, Pub/Sub, IAM, secrets, storage |
 
-All channels (SMS, WhatsApp, Telegram, Discord, Slack, Email) route to the single personal agent using `PERSONAL_AGENT_ENGINE_ID`. The agent is deployed as a Vertex AI reasoning engine and managed via Terraform.
+The active production path is:
+
+```text
+User channel -> sms-gateway -> Vertex AI Agent Engine -> tools/subagents
+                                 ^
+Cloud Tasks -> sms-gateway -------|
+```
+
+There is one active agent engine per environment: `PERSONAL_AGENT_ENGINE_ID`.
+
+## Architecture
+
+See [docs/architecture.md](/Users/mmontan/schoopet/docs/architecture.md) for the current architecture description and request flows.
+
+Key points:
+
+- The gateway owns active channel ingress and keeps channel/session metadata in Firestore.
+- The agent owns reasoning, tool selection, memory, and Google Workspace actions.
+- Google user OAuth is still custom: access tokens in Firestore, refresh tokens in Secret Manager.
+- Background tasks are stored in Firestore, scheduled with Cloud Tasks, and executed by the gateway at `/internal/tasks/execute`.
+- Long-delay scheduled work beyond the Cloud Tasks 30-day window is requeued weekly by Cloud Scheduler.
+
+## Invariants
+
+See [docs/invariants.md](/Users/mmontan/schoopet/docs/invariants.md) for the review checklist of contracts that should stay true as the system changes.
+
+The highest-risk invariants are:
+
+- User-scoped data access must always be keyed by ADK `tool_context.user_id`.
+- OAuth state must be single-use and short-lived.
+- Background task execution must be claimed atomically before work starts.
+- Offline Drive/Docs/Sheets writes may only target resource IDs explicitly approved at scheduling time.
+- Cloud Tasks and scheduler calls must reach internal endpoints with valid OIDC/HMAC auth.
 
 ## Environments
 
-Project settings live in `environments/` (checked in, no secrets):
+Non-secret environment files live in `environments/`:
 
-| File | GCP Project | Use |
-|------|-------------|-----|
+| File | Project | Use |
+|---|---|---|
 | `environments/dev.env` | `schoopet-dev` | Development |
 | `environments/prod.env` | `schoopet-prod` | Production |
 
-Secrets go in `environments/<name>.secrets.env` (gitignored). The deploy scripts load both files automatically.
+Optional `environments/<name>.secrets.env` files are gitignored and loaded after the checked-in env file by deploy scripts.
 
-## Deploying
+Important variables:
+
+| Variable | Used by | Meaning |
+|---|---|---|
+| `GOOGLE_CLOUD_PROJECT` | all services | GCP project |
+| `GOOGLE_CLOUD_LOCATION` | all services | GCP region, usually `us-central1` |
+| `PERSONAL_AGENT_ENGINE_ID` | agent/gateway | Vertex AI reasoning engine ID or resource suffix |
+| `ARTIFACT_BUCKET_NAME` | agent/gateway | GCS bucket for ADK artifacts and email attachments |
+| `OAUTH_BASE_URL` | gateway/deploy | Public base URL used for OAuth callbacks |
+| `SMS_GATEWAY_URL` | agent/tasks | Cloud Run gateway URL used by Cloud Tasks |
+| `SMS_GATEWAY_SA` | agent/tasks | Service account used for OIDC task calls |
+| `EMAIL_PUBSUB_TOPIC` | gateway | Gmail Pub/Sub topic |
+
+## Development
+
+Install and run gateway tests:
 
 ```bash
-# Agent (updates existing engine — engine must be created via Terraform first)
-./agents/deploy.sh --env=prod
-
-# SMS Gateway
-./sms-gateway/scripts/deploy.sh --env=prod
+make test
 ```
 
-## First-time setup for a new environment
+Run only gateway tests:
 
-### 1. Create the env file
+```bash
+make test-sms-gateway
+```
 
-Create `environments/<name>.env` with at minimum `GOOGLE_CLOUD_PROJECT` set. Use `environments/prod.env` as a reference.
+Agent development uses the `agents/` directory as the package parent:
 
-### 2. Create infrastructure via Terraform
+```bash
+cd agents
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r schoopet/requirements.txt
+
+set -a && source ../environments/dev.env && set +a
+python -m schoopet.main
+```
+
+Always run agent modules with `python -m schoopet.<module>` from `agents/` so relative imports resolve correctly.
+
+Run the web app locally:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+## Deployment
+
+Terraform creates the durable cloud resources, including the Agent Engine shell. The agent deploy updates that existing engine.
+
+First-time infrastructure:
 
 ```bash
 cd terraform
 terraform init -backend-config="bucket=<state-bucket>" -backend-config="prefix=<env>"
-terraform apply -var-file=environments/<name>.tfvars
+terraform apply -var-file=environments/<env>.tfvars
 ```
 
-This creates the Agent Engine (reasoning engine), Cloud Run services, Cloud Tasks queue, Pub/Sub topics, and all required IAM bindings. After applying, copy the printed `personal_agent_resource_name` output into `environments/<name>.env` as `PERSONAL_AGENT_ENGINE_ID`.
-
-### 3. Deploy the agent
+Agent deploy:
 
 ```bash
-./agents/deploy.sh --env=<name>
+./agents/deploy.sh --env=prod
 ```
 
-### 4. Domain and networking setup
+Requirements:
 
-The SMS Gateway needs a public HTTPS URL for OAuth callbacks and messaging webhooks. There are two options:
+- `agents/.venv` must use Python 3.13.
+- `PERSONAL_AGENT_ENGINE_ID` must be set or discoverable from Terraform output.
 
-**Option A — use the Cloud Run default URL (recommended for dev)**
-
-Skip custom DNS entirely. After deploying the SMS Gateway, set `OAUTH_BASE_URL` in `environments/<name>.env` to the printed Cloud Run URL (`https://shoopet-sms-gateway-xxx-uc.a.run.app`). The URL changes only on a full service replacement, not on normal redeployments.
-
-**Option B — custom subdomain (recommended for prod)**
-
-Add a DNS record pointing the subdomain to Cloud Run:
-
-```
-CNAME  api   ghs.googlehosted.com.
-```
-
-Then create a domain mapping in the GCP project:
+Gateway deploy:
 
 ```bash
-gcloud beta run domain-mappings create \
-  --service shoopet-sms-gateway \
-  --domain api.schoopet.com \
-  --region us-central1 \
-  --project <GOOGLE_CLOUD_PROJECT>
+./sms-gateway/scripts/deploy.sh --env=prod
 ```
 
-Note: GCP requires domain ownership verification **per project**, even if the same Google account owns all projects. Verify via [Search Console](https://search.google.com/search-console).
+The gateway deploy builds the container with Cloud Build, resolves the image digest, and applies Terraform with `sms_gateway_image`.
 
-### 5. Register the OAuth redirect URI
-
-`GOOGLE_OAUTH_REDIRECT_URI` is automatically set to `${OAUTH_BASE_URL}/oauth/google/callback` by the deploy script. This exact URI must be registered in the Google Cloud Console OAuth 2.0 client before users can authorize.
-
-Go to **APIs & Services → Credentials → OAuth 2.0 Client** and add:
-```
-https://<your-gateway-url>/oauth/google/callback
-```
-
-### 6. Store secrets in Secret Manager
-
-The SMS Gateway reads these secrets at runtime:
+Web deploy:
 
 ```bash
-./sms-gateway/scripts/setup_secrets.sh
+./deploy_web.sh
 ```
 
-Required secrets: `twilio-account-sid`, `twilio-auth-token`, `twilio-phone-number`, `twilio-whatsapp-number`, `google-oauth-client-id`, `google-oauth-client-secret`, `telegram-bot-token`, `slack-bot-token`, `slack-signing-secret`.
+## Channel Webhooks
 
-### 7. Deploy SMS Gateway
+Configure external platforms to call the gateway:
 
-```bash
-./sms-gateway/scripts/deploy.sh --env=<name>
-```
+| Integration | Endpoint |
+|---|---|
+| Telegram | `POST https://<gateway>/webhook/telegram` |
+| Slack | `POST https://<gateway>/webhook/slack` |
+| Discord interactions | `POST https://<gateway>/webhook/discord` |
+| Gmail Pub/Sub push | `POST https://<gateway>/webhook/email` |
 
-Update `environments/<name>.env` with the SMS Gateway URL printed after deploy.
+Discord DM and mention handling also uses the gateway's Discord Gateway WebSocket when Discord secrets are configured.
 
-### 8. Configure messaging webhooks
+## Historical Notes
 
-Each environment needs its webhooks pointed at its own gateway URL. These are platform-side settings — no code change required:
+Existing design notes remain in `docs/`:
 
-| Integration | Where to configure | Setting |
-|---|---|---|
-| Twilio SMS | Twilio Console → Phone Number → Messaging webhook | `https://<gateway-url>/webhook/sms` |
-| Telegram | Call `setWebhook` via Bot API | `https://<gateway-url>/webhook/telegram` |
-| Slack | Slack App settings → Event Subscriptions | `https://<gateway-url>/webhook/slack` |
-| Discord | Discord Developer Portal → General Information → Interactions Endpoint URL | `https://<gateway-url>/webhook/discord` |
-
-**Adding the Discord bot to a server**
-
-Use this invite link to add the bot to a Discord server:
-
-```
-https://discord.com/oauth2/authorize?client_id=1495984034268975275&scope=bot+applications.commands&permissions=2048
-```
-
-Once added, users can talk to the agent by DMing the bot directly, @mentioning it in any channel, or using the `/chat` slash command.
-
-> **Note:** Enable **Message Content Intent** in the Discord Developer Portal under Bot → Privileged Gateway Intents, otherwise the bot cannot read message text.
+- [OAuth flow issues](/Users/mmontan/schoopet/docs/oauth-flow-issues.md)
+- [IAM connectors adoption plan](/Users/mmontan/schoopet/docs/iam-connectors-adoption-plan.md)

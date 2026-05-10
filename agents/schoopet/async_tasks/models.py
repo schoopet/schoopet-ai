@@ -10,9 +10,9 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
-# Single source of truth for valid notification channels.
+# Single source of truth for active notification channels.
 # Add new channels here when adding a new messaging integration.
-VALID_CHANNELS = {"sms", "whatsapp", "telegram", "discord", "slack", "email"}
+VALID_CHANNELS = {"discord"}
 
 
 class TaskStatus(str, Enum):
@@ -36,7 +36,7 @@ class AsyncTaskDocument(BaseModel):
 
     # Identity
     task_id: str = Field(..., description="Unique task identifier (UUID)")
-    user_id: str = Field(..., description="Phone number of the user (E.164 format)")
+    user_id: str = Field(..., description="User identifier")
 
     # Task definition
     task_type: str = Field(
@@ -57,7 +57,8 @@ class AsyncTaskDocument(BaseModel):
 
     # Routing
     notification_channel: str = Field(
-        default="sms", description="Channel to notify user on completion: sms, discord, slack, etc."
+        default="discord",
+        description="Channel to notify user on completion. Currently only discord is supported.",
     )
     notification_session_scope: str = Field(
         default="", description="Optional scoped session to use for completion notification"
@@ -152,7 +153,7 @@ class AsyncTaskDocument(BaseModel):
             allowed_resource_ids=data.get("allowed_resource_ids", []),
             scheduled_at=data.get("scheduled_at"),
             cloud_task_name=data.get("cloud_task_name"),
-            notification_channel=data.get("notification_channel", "sms"),
+            notification_channel=data.get("notification_channel", "discord"),
             notification_session_scope=data.get("notification_session_scope", ""),
             notification_target_type=data.get("notification_target_type", ""),
             discord_channel_id=data.get("discord_channel_id", ""),
@@ -173,4 +174,3 @@ class AsyncTaskDocument(BaseModel):
             TaskStatus.SCHEDULED,
             TaskStatus.RUNNING,
         ]
-

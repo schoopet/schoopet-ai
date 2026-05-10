@@ -15,10 +15,6 @@ logger = logging.getLogger(__name__)
 
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 
-# Fixed identifiers for the system Gmail account
-SYSTEM_PHONE = "email_system"
-SYSTEM_FEATURE = "workspace_system"
-
 # OAuth feature name for personal Gmail
 PERSONAL_GMAIL_FEATURE = "google"
 

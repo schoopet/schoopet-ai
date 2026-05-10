@@ -69,7 +69,7 @@ class TaskReviewRequest(BaseModel):
     """Legacy request payload for externally supplied task completions."""
 
     task_id: str = Field(..., description="Task ID")
-    user_id: str = Field(..., description="User's phone number")
+    user_id: str = Field(..., description="User identifier")
     result: Optional[str] = Field(default=None, description="Task result")
     error: Optional[str] = Field(default=None, description="Error if task failed")
 
@@ -77,7 +77,7 @@ class TaskReviewRequest(BaseModel):
 class UserNotifyRequest(BaseModel):
     """Request payload for direct user notification (scheduled reminders)."""
 
-    user_id: str = Field(..., description="User's phone number")
+    user_id: str = Field(..., description="User identifier")
     task_id: str = Field(..., description="Task ID that was completed")
     message: str = Field(..., description="Message to send to user")
     channel: str = Field(default="discord", description="Notification channel (discord/telegram/slack)")

@@ -176,7 +176,7 @@ class DriveTool:
             Confirmation with file link, or instructions if Drive is not accessible.
 
         Note:
-            Requires user_id from tool_context (phone number).
+            Requires user_id from tool_context.
         """
         user_id, err = require_user_id(tool_context, "drive")
         if err:
@@ -215,7 +215,7 @@ class DriveTool:
             Confirmation with file link, or error/instructions if not accessible.
 
         Note:
-            Requires user_id from tool_context (phone number).
+            Requires user_id from tool_context.
         """
         user_id, err = require_user_id(tool_context, "drive")
         if err:
@@ -261,7 +261,7 @@ class DriveTool:
             Formatted list of files (name, ID, type, last modified), or access instructions.
 
         Note:
-            Requires user_id from tool_context (phone number).
+            Requires user_id from tool_context.
         """
         user_id, err = require_user_id(tool_context, "drive")
         if err:
@@ -287,7 +287,7 @@ class DriveTool:
             Connection status based on access mode.
 
         Note:
-            Requires user_id from tool_context (phone number).
+            Requires user_id from tool_context.
         """
         user_id, err = require_user_id(tool_context, "drive")
         if err:
@@ -708,7 +708,7 @@ class SheetsTool:
             Confirmation message or access instructions if not connected.
 
         Note:
-            Requires user_id from tool_context (phone number).
+            Requires user_id from tool_context.
         """
         user_id, err = require_user_id(tool_context, "sheets")
         if err:
@@ -745,7 +745,7 @@ class SheetsTool:
             Headers row and data rows as a plain-text table, or access instructions.
 
         Note:
-            Requires user_id from tool_context (phone number).
+            Requires user_id from tool_context.
         """
         user_id, err = require_user_id(tool_context, "sheets")
         if err:
@@ -782,7 +782,7 @@ class SheetsTool:
             Confirmation of which cell was written, or access instructions.
 
         Note:
-            Requires user_id from tool_context (phone number).
+            Requires user_id from tool_context.
         """
         user_id, err = require_user_id(tool_context, "sheets")
         if err:
@@ -820,7 +820,7 @@ class SheetsTool:
             Confirmation of the cell updated, or access instructions.
 
         Note:
-            Requires user_id from tool_context (phone number).
+            Requires user_id from tool_context.
         """
         user_id, err = require_user_id(tool_context, "sheets")
         if err:
@@ -848,7 +848,7 @@ class SheetsTool:
             Connection status based on access mode.
 
         Note:
-            Requires user_id from tool_context (phone number).
+            Requires user_id from tool_context.
         """
         user_id, err = require_user_id(tool_context, "sheets")
         if err:

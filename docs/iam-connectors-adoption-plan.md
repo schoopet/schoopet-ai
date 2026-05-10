@@ -17,7 +17,6 @@ This plan does not assume migration of:
 
 - Internal service-to-service auth already handled by Cloud Run / ADC / Agent Identity
 - Non-user credentials that do not benefit from 3-legged OAuth
-- Background systems that must remain on a dedicated system account until a separate design is approved
 
 ## Current State
 
@@ -81,7 +80,7 @@ Without all three, the migration will stall.
 
 ### Out of scope for phase 1
 
-- `workspace_system` or other system-account flows that are not clearly modeled as per-user 3LO
+- Non-user flows that are not clearly modeled as per-user 3LO
 - Replacing non-OAuth auth paths
 - Removing the current OAuth system before parity is proven
 

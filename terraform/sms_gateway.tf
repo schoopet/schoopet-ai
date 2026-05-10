@@ -78,42 +78,6 @@ resource "google_cloud_run_v2_service" "sms_gateway" {
 
       # ── Secret env vars ───────────────────────────────────────────────────────
       env {
-        name = "TWILIO_ACCOUNT_SID"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.secrets["twilio-account-sid"].secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
-        name = "TWILIO_AUTH_TOKEN"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.secrets["twilio-auth-token"].secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
-        name = "TWILIO_PHONE_NUMBER"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.secrets["twilio-phone-number"].secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
-        name = "TWILIO_WHATSAPP_NUMBER"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.secrets["twilio-whatsapp-number"].secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
         name = "GOOGLE_OAUTH_CLIENT_ID"
         value_source {
           secret_key_ref {
