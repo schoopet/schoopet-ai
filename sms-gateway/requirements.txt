@@ -16,7 +16,7 @@ google-cloud-tasks>=2.13.0
 httpx>=0.26.0
 
 # Cryptography (Ed25519 for Discord signature validation)
-cryptography>=42.0.4
+cryptography>=48.0.0
 
 # Discord Gateway (DM and @mention support)
 discord.py>=2.3.0
