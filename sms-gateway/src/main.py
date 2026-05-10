@@ -101,7 +101,6 @@ async def lifespan(app: FastAPI):
 
     # Initialize internal services
     init_internal_services(
-        session_manager=session_manager,
         agent_client=agent_client,
         firestore_client=firestore_client,
         discord_sender=discord_sender,

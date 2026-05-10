@@ -16,7 +16,7 @@ class TaskStatus(str, Enum):
     PENDING = "pending"  # Created, waiting to execute
     SCHEDULED = "scheduled"  # Cloud Task created, waiting for scheduled time
     RUNNING = "running"  # Currently executing
-    COMPLETED = "completed"  # Execution done, delivering to user
+    COMPLETED = "completed"  # Execution done, result persisted (notification may be in flight)
     NOTIFIED = "notified"  # User has been notified of completion
     FAILED = "failed"  # Failed with error
     CANCELLED = "cancelled"  # User or agent cancelled

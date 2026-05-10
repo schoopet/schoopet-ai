@@ -4,7 +4,9 @@ Cloud Tasks calls the gateway directly. The gateway loads the task, claims it,
 runs it in an isolated Agent Engine session, records the result, and posts the
 completion to the originating Discord channel.
 """
+import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -44,15 +46,14 @@ class GatewayTaskExecutor:
             logger.info("Task %s already processed: %s", task_id, prior_status)
             return {"success": True, "message": f"Task already in status: {prior_status}"}
 
+        # Phase 1: validate, execute, and persist result.
         try:
             self._validate_delivery_target(task)
             prompt = self._build_task_prompt(task)
             result = await self._execute_task(task, prompt)
             await self._update_task_result(task_id, result)
-            await self._send_completion(task, result=result)
-            return {"success": True}
         except Exception as exc:
-            logger.exception("Task %s failed: %s", task_id, exc)
+            logger.exception("Task %s failed during execution: %s", task_id, exc)
             error = str(exc)
             await self._update_task_error(task_id, error)
             try:
@@ -60,6 +61,17 @@ class GatewayTaskExecutor:
             except Exception:
                 logger.exception("Failed to send task failure notification for %s", task_id)
             return {"success": False, "error": error}
+
+        # Phase 2: deliver completion notification. Execution already succeeded, so a
+        # delivery failure must not overwrite the "completed" status in Firestore.
+        try:
+            await self._send_completion(task, result=result)
+            await self._mark_task_notified(task_id)
+        except Exception as exc:
+            logger.exception(
+                "Task %s completed but notification delivery failed: %s", task_id, exc
+            )
+        return {"success": True}
 
     async def _claim_task_for_execution(self, task_id: str) -> Optional[dict[str, Any]]:
         doc_ref = self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id)
@@ -128,6 +140,11 @@ class GatewayTaskExecutor:
                 )
             logger.info("Task execution complete: %s chars", len(result))
             return result
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "Agent did not respond within the configured timeout. "
+                "Check Agent Engine logs for this session."
+            ) from exc
         finally:
             await self._agent_client.delete_session(user_id=user_id, session_id=session_id)
 
@@ -151,6 +168,12 @@ class GatewayTaskExecutor:
             "status": "completed",
             "result": result,
             "completed_at": datetime.now(timezone.utc),
+        })
+
+    async def _mark_task_notified(self, task_id: str) -> None:
+        await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update({
+            "status": "notified",
+            "notified_at": datetime.now(timezone.utc),
         })
 
     async def _update_task_error(self, task_id: str, error: str) -> None:
@@ -215,7 +238,7 @@ class GatewayTaskExecutor:
     async def requeue_scheduled_tasks(self) -> dict[str, int]:
         """Create Cloud Tasks for scheduled tasks entering the 30-day window."""
         now = datetime.now(timezone.utc)
-        window_end = now + timedelta(hours=720)
+        window_end = now + timedelta(days=30)
 
         query = (
             self._db.collection(ASYNC_TASKS_COLLECTION)
@@ -258,9 +281,6 @@ class GatewayTaskExecutor:
         user_id: str,
         schedule_time: datetime,
     ) -> Optional[str]:
-        import json
-        import os
-
         from google.api_core.exceptions import AlreadyExists
         from google.cloud import tasks_v2
         from google.protobuf import duration_pb2, timestamp_pb2
