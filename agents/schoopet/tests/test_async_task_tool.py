@@ -163,6 +163,66 @@ class TestAsyncTaskTool:
         _, kwargs = mock_cloud_tasks.create_task.call_args
         assert kwargs["schedule_time"].isoformat() == "2025-01-01T12:00:00+00:00"
 
+    def test_create_async_task_naive_schedule_uses_saved_timezone(
+        self, async_task_tool, mock_cloud_tasks, tool_context, mock_firestore
+    ):
+        """Naive schedule_at values should be interpreted in the user's timezone."""
+        mock_cloud_tasks.create_task.return_value = "task-name"
+        async_task_tool._preferences_tool.get_timezone_value = MagicMock(
+            return_value="America/Los_Angeles"
+        )
+
+        result = async_task_tool.create_async_task(
+            task_type="reminder",
+            instruction="Call mom",
+            schedule_at="2025-01-01T12:00:00",
+            tool_context=tool_context,
+        )
+
+        assert "Scheduled reminder task" in result
+        _, kwargs = mock_cloud_tasks.create_task.call_args
+        assert kwargs["schedule_time"].isoformat() == "2025-01-01T12:00:00-08:00"
+        call_args = mock_firestore.collection.return_value.document.return_value.set.call_args[0][0]
+        assert call_args["scheduled_at"].isoformat() == "2025-01-01T12:00:00-08:00"
+        async_task_tool._preferences_tool.get_timezone_value.assert_called_once_with(USER_ID)
+
+    def test_create_async_task_aware_schedule_preserves_explicit_timezone(
+        self, async_task_tool, mock_cloud_tasks, tool_context
+    ):
+        """Explicit timezone offsets should not be reinterpreted via user preference."""
+        mock_cloud_tasks.create_task.return_value = "task-name"
+        async_task_tool._preferences_tool.get_timezone_value = MagicMock(
+            return_value="America/Los_Angeles"
+        )
+
+        async_task_tool.create_async_task(
+            task_type="reminder",
+            instruction="Call mom",
+            schedule_at="2025-01-01T12:00:00Z",
+            tool_context=tool_context,
+        )
+
+        _, kwargs = mock_cloud_tasks.create_task.call_args
+        assert kwargs["schedule_time"].isoformat() == "2025-01-01T12:00:00+00:00"
+        async_task_tool._preferences_tool.get_timezone_value.assert_not_called()
+
+    def test_create_async_task_naive_schedule_falls_back_to_utc_without_timezone(
+        self, async_task_tool, mock_cloud_tasks, tool_context
+    ):
+        """Naive schedule_at values should remain schedulable when no preference exists."""
+        mock_cloud_tasks.create_task.return_value = "task-name"
+        async_task_tool._preferences_tool.get_timezone_value = MagicMock(return_value=None)
+
+        async_task_tool.create_async_task(
+            task_type="reminder",
+            instruction="Call mom",
+            schedule_at="2025-01-01T12:00:00",
+            tool_context=tool_context,
+        )
+
+        _, kwargs = mock_cloud_tasks.create_task.call_args
+        assert kwargs["schedule_time"].isoformat() == "2025-01-01T12:00:00+00:00"
+
     def test_check_task_status_found(self, async_task_tool, tool_context, mock_firestore):
         """Should return task status."""
         mock_doc = MagicMock()

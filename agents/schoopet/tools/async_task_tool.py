@@ -12,15 +12,16 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from google.adk.tools import ToolContext
 
-from ..utils import normalize_user_id
 from ..async_tasks.models import (
     AsyncTaskDocument,
     TaskStatus,
     VALID_CHANNELS,
 )
+from ..preferences_tool import PreferencesTool
 from .cloud_tasks_client import get_cloud_tasks_client
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class AsyncTaskTool:
         self._firestore_client = None
         self._initialized = False
         self._project_id = None
+        self._preferences_tool = PreferencesTool()
 
     def _ensure_initialized(self):
         """Lazy initialization of configuration."""
@@ -114,6 +116,17 @@ class AsyncTaskTool:
             data["discord_channel_name"] = discord_channel_name
         return data
 
+    def _get_user_timezone(self, user_id: str) -> str:
+        """Return the user's saved timezone, falling back to UTC if unavailable."""
+        try:
+            timezone_str = self._preferences_tool.get_timezone_value(user_id)
+            if timezone_str:
+                ZoneInfo(timezone_str)
+                return timezone_str
+        except Exception as exc:
+            logger.warning("Could not resolve timezone for user %s: %s", user_id, exc)
+        return "UTC"
+
     def create_async_task(
         self,
         task_type: str,
@@ -180,7 +193,8 @@ class AsyncTaskTool:
                 # Parse ISO format datetime
                 scheduled_at_dt = datetime.fromisoformat(schedule_at.replace("Z", "+00:00"))
                 if scheduled_at_dt.tzinfo is None:
-                    scheduled_at_dt = scheduled_at_dt.replace(tzinfo=timezone.utc)
+                    user_timezone = self._get_user_timezone(user_id)
+                    scheduled_at_dt = scheduled_at_dt.replace(tzinfo=ZoneInfo(user_timezone))
             except ValueError as e:
                 return f"ERROR: Invalid schedule_at format '{schedule_at}'. Use ISO 8601 format (e.g., '2025-01-12T09:00:00'). Error: {e}"
         elif schedule_delay_minutes > 0:
