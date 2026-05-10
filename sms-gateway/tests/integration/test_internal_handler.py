@@ -11,8 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, ANY
 
 import src.internal.handler as handler
 from src.internal.handler import (
+    ExecuteTaskRequest,
     TaskReviewRequest,
     UserNotifyRequest,
+    execute_task,
     trigger_task_review,
     notify_user,
     _mark_task_notified,
@@ -36,6 +38,7 @@ def reset_globals():
     handler._slack_sender = None
     handler._discord_sender = None
     handler._firestore_client = None
+    handler._task_executor = None
     yield
 
 
@@ -92,6 +95,54 @@ def _user_session(channel="discord", session_id=USER_SESSION_ID):
 
 
 # ── /internal/task-review ─────────────────────────────────────────────────────
+
+
+class TestExecuteTask:
+    """Gateway task execution endpoint delegates to the initialized executor."""
+
+    @pytest.mark.asyncio
+    async def test_execute_task_endpoint_runs_gateway_executor(
+        self, agent_client, session_manager, discord_sender, mock_firestore
+    ):
+        init_internal_services(
+            session_manager=session_manager,
+            agent_client=agent_client,
+            discord_sender=discord_sender,
+            firestore_client=mock_firestore,
+        )
+        handler._task_executor.execute_task = AsyncMock(return_value={"success": True})
+
+        response = await execute_task(
+            request=MagicMock(),
+            payload=ExecuteTaskRequest(task_id=TASK_ID, user_id=USER_ID),
+            caller="svc",
+        )
+
+        assert response.status == "completed"
+        handler._task_executor.execute_task.assert_awaited_once_with(TASK_ID)
+
+    @pytest.mark.asyncio
+    async def test_execute_task_endpoint_returns_failed_status(
+        self, agent_client, session_manager, discord_sender, mock_firestore
+    ):
+        init_internal_services(
+            session_manager=session_manager,
+            agent_client=agent_client,
+            discord_sender=discord_sender,
+            firestore_client=mock_firestore,
+        )
+        handler._task_executor.execute_task = AsyncMock(
+            return_value={"success": False, "error": "Agent crashed"}
+        )
+
+        response = await execute_task(
+            request=MagicMock(),
+            payload=ExecuteTaskRequest(task_id=TASK_ID, user_id=USER_ID),
+            caller="svc",
+        )
+
+        assert response.status == "failed"
+        assert response.message == "Agent crashed"
 
 
 class TestTaskReview:

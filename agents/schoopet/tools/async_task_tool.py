@@ -192,6 +192,11 @@ class AsyncTaskTool:
         # Determine channel from session state
         notification_channel = self._get_channel(tool_context)
         notification_context = self._get_notification_context(tool_context)
+        if notification_channel == "discord" and not notification_context.get("discord_channel_id"):
+            return (
+                "ERROR: Cannot create async task - Discord channel context is missing. "
+                "Please retry from the Discord channel where the result should be posted."
+            )
 
         # Create task document
         task = AsyncTaskDocument(
@@ -233,8 +238,7 @@ class AsyncTaskTool:
                 else:
                     return f"Started async {task_type} task. You'll be notified when it completes. Task ID: {task_id}"
             else:
-                # Cloud Task creation failed, but Firestore document exists
-                # Task worker can still pick it up if manually triggered
+                # Cloud Task creation failed, but Firestore document exists.
                 return f"Created {task_type} task but scheduling may be delayed. Task ID: {task_id}"
 
         except Exception as e:

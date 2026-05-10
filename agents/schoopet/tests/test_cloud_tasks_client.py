@@ -45,9 +45,8 @@ def _make_client(mock_client: MagicMock) -> CloudTasksClient:
             "GOOGLE_CLOUD_PROJECT": "test-project",
             "GOOGLE_CLOUD_LOCATION": "us-central1",
             "ASYNC_TASKS_QUEUE": "async-agent-tasks",
-            "TASK_WORKER_URL": "https://worker.example.com",
-            "TASK_WORKER_SA": "task-worker@test-project.iam.gserviceaccount.com",
             "SMS_GATEWAY_URL": "https://gateway.example.com",
+            "SMS_GATEWAY_SA": "schoopet-sms-gateway@test-project.iam.gserviceaccount.com",
         },
     ):
         client._ensure_initialized()
@@ -76,6 +75,13 @@ class TestCloudTasksClient:
         assert result == mock_client.task_path.return_value
         task = mock_client.create_task.call_args.kwargs["task"]
         assert task["name"] == mock_client.task_path.return_value
+        assert task["http_request"]["url"] == "https://gateway.example.com/internal/tasks/execute"
+        assert task["http_request"]["oidc_token"]["audience"] == "https://gateway.example.com"
+        assert (
+            task["http_request"]["oidc_token"]["service_account_email"]
+            == "schoopet-sms-gateway@test-project.iam.gserviceaccount.com"
+        )
+        assert task["http_request"]["body"] == b'{"task_id": "task-123", "user_id": "user-123"}'
         assert task["dispatch_deadline"].seconds == 900
         if hasattr(task["schedule_time"], "value"):
             assert task["schedule_time"].value == schedule_time

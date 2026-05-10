@@ -1,8 +1,8 @@
 """Internal service-to-service communication module.
 
 This module handles secure communication between internal services:
-- Task Worker -> SMS Gateway (task completion notifications)
-- Cloud Tasks -> Task Worker (scheduled task execution)
+- Cloud Tasks -> SMS Gateway (background task execution)
+- Cloud Scheduler -> SMS Gateway (scheduled task requeue)
 
 All endpoints require OIDC authentication via GCP service accounts.
 """

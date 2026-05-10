@@ -44,7 +44,7 @@ class CloudTasksClient:
         self._project_id = None
         self._location = None
         self._queue_name = None
-        self._worker_url = None
+        self._gateway_url = None
         self._service_account = None
 
     def _ensure_initialized(self):
@@ -55,10 +55,10 @@ class CloudTasksClient:
         self._project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
         self._location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
         self._queue_name = os.getenv("ASYNC_TASKS_QUEUE", "async-agent-tasks")
-        self._worker_url = os.getenv("TASK_WORKER_URL")
+        self._gateway_url = os.getenv("SMS_GATEWAY_URL")
         self._service_account = os.getenv(
-            "TASK_WORKER_SA",
-            f"task-worker@{self._project_id}.iam.gserviceaccount.com"
+            "SMS_GATEWAY_SA",
+            f"schoopet-sms-gateway@{self._project_id}.iam.gserviceaccount.com"
             if self._project_id
             else None,
         )
@@ -67,8 +67,8 @@ class CloudTasksClient:
 
         if not self._project_id:
             logger.warning("GOOGLE_CLOUD_PROJECT not set, Cloud Tasks will not work")
-        if not self._worker_url:
-            logger.warning("TASK_WORKER_URL not set, Cloud Tasks will not work")
+        if not self._gateway_url:
+            logger.warning("SMS_GATEWAY_URL not set, Cloud Tasks will not work")
 
     def _get_client(self):
         """Get Cloud Tasks client, initializing lazily."""
@@ -124,8 +124,8 @@ class CloudTasksClient:
         self._ensure_initialized()
         client = self._get_client()
 
-        if not client or not self._worker_url:
-            logger.error("Cloud Tasks client not initialized or worker URL not set")
+        if not client or not self._gateway_url:
+            logger.error("Cloud Tasks client not initialized or gateway URL not set")
             return None
 
         # Import here to avoid issues during pickling
@@ -142,13 +142,13 @@ class CloudTasksClient:
             "name": task_name,
             "http_request": {
                 "http_method": tasks_v2.HttpMethod.POST,
-                "url": f"{self._worker_url}/execute",
+                "url": f"{self._gateway_url}/internal/tasks/execute",
                 "headers": {"Content-Type": "application/json"},
                 "body": json.dumps(payload).encode(),
                 # OIDC authentication for secure service-to-service calls
                 "oidc_token": {
                     "service_account_email": self._service_account,
-                    "audience": self._worker_url,
+                    "audience": self._gateway_url,
                 },
             }
         }

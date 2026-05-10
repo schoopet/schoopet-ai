@@ -7,8 +7,7 @@ A multi-component AI assistant system built on Google Vertex AI Agent Engine.
 | Component | Path | Description |
 |-----------|------|-------------|
 | Agent | `agents/schoopet/` | Google ADK agent — handles all channels via personal OAuth tokens |
-| SMS Gateway | `sms-gateway/` | FastAPI Cloud Run service routing all channels to the agent |
-| Task Worker | `task-worker/` | Async task executor for long-running agent operations |
+| SMS Gateway | `sms-gateway/` | FastAPI Cloud Run service routing all channels and background tasks to the agent |
 | Website | `website/` | Static Vite landing page |
 
 All channels (SMS, WhatsApp, Telegram, Discord, Slack, Email) route to the single personal agent using `PERSONAL_AGENT_ENGINE_ID`. The agent is deployed as a Vertex AI reasoning engine and managed via Terraform.
@@ -32,9 +31,6 @@ Secrets go in `environments/<name>.secrets.env` (gitignored). The deploy scripts
 
 # SMS Gateway
 ./sms-gateway/scripts/deploy.sh --env=prod
-
-# Task Worker
-./task-worker/deploy.sh --env=prod
 ```
 
 ## First-time setup for a new environment
@@ -106,14 +102,13 @@ The SMS Gateway reads these secrets at runtime:
 
 Required secrets: `twilio-account-sid`, `twilio-auth-token`, `twilio-phone-number`, `twilio-whatsapp-number`, `google-oauth-client-id`, `google-oauth-client-secret`, `telegram-bot-token`, `slack-bot-token`, `slack-signing-secret`.
 
-### 7. Deploy SMS Gateway and Task Worker
+### 7. Deploy SMS Gateway
 
 ```bash
 ./sms-gateway/scripts/deploy.sh --env=<name>
-./task-worker/deploy.sh --env=<name>
 ```
 
-Update `environments/<name>.env` with the Task Worker URL printed after deploy.
+Update `environments/<name>.env` with the SMS Gateway URL printed after deploy.
 
 ### 8. Configure messaging webhooks
 

@@ -21,7 +21,7 @@ fi
 AGENT_ENGINE_ID="$1"
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-mmontan-ml}"
 REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
-WORKER_SA_EMAIL="task-worker@$PROJECT_ID.iam.gserviceaccount.com"
+GATEWAY_SA_EMAIL="schoopet-sms-gateway@$PROJECT_ID.iam.gserviceaccount.com"
 
 # Get project number
 PROJECT_NUM=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
@@ -95,27 +95,27 @@ fi
 echo "Project-level permissions granted successfully."
 
 echo ""
-echo "Granting token creator permission on Task Worker SA..."
+echo "Granting token creator permission on SMS Gateway SA..."
 
-# Grant iam.serviceAccountTokenCreator on task-worker SA
+# Grant iam.serviceAccountTokenCreator on SMS Gateway SA
 # This allows the agent to create OIDC tokens for Cloud Tasks
-gcloud iam service-accounts add-iam-policy-binding "$WORKER_SA_EMAIL" \
+gcloud iam service-accounts add-iam-policy-binding "$GATEWAY_SA_EMAIL" \
     --member="$AGENT_PRINCIPAL" \
     --role="roles/iam.serviceAccountTokenCreator" \
     --project="$PROJECT_ID" \
     --quiet >/dev/null
 
-echo "Granted iam.serviceAccountTokenCreator on $WORKER_SA_EMAIL"
+echo "Granted iam.serviceAccountTokenCreator on $GATEWAY_SA_EMAIL"
 
-# Grant iam.serviceAccountUser on task-worker SA
-# This allows the agent to "act as" the task-worker SA when creating Cloud Tasks
-gcloud iam service-accounts add-iam-policy-binding "$WORKER_SA_EMAIL" \
+# Grant iam.serviceAccountUser on SMS Gateway SA
+# This allows the agent to "act as" the SMS gateway SA when creating Cloud Tasks
+gcloud iam service-accounts add-iam-policy-binding "$GATEWAY_SA_EMAIL" \
     --member="$AGENT_PRINCIPAL" \
     --role="roles/iam.serviceAccountUser" \
     --project="$PROJECT_ID" \
     --quiet >/dev/null
 
-echo "Granted iam.serviceAccountUser on $WORKER_SA_EMAIL"
+echo "Granted iam.serviceAccountUser on $GATEWAY_SA_EMAIL"
 
 echo ""
 echo "=========================================="
@@ -124,10 +124,10 @@ echo "=========================================="
 echo ""
 echo "The agent identity now has permissions to:"
 echo "  - Create Cloud Tasks (for async task scheduling)"
-echo "  - Invoke Cloud Run services (task-worker, sms-gateway)"
+echo "  - Invoke Cloud Run services (sms-gateway)"
 echo "  - Access Firestore (task state storage)"
 echo "  - Use project services (API access)"
-echo "  - Create OIDC tokens for task-worker SA"
+echo "  - Create OIDC tokens for SMS gateway SA"
 echo ""
 echo "Note: Permissions may take 1-2 minutes to propagate."
 echo "=========================================="

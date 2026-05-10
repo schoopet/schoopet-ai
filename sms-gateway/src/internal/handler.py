@@ -1,8 +1,9 @@
 """Internal service endpoints for async task communication.
 
 These endpoints handle:
-1. Task completion notifications from Task Worker — delivers directly to user
-2. User notifications for scheduled reminders
+1. Cloud Tasks execution for background Agent Engine tasks
+2. Legacy task completion notifications
+3. User notifications for scheduled reminders
 
 All endpoints require authentication via OIDC or HMAC signatures.
 """
@@ -14,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .auth import verify_internal_request
+from .task_executor import GatewayTaskExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,7 @@ _telegram_sender = None
 _slack_sender = None
 _discord_sender = None
 _firestore_client = None
+_task_executor = None
 
 
 def init_internal_services(
@@ -40,13 +43,22 @@ def init_internal_services(
 
     Called by main.py during application startup.
     """
-    global _session_manager, _agent_client, _telegram_sender, _slack_sender, _discord_sender, _firestore_client
+    global _session_manager, _agent_client, _telegram_sender, _slack_sender, _discord_sender, _firestore_client, _task_executor
     _session_manager = session_manager
     _agent_client = agent_client
     _firestore_client = firestore_client
     _telegram_sender = telegram_sender
     _slack_sender = slack_sender
     _discord_sender = discord_sender
+    _task_executor = (
+        GatewayTaskExecutor(
+            firestore_client=firestore_client,
+            agent_client=agent_client,
+            discord_sender=discord_sender,
+        )
+        if firestore_client and agent_client
+        else None
+    )
     logger.info("Internal handler services initialized")
 
 
@@ -54,7 +66,7 @@ def init_internal_services(
 
 
 class TaskReviewRequest(BaseModel):
-    """Request payload from Task Worker when async task completes."""
+    """Legacy request payload for externally supplied task completions."""
 
     task_id: str = Field(..., description="Task ID")
     user_id: str = Field(..., description="User's phone number")
@@ -72,6 +84,13 @@ class UserNotifyRequest(BaseModel):
     notification_session_scope: str = Field(default="", description="Optional scoped session for notification")
     discord_channel_id: str = Field(default="", description="Optional Discord channel target")
     discord_channel_name: str = Field(default="", description="Optional Discord channel name")
+
+
+class ExecuteTaskRequest(BaseModel):
+    """Request payload from Cloud Tasks."""
+
+    task_id: str = Field(..., description="Task ID to execute")
+    user_id: str = Field(..., description="User ID that owns the task")
 
 
 class InternalResponse(BaseModel):
@@ -241,21 +260,59 @@ async def _deliver_notification(
 # ========== Endpoints ==========
 
 
+@router.post("/tasks/execute", response_model=InternalResponse)
+async def execute_task(
+    request: Request,
+    payload: ExecuteTaskRequest,
+    caller: str = Depends(verify_internal_request),
+):
+    """Execute an async task from Cloud Tasks inside the gateway."""
+    if not _task_executor:
+        raise HTTPException(status_code=503, detail="Task executor not initialized")
+
+    logger.info(
+        "Executing gateway task %s for user %s (caller=%s)",
+        payload.task_id,
+        payload.user_id,
+        caller,
+    )
+
+    result = await _task_executor.execute_task(payload.task_id)
+    if result.get("success"):
+        return InternalResponse(
+            status="completed",
+            message=result.get("message") or "Task executed successfully",
+        )
+
+    return InternalResponse(
+        status="failed",
+        message=result.get("error", "Unknown error"),
+    )
+
+
+@router.post("/tasks/requeue-scheduled", response_model=dict)
+async def requeue_scheduled_tasks(
+    request: Request,
+    caller: str = Depends(verify_internal_request),
+):
+    """Queue Cloud Tasks for scheduled tasks entering the 30-day window."""
+    if not _task_executor:
+        raise HTTPException(status_code=503, detail="Task executor not initialized")
+
+    result = await _task_executor.requeue_scheduled_tasks()
+    logger.info("Task requeue triggered by %s: %s", caller, result)
+    return result
+
+
 @router.post("/task-review", response_model=InternalResponse)
 async def trigger_task_review(
     request: Request,
     payload: TaskReviewRequest,
     caller: str = Depends(verify_internal_request),
 ):
-    """Handle task completion from Task Worker — deliver result directly to user.
+    """Handle a legacy externally supplied task completion.
 
     Security: Requires valid OIDC token from an allowed service account.
-
-    Flow:
-    1. Task Worker completes async task execution
-    2. Task Worker calls this endpoint with the result
-    3. This endpoint fetches notification_channel from Firestore
-    4. Delivers result directly to the user (via active session or direct send)
     """
     if not _session_manager or not _firestore_client:
         raise HTTPException(status_code=503, detail="Internal services not initialized")

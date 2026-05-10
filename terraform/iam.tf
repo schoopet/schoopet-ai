@@ -1,34 +1,13 @@
-# ── task-worker SA ────────────────────────────────────────────────────────────
-# Uses custom agentEngineUser role instead of roles/aiplatform.user — task
-# worker only needs to query/get reasoning engines, not full Vertex AI access.
-
 locals {
-  task_worker_roles = [
-    "roles/datastore.user",
-    "roles/iam.serviceAccountTokenCreator",
-    "roles/run.invoker",
-  ]
-
   sms_gateway_roles = [
     # OAuth refresh tokens are created per user at runtime, then updated/read/deleted.
     # The gateway needs secret create/version/write/delete permissions, not just read.
     "roles/secretmanager.admin",
     "roles/datastore.user", # Firestore: session storage + OAuth token cache
+    "roles/cloudtasks.enqueuer",
+    "roles/cloudtasks.viewer",
+    "roles/iam.serviceAccountTokenCreator",
   ]
-}
-
-resource "google_project_iam_member" "task_worker" {
-  for_each = toset(local.task_worker_roles)
-
-  project = var.project_id
-  role    = each.value
-  member  = "serviceAccount:${google_service_account.task_worker.email}"
-}
-
-resource "google_project_iam_member" "task_worker_agent_engine_user" {
-  project = var.project_id
-  role    = google_project_iam_custom_role.agent_engine_user.id
-  member  = "serviceAccount:${google_service_account.task_worker.email}"
 }
 
 # ── schoopet-sms-gateway SA ───────────────────────────────────────────────────
@@ -46,6 +25,14 @@ resource "google_project_iam_member" "sms_gateway_agent_engine_user" {
   project = var.project_id
   role    = google_project_iam_custom_role.agent_engine_user.id
   member  = "serviceAccount:${google_service_account.sms_gateway.email}"
+}
+
+# Gateway requeue creates Cloud Tasks that use the gateway service account as
+# their OIDC identity, so the gateway SA needs actAs on itself.
+resource "google_service_account_iam_member" "sms_gateway_sa_user_on_self" {
+  service_account_id = google_service_account.sms_gateway.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.sms_gateway.email}"
 }
 
 # ── SMS Gateway Cloud Run invoke ───────────────────────────────────────────────

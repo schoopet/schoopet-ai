@@ -13,7 +13,7 @@ resource "google_service_account" "task_requeue_scheduler" {
 resource "google_cloud_run_v2_service_iam_member" "task_requeue_scheduler_invoke" {
   project  = var.project_id
   location = var.region
-  name     = google_cloud_run_v2_service.task_worker.name
+  name     = google_cloud_run_v2_service.sms_gateway.name
   role     = "roles/run.invoker"
   member   = "serviceAccount:${google_service_account.task_requeue_scheduler.email}"
 }
@@ -22,16 +22,16 @@ resource "google_cloud_scheduler_job" "task_requeue" {
   project   = var.project_id
   region    = var.region
   name      = "task-requeue-scheduled"
-  schedule  = "0 9 * * 1"  # Every Monday at 09:00 UTC
+  schedule  = "0 9 * * 1" # Every Monday at 09:00 UTC
   time_zone = "UTC"
 
   http_target {
     http_method = "POST"
-    uri         = "${google_cloud_run_v2_service.task_worker.uri}/requeue-scheduled-tasks"
+    uri         = "${google_cloud_run_v2_service.sms_gateway.uri}/internal/tasks/requeue-scheduled"
 
     oidc_token {
       service_account_email = google_service_account.task_requeue_scheduler.email
-      audience              = google_cloud_run_v2_service.task_worker.uri
+      audience              = google_cloud_run_v2_service.sms_gateway.uri
     }
   }
 
@@ -63,15 +63,15 @@ resource "google_cloud_run_v2_service_iam_member" "scheduler_invoke" {
 }
 
 resource "google_cloud_scheduler_job" "gmail_watch_renewal" {
-  project  = var.project_id
-  region   = var.region
-  name     = "gmail-watch-renewal"
-  schedule = "0 9 */6 * *"  # Every 6 days at 09:00 UTC
+  project   = var.project_id
+  region    = var.region
+  name      = "gmail-watch-renewal"
+  schedule  = "0 9 */6 * *" # Every 6 days at 09:00 UTC
   time_zone = "UTC"
 
   http_target {
     http_method = "GET"
-    uri = "${google_cloud_run_v2_service.sms_gateway.uri}/internal/email/renew-watch?topic=${urlencode("projects/${var.project_id}/topics/${google_pubsub_topic.email_notifications.name}")}"
+    uri         = "${google_cloud_run_v2_service.sms_gateway.uri}/internal/email/renew-watch?topic=${urlencode("projects/${var.project_id}/topics/${google_pubsub_topic.email_notifications.name}")}"
 
     oidc_token {
       service_account_email = google_service_account.gmail_watch_scheduler.email

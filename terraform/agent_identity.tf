@@ -40,16 +40,16 @@ resource "google_project_iam_member" "agent_engine_principals" {
   member  = each.value.principal
 }
 
-# ── SA-level bindings on task-worker SA ───────────────────────────────────────
+# ── SA-level bindings on SMS gateway SA ───────────────────────────────────────
 
-resource "google_service_account_iam_member" "personal_agent_token_creator_on_task_worker" {
-  service_account_id = google_service_account.task_worker.name
+resource "google_service_account_iam_member" "personal_agent_token_creator_on_sms_gateway" {
+  service_account_id = google_service_account.sms_gateway.name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = local.personal_agent_principal
 }
 
-resource "google_service_account_iam_member" "personal_agent_sa_user_on_task_worker" {
-  service_account_id = google_service_account.task_worker.name
+resource "google_service_account_iam_member" "personal_agent_sa_user_on_sms_gateway" {
+  service_account_id = google_service_account.sms_gateway.name
   role               = "roles/iam.serviceAccountUser"
   member             = local.personal_agent_principal
 }

@@ -38,9 +38,8 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
         "ARTIFACT_BUCKET_NAME": os.getenv("ARTIFACT_BUCKET_NAME", ""),
         # Async Task Configuration
         "ASYNC_TASKS_QUEUE": os.getenv("ASYNC_TASKS_QUEUE", "async-agent-tasks"),
-        "TASK_WORKER_URL": os.getenv("TASK_WORKER_URL", ""),
-        "TASK_WORKER_SA": os.getenv("TASK_WORKER_SA", ""),
         "SMS_GATEWAY_URL": os.getenv("SMS_GATEWAY_URL", "https://api.schoopet.com"),
+        "SMS_GATEWAY_SA": os.getenv("SMS_GATEWAY_SA", ""),
         # Personal agent display name (falls back to "Schoopet" if unset)
         "PERSONAL_AGENT_NAME": os.getenv("PERSONAL_AGENT_NAME", ""),
         # OpenTelemetry

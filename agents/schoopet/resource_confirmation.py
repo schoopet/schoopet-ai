@@ -10,7 +10,7 @@ bottom of this module (sheet_confirmation, doc_confirmation, drive_folder_confir
 Prefer importing those over calling make_resource_confirmation directly.
 
 The session-state key format is ``_RESOURCE_CONFIRMED_PREFIX + resource_id``.
-The task-worker seeds these keys from the flat ``allowed_resource_ids`` list stored
+The gateway task executor seeds these keys from the flat ``allowed_resource_ids`` list stored
 on the task document, so offline pre-authorized IDs bypass the interactive
 confirmation prompt. Live pending approval notifications are managed separately
 by the SMS gateway session approval API.
@@ -22,8 +22,7 @@ from google.adk.tools import ToolContext
 
 logger = logging.getLogger(__name__)
 
-# Session-state key prefix shared with the task-worker service.
-# task-worker/src/worker.py mirrors this value to pre-seed approved resources.
+# Session-state key prefix shared with gateway async task execution.
 _RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
 
 

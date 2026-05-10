@@ -60,7 +60,7 @@ Each file contains:
 - `PERSONAL_AGENT_ENGINE_ID` - Agent reasoning engine ID
 - `ARTIFACT_BUCKET_NAME` - GCS bucket for artifacts
 - `OAUTH_BASE_URL` / `SMS_GATEWAY_URL` - Service URLs
-- `TASK_WORKER_URL` / `TASK_WORKER_SA` - Task worker config
+- `SMS_GATEWAY_URL` / `SMS_GATEWAY_SA` - async task Cloud Tasks target config
 - `EMAIL_PUBSUB_TOPIC` - Full Pub/Sub topic name
 
 **Layer 2 — `agents/schoopet/.env`** (secrets + local overrides, gitignored):
@@ -87,15 +87,14 @@ The agent uses proper Python package structure with relative imports:
 ### Running Tests
 
 ```bash
-# Run all tests (SMS Gateway + Task Worker) from repo root
+# Run gateway tests from repo root
 make test
 
-# Run individual suites
+# Run individual suite
 make test-sms-gateway
-make test-task-worker
 ```
 
-Always run `make test` after making changes to `sms-gateway/` or `task-worker/`.
+Always run `make test` after making changes to `sms-gateway/`.
 
 ### Agent Development
 
@@ -113,9 +112,6 @@ pip install -r schoopet/requirements.txt
 
 # Deploy SMS Gateway
 ./sms-gateway/scripts/deploy.sh --env=prod
-
-# Deploy Task Worker
-./task-worker/deploy.sh --env=prod
 
 # Chat with deployed remote agent (recommended)
 # Use the agent-engine-cli (e.g., npx agent-engine-cli chat)

@@ -26,18 +26,6 @@ variable "sms_gateway_image" {
   default     = null
 }
 
-variable "task_worker_image" {
-  description = "Container image for the Task Worker Cloud Run service. Defaults to us-docker.pkg.dev/{project_id}/schoopet/schoopet-task-worker:latest"
-  type        = string
-  default     = null
-}
-
-variable "task_worker_url" {
-  description = "Public URL of the Task Worker Cloud Run service (e.g. https://schoopet-task-worker-xxx-uc.a.run.app)"
-  type        = string
-  default     = ""
-}
-
 variable "oauth_base_url" {
   description = "Base URL for OAuth callbacks (e.g. https://api.schoopet.com). Used to set GOOGLE_OAUTH_REDIRECT_URI on the SMS Gateway."
   type        = string

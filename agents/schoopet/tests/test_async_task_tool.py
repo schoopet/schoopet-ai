@@ -125,6 +125,25 @@ class TestAsyncTaskTool:
         assert call_args["discord_channel_id"] == "c1"
         assert call_args["discord_channel_name"] == "project-alpha"
 
+    def test_create_async_task_requires_discord_channel_id(
+        self, async_task_tool, mock_cloud_tasks, tool_context, mock_firestore
+    ):
+        """Discord tasks must have a concrete channel target for completion delivery."""
+        tool_context.state = {
+            "channel": "discord",
+            "session_scope": "discord:guild:g1:channel:c1",
+        }
+
+        result = async_task_tool.create_async_task(
+            task_type="research",
+            instruction="Research launch risks",
+            tool_context=tool_context,
+        )
+
+        assert result.startswith("ERROR: Cannot create async task")
+        mock_firestore.collection.return_value.document.return_value.set.assert_not_called()
+        mock_cloud_tasks.create_task.assert_not_called()
+
     def test_create_async_task_scheduled(self, async_task_tool, mock_cloud_tasks, tool_context):
         """Should create a scheduled task."""
         mock_cloud_tasks.create_task.return_value = "task-name"
