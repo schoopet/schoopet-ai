@@ -23,13 +23,11 @@ router = APIRouter()
 
 # Discord interaction types
 INTERACTION_PING = 1
-INTERACTION_APPLICATION_COMMAND = 2
 INTERACTION_MESSAGE_COMPONENT = 3
 
 # Discord interaction response types
 RESPONSE_PONG = 1
 RESPONSE_CHANNEL_MESSAGE = 4
-RESPONSE_DEFERRED_CHANNEL_MESSAGE = 5
 RESPONSE_UPDATE_MESSAGE = 7
 
 EPHEMERAL_FLAG = 64
@@ -130,44 +128,6 @@ async def handle_discord_webhook(
     if interaction_type == INTERACTION_PING:
         return JSONResponse({"type": RESPONSE_PONG})
 
-    # Slash command (APPLICATION_COMMAND)
-    if interaction_type == INTERACTION_APPLICATION_COMMAND:
-        command = data.get("data", {}).get("name", "")
-        if command != "chat":
-            # Unknown command — acknowledge silently
-            return JSONResponse({"type": RESPONSE_PONG})
-
-        # Extract user ID (guild interaction has member.user; DMs have user)
-        user_data = (data.get("member") or {}).get("user") or data.get("user") or {}
-        user_id = str(user_data.get("id", ""))
-        if not user_id:
-            logger.warning("Discord interaction missing user ID")
-            raise HTTPException(status_code=400, detail="Missing user ID")
-
-        # Extract message text from the "message" option
-        options = data.get("data", {}).get("options", [])
-        text = next((o["value"] for o in options if o["name"] == "message"), "").strip()
-        if not text:
-            return JSONResponse({"type": RESPONSE_DEFERRED_CHANNEL_MESSAGE})
-
-        interaction_token = data.get("token", "")
-        discord_context = _context_from_interaction(data)
-
-        logger.info(
-            f"Received Discord /chat command: user={user_id}, "
-            f"scope={discord_context.session_scope}, text length={len(text)}"
-        )
-
-        # Acknowledge immediately with a deferred response, then process in background
-        background_tasks.add_task(
-            process_discord_message,
-            user_id=user_id,
-            text=text,
-            interaction_token=interaction_token,
-            discord_context=discord_context,
-        )
-        return JSONResponse({"type": RESPONSE_DEFERRED_CHANNEL_MESSAGE})
-
     # Component clicks (Approve/Reject confirmation buttons)
     if interaction_type == INTERACTION_MESSAGE_COMPONENT:
         custom_id = str(data.get("data", {}).get("custom_id", ""))
@@ -234,22 +194,6 @@ async def handle_discord_webhook(
 
     # All other interaction types — acknowledge silently
     return JSONResponse({"type": RESPONSE_PONG})
-
-
-async def process_discord_message(
-    user_id: str,
-    text: Union[str, types.Content],
-    interaction_token: str,
-    discord_context: DiscordContext | None = None,
-) -> None:
-    """Process a Discord /chat slash command in the background."""
-    async def _reply(message: str) -> None:
-        try:
-            await _discord_sender.followup(interaction_token, message)
-        except Exception as e:
-            logger.error(f"Failed to send Discord followup to {user_id}: {e}")
-
-    await _handle_discord_message(user_id, text, _reply, discord_context=discord_context)
 
 
 async def process_discord_confirmation_component(
@@ -324,9 +268,8 @@ async def _handle_discord_message(
 ) -> None:
     """Shared processing pipeline for all Discord message sources.
 
-    Used by both the /chat slash command handler and the gateway DM/mention
-    handler. The caller provides a reply_fn coroutine that delivers the
-    response via the appropriate Discord mechanism.
+    Used by the gateway DM/mention handler. The caller provides a reply_fn
+    coroutine that delivers the response via the appropriate Discord mechanism.
 
     Flow:
     1. Check rate limit.

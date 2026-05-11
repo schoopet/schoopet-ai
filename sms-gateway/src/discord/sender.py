@@ -16,7 +16,7 @@ class DiscordSender:
     """Sends messages via the Discord REST API.
 
     Supports two delivery modes:
-    - followup(): Edit a deferred interaction response (used by the handler).
+    - send_followup(): Send followup messages for an interaction token.
     - send(): Open a DM and deliver a message (used by the internal notifier).
     """
 
@@ -32,36 +32,6 @@ class DiscordSender:
             timeout=30.0,
             headers={"Authorization": f"Bot {bot_token}"},
         )
-
-    async def followup(self, interaction_token: str, text: str) -> None:
-        """Edit the original deferred interaction response with the agent reply.
-
-        Args:
-            interaction_token: The interaction token from the Discord webhook payload.
-            text: Message text to send.
-        """
-        if not text:
-            text = "(empty response)"
-
-        chunks = _split_message(text)
-        url = (
-            f"{DISCORD_API_BASE}/webhooks/{self._application_id}"
-            f"/{interaction_token}/messages/@original"
-        )
-
-        # Patch the first chunk into the original deferred message
-        response = await self._client.patch(url, json={"content": chunks[0]})
-        response.raise_for_status()
-        logger.info(f"Sent Discord interaction followup part 1/{len(chunks)}")
-
-        # Send remaining chunks as new followup messages
-        followup_url = (
-            f"{DISCORD_API_BASE}/webhooks/{self._application_id}/{interaction_token}"
-        )
-        for i, chunk in enumerate(chunks[1:], start=2):
-            response = await self._client.post(followup_url, json={"content": chunk})
-            response.raise_for_status()
-            logger.info(f"Sent Discord interaction followup part {i}/{len(chunks)}")
 
     async def send_followup(self, interaction_token: str, text: str) -> None:
         """Send one or more follow-up messages for an interaction token."""

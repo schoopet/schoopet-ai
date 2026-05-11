@@ -37,7 +37,7 @@ class TestDiscordValidator:
 
     def test_valid_signature_returns_true(self, keypair, validator):
         private_hex, _ = keypair
-        body = b'{"type":2,"data":{"name":"chat"}}'
+        body = b'{"type":1}'
         timestamp = "1234567890"
         signature = _sign(private_hex, timestamp, body)
         assert validator.validate(signature, timestamp, body) is True
@@ -58,10 +58,10 @@ class TestDiscordValidator:
 
     def test_tampered_body_returns_false(self, keypair, validator):
         private_hex, _ = keypair
-        body = b'{"type":2,"data":{"name":"chat"}}'
+        body = b'{"type":1}'
         timestamp = "1234567890"
         signature = _sign(private_hex, timestamp, body)
-        assert validator.validate(signature, timestamp, b'{"type":2,"data":{"name":"evil"}}') is False
+        assert validator.validate(signature, timestamp, b'{"type":2}') is False
 
     def test_wrong_key_returns_false(self):
         _, public_hex_1 = _generate_keypair()
