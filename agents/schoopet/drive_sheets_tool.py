@@ -1,14 +1,16 @@
 """Google Drive and Google Sheets tools for the Schoopet agent.
 
-Uses the calling user's personal OAuth token (feature="google").
+Uses IAM connector credentials for the calling user's personal Google account.
 """
 import logging
 from typing import Optional, List, Dict, Any
 
+from google.adk.auth.credential_manager import CredentialManager
 from google.adk.tools import ToolContext
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from .oauth_client import OAuthClient
+
+from .gcp_auth import get_credential_manager
 from .utils import require_user_id
 
 logger = logging.getLogger(__name__)
@@ -16,36 +18,33 @@ logger = logging.getLogger(__name__)
 DRIVE_API_BASE = "https://www.googleapis.com/drive/v3"
 DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3"
 SHEETS_API_BASE = "https://sheets.googleapis.com/v4/spreadsheets"
-DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
-SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-DOCS_SCOPES = [
-    "https://www.googleapis.com/auth/documents",
-    "https://www.googleapis.com/auth/drive",
-]
 
 
 class DriveTool:
-    """Tool for saving and listing files in Google Drive using personal OAuth token."""
+    """Tool for saving and listing files in Google Drive using IAM connector credentials."""
 
     def __init__(self):
-        self._oauth_client = OAuthClient()
+        self._cred_manager: CredentialManager | None = None
 
-    def _get_service(self, user_id: str):
-        credentials = self._oauth_client.get_google_credentials(
-            user_id,
-            "google",
-            scopes=DRIVE_SCOPES,
-        )
-        if credentials is None:
-            return None, self._oauth_client.get_oauth_link(user_id)
+    def _get_credential_manager(self) -> CredentialManager:
+        if self._cred_manager is None:
+            self._cred_manager = get_credential_manager()
+        return self._cred_manager
 
-        service = build(
-            "drive",
-            "v3",
-            credentials=credentials,
-            cache_discovery=False,
-        )
-        return service, None
+    async def _get_service(self, tool_context: ToolContext):
+        """Return Drive service, or None after emitting a credential request."""
+        cred_mgr = self._get_credential_manager()
+        try:
+            credential = await cred_mgr.get_auth_credential(tool_context)
+        except Exception:
+            await cred_mgr.request_credential(tool_context)
+            return None
+        if not credential:
+            await cred_mgr.request_credential(tool_context)
+            return None
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(token=credential.http.credentials.token)
+        return build("drive", "v3", credentials=creds, cache_discovery=False)
 
     # ── Private token-specific helpers ─────────────────────────────────────────
 
@@ -157,7 +156,7 @@ class DriveTool:
 
     # ── Public methods ──────────────────────────────────────────────────────────
 
-    def save_file_to_drive(
+    async def save_file_to_drive(
         self,
         filename: str,
         content: str,
@@ -178,13 +177,13 @@ class DriveTool:
         Note:
             Requires user_id from tool_context.
         """
-        user_id, err = require_user_id(tool_context, "drive")
+        _, err = require_user_id(tool_context, "drive")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return self._save_file_with_token(service, filename, content, folder_id)
@@ -217,7 +216,7 @@ class DriveTool:
         Note:
             Requires user_id from tool_context.
         """
-        user_id, err = require_user_id(tool_context, "drive")
+        _, err = require_user_id(tool_context, "drive")
         if err:
             return err
 
@@ -228,9 +227,9 @@ class DriveTool:
         raw_bytes = artifact.inline_data.data
         mime_type = artifact.inline_data.mime_type or "application/octet-stream"
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             result = self._save_binary_with_token(
@@ -240,7 +239,7 @@ class DriveTool:
         except HttpError as e:
             return f"Error saving attachment to Drive: {e}"
 
-    def list_drive_files(
+    async def list_drive_files(
         self,
         folder_id: str,
         query: str = "",
@@ -263,20 +262,20 @@ class DriveTool:
         Note:
             Requires user_id from tool_context.
         """
-        user_id, err = require_user_id(tool_context, "drive")
+        _, err = require_user_id(tool_context, "drive")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return self._list_files_with_token(service, folder_id, query, max_results)
         except HttpError as e:
             return f"Error listing Drive files: {e}"
 
-    def get_drive_status(
+    async def get_drive_status(
         self,
         tool_context: ToolContext = None,
     ) -> str:
@@ -289,40 +288,41 @@ class DriveTool:
         Note:
             Requires user_id from tool_context.
         """
-        user_id, err = require_user_id(tool_context, "drive")
+        _, err = require_user_id(tool_context, "drive")
         if err:
             return err
 
-        user_token_data = self._oauth_client.get_token_data(user_id, "google")
-        if user_token_data:
-            email = user_token_data.get("email", "Unknown")
-            return f"Workspace ({email}) is connected."
-        link = self._oauth_client.get_oauth_link(user_id)
-        return f"Workspace not connected. Authorize here:\n{link}"
+        service = await self._get_service(tool_context)
+        if service is None:
+            return ""
+        return "Google Workspace (Drive, Sheets, Docs) is connected."
 
 
 class SheetsTool:
-    """Tool for reading and writing to Google Sheets using personal OAuth token."""
+    """Tool for reading and writing to Google Sheets using IAM connector credentials."""
 
     def __init__(self):
-        self._oauth_client = OAuthClient()
+        self._cred_manager: CredentialManager | None = None
 
-    def _get_service(self, user_id: str):
-        credentials = self._oauth_client.get_google_credentials(
-            user_id,
-            "google",
-            scopes=SHEETS_SCOPES,
-        )
-        if credentials is None:
-            return None, self._oauth_client.get_oauth_link(user_id)
+    def _get_credential_manager(self) -> CredentialManager:
+        if self._cred_manager is None:
+            self._cred_manager = get_credential_manager()
+        return self._cred_manager
 
-        service = build(
-            "sheets",
-            "v4",
-            credentials=credentials,
-            cache_discovery=False,
-        )
-        return service, None
+    async def _get_service(self, tool_context: ToolContext):
+        """Return Sheets service, or None after emitting a credential request."""
+        cred_mgr = self._get_credential_manager()
+        try:
+            credential = await cred_mgr.get_auth_credential(tool_context)
+        except Exception:
+            await cred_mgr.request_credential(tool_context)
+            return None
+        if not credential:
+            await cred_mgr.request_credential(tool_context)
+            return None
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(token=credential.http.credentials.token)
+        return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
     # ── Private token-specific helpers ─────────────────────────────────────────
 
@@ -689,7 +689,7 @@ class SheetsTool:
 
     # ── Public methods ──────────────────────────────────────────────────────────
 
-    def append_row_to_sheet(
+    async def append_row_to_sheet(
         self,
         values: List[str],
         sheet_id: str,
@@ -710,20 +710,20 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context.
         """
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return self._append_row_with_token(service, values, sheet_id, sheet_tab)
         except HttpError as e:
             return f"Error appending to Sheets: {e}"
 
-    def read_sheet(
+    async def read_sheet(
         self,
         sheet_id: str,
         sheet_tab: str = "Sheet1",
@@ -747,20 +747,20 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context.
         """
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return self._read_sheet_with_token(service, sheet_id, sheet_tab, max_rows)
         except HttpError as e:
             return f"Error reading sheet: {e}"
 
-    def add_sheet_column(
+    async def add_sheet_column(
         self,
         sheet_id: str,
         column_header: str,
@@ -784,20 +784,20 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context.
         """
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return self._add_column_with_token(service, sheet_id, column_header, sheet_tab)
         except HttpError as e:
             return f"Error adding column: {e}"
 
-    def update_sheet_cell(
+    async def update_sheet_cell(
         self,
         sheet_id: str,
         row: int,
@@ -822,13 +822,13 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context.
         """
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return self._update_cell_with_token(
@@ -837,7 +837,7 @@ class SheetsTool:
         except HttpError as e:
             return f"Error updating cell: {e}"
 
-    def get_sheets_status(
+    async def get_sheets_status(
         self,
         tool_context: ToolContext = None,
     ) -> str:
@@ -850,18 +850,16 @@ class SheetsTool:
         Note:
             Requires user_id from tool_context.
         """
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        user_token_data = self._oauth_client.get_token_data(user_id, "google")
-        if user_token_data:
-            email = user_token_data.get("email", "Unknown")
-            return f"Workspace ({email}) is connected."
-        link = self._oauth_client.get_oauth_link(user_id)
-        return f"Workspace not connected. Authorize here:\n{link}"
+        service = await self._get_service(tool_context)
+        if service is None:
+            return ""
+        return "Google Workspace (Drive, Sheets, Docs) is connected."
 
-    def create_spreadsheet(
+    async def create_spreadsheet(
         self,
         title: str,
         sheet_tab: str = "Sheet1",
@@ -869,13 +867,13 @@ class SheetsTool:
         tool_context: ToolContext = None,
     ) -> str:
         """Create a new spreadsheet and optionally initialize its headers."""
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return _json_dumps(
@@ -889,7 +887,7 @@ class SheetsTool:
         except HttpError as e:
             return f"Error creating spreadsheet: {e}"
 
-    def add_sheet_tab(
+    async def add_sheet_tab(
         self,
         sheet_id: str,
         sheet_tab: str,
@@ -897,13 +895,13 @@ class SheetsTool:
         tool_context: ToolContext = None,
     ) -> str:
         """Add a new tab to an existing spreadsheet and optionally initialize headers."""
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return _json_dumps(
@@ -917,27 +915,27 @@ class SheetsTool:
         except HttpError as e:
             return f"Error adding sheet tab: {e}"
 
-    def get_sheet_schema(
+    async def get_sheet_schema(
         self,
         sheet_id: str,
         sheet_tab: str = "Sheet1",
         tool_context: ToolContext = None,
     ) -> str:
         """Return sheet headers and row counts as JSON."""
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return _json_dumps(self._sheet_metadata_with_token(service, sheet_id, sheet_tab))
         except HttpError as e:
             return f"Error reading sheet schema: {e}"
 
-    def read_sheet_records(
+    async def read_sheet_records(
         self,
         sheet_id: str,
         sheet_tab: str = "Sheet1",
@@ -945,13 +943,13 @@ class SheetsTool:
         tool_context: ToolContext = None,
     ) -> str:
         """Return sheet rows as JSON records keyed by header."""
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return _json_dumps(
@@ -960,7 +958,7 @@ class SheetsTool:
         except HttpError as e:
             return f"Error reading sheet records: {e}"
 
-    def ensure_sheet_headers(
+    async def ensure_sheet_headers(
         self,
         sheet_id: str,
         headers: List[str],
@@ -968,13 +966,13 @@ class SheetsTool:
         tool_context: ToolContext = None,
     ) -> str:
         """Ensure the given headers exist in row 1 and return the final header list."""
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return _json_dumps(
@@ -983,7 +981,7 @@ class SheetsTool:
         except HttpError as e:
             return f"Error ensuring sheet headers: {e}"
 
-    def append_record_to_sheet(
+    async def append_record_to_sheet(
         self,
         record: Dict[str, Any],
         sheet_id: str,
@@ -991,13 +989,13 @@ class SheetsTool:
         tool_context: ToolContext = None,
     ) -> str:
         """Append a record dict keyed by header name."""
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return _json_dumps(
@@ -1006,7 +1004,7 @@ class SheetsTool:
         except HttpError as e:
             return f"Error appending record to sheet: {e}"
 
-    def find_sheet_rows(
+    async def find_sheet_rows(
         self,
         sheet_id: str,
         match_column: str,
@@ -1016,13 +1014,13 @@ class SheetsTool:
         tool_context: ToolContext = None,
     ) -> str:
         """Find rows where one header-mapped column equals the given value."""
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return _json_dumps(
@@ -1033,7 +1031,7 @@ class SheetsTool:
         except (HttpError, ValueError) as e:
             return f"Error finding sheet rows: {e}"
 
-    def update_sheet_row(
+    async def update_sheet_row(
         self,
         sheet_id: str,
         row: int,
@@ -1042,13 +1040,13 @@ class SheetsTool:
         tool_context: ToolContext = None,
     ) -> str:
         """Update one row using a dict of header name to value."""
-        user_id, err = require_user_id(tool_context, "sheets")
+        _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
 
-        service, error = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return error
+            return ""
 
         try:
             return _json_dumps(
@@ -1059,33 +1057,32 @@ class SheetsTool:
 
 
 class DocsTool:
-    """Tool for creating and editing Google Docs using personal OAuth token."""
+    """Tool for creating and editing Google Docs using IAM connector credentials."""
 
     def __init__(self):
-        self._oauth_client = OAuthClient()
+        self._cred_manager: CredentialManager | None = None
 
-    def _get_services(self, user_id: str):
-        credentials = self._oauth_client.get_google_credentials(
-            user_id,
-            "google",
-            scopes=DOCS_SCOPES,
-        )
-        if credentials is None:
-            return None, None, self._oauth_client.get_oauth_link(user_id)
+    def _get_credential_manager(self) -> CredentialManager:
+        if self._cred_manager is None:
+            self._cred_manager = get_credential_manager()
+        return self._cred_manager
 
-        docs_service = build(
-            "docs",
-            "v1",
-            credentials=credentials,
-            cache_discovery=False,
-        )
-        drive_service = build(
-            "drive",
-            "v3",
-            credentials=credentials,
-            cache_discovery=False,
-        )
-        return docs_service, drive_service, None
+    async def _get_services(self, tool_context: ToolContext):
+        """Return (docs_service, drive_service) or (None, None) after emitting credential request."""
+        cred_mgr = self._get_credential_manager()
+        try:
+            credential = await cred_mgr.get_auth_credential(tool_context)
+        except Exception:
+            await cred_mgr.request_credential(tool_context)
+            return None, None
+        if not credential:
+            await cred_mgr.request_credential(tool_context)
+            return None, None
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(token=credential.http.credentials.token)
+        docs_service = build("docs", "v1", credentials=creds, cache_discovery=False)
+        drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        return docs_service, drive_service
 
     def _create_google_doc_with_token(
         self,
@@ -1213,7 +1210,7 @@ class DocsTool:
             "occurrences_changed": occurrences_changed,
         }
 
-    def create_google_doc(
+    async def create_google_doc(
         self,
         title: str,
         content: str = "",
@@ -1221,13 +1218,13 @@ class DocsTool:
         tool_context: ToolContext = None,
     ) -> str:
         """Create a Google Doc and optionally seed it with text."""
-        user_id, err = require_user_id(tool_context, "docs")
+        _, err = require_user_id(tool_context, "docs")
         if err:
             return err
 
-        docs_service, drive_service, error = self._get_services(user_id)
+        docs_service, drive_service = await self._get_services(tool_context)
         if docs_service is None or drive_service is None:
-            return error
+            return ""
 
         try:
             return _json_dumps(
@@ -1242,39 +1239,39 @@ class DocsTool:
         except HttpError as e:
             return f"Error creating Google Doc: {e}"
 
-    def read_google_doc(
+    async def read_google_doc(
         self,
         document_id: str,
         tool_context: ToolContext = None,
     ) -> str:
         """Read a Google Doc and return its text."""
-        user_id, err = require_user_id(tool_context, "docs")
+        _, err = require_user_id(tool_context, "docs")
         if err:
             return err
 
-        docs_service, _, error = self._get_services(user_id)
+        docs_service, _ = await self._get_services(tool_context)
         if docs_service is None:
-            return error
+            return ""
 
         try:
             return _json_dumps(self._read_google_doc_with_token(docs_service, document_id))
         except HttpError as e:
             return f"Error reading Google Doc: {e}"
 
-    def append_to_google_doc(
+    async def append_to_google_doc(
         self,
         document_id: str,
         content: str,
         tool_context: ToolContext = None,
     ) -> str:
         """Append text to the end of a Google Doc."""
-        user_id, err = require_user_id(tool_context, "docs")
+        _, err = require_user_id(tool_context, "docs")
         if err:
             return err
 
-        docs_service, _, error = self._get_services(user_id)
+        docs_service, _ = await self._get_services(tool_context)
         if docs_service is None:
-            return error
+            return ""
 
         try:
             return _json_dumps(
@@ -1283,7 +1280,7 @@ class DocsTool:
         except HttpError as e:
             return f"Error appending to Google Doc: {e}"
 
-    def replace_text_in_google_doc(
+    async def replace_text_in_google_doc(
         self,
         document_id: str,
         search_text: str,
@@ -1291,13 +1288,13 @@ class DocsTool:
         tool_context: ToolContext = None,
     ) -> str:
         """Replace matching text throughout a Google Doc."""
-        user_id, err = require_user_id(tool_context, "docs")
+        _, err = require_user_id(tool_context, "docs")
         if err:
             return err
 
-        docs_service, _, error = self._get_services(user_id)
+        docs_service, _ = await self._get_services(tool_context)
         if docs_service is None:
-            return error
+            return ""
 
         try:
             return _json_dumps(
@@ -1311,21 +1308,19 @@ class DocsTool:
         except HttpError as e:
             return f"Error replacing text in Google Doc: {e}"
 
-    def get_docs_status(
+    async def get_docs_status(
         self,
         tool_context: ToolContext = None,
     ) -> str:
         """Check if Google Docs is connected."""
-        user_id, err = require_user_id(tool_context, "docs")
+        _, err = require_user_id(tool_context, "docs")
         if err:
             return err
 
-        user_token_data = self._oauth_client.get_token_data(user_id, "google")
-        if user_token_data:
-            email = user_token_data.get("email", "Unknown")
-            return f"Workspace ({email}) is connected."
-        link = self._oauth_client.get_oauth_link(user_id)
-        return f"Workspace not connected. Authorize here:\n{link}"
+        docs_service, _ = await self._get_services(tool_context)
+        if docs_service is None:
+            return ""
+        return "Google Workspace (Drive, Sheets, Docs) is connected."
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

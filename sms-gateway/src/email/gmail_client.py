@@ -36,9 +36,10 @@ def normalize_gmail_address(gmail_address: str) -> str:
     return gmail_address.lower().replace("@", "_at_").replace(".", "_")
 
 
-async def get_gmail_token(oauth_manager, user_id: str, feature: str) -> Optional[str]:
-    """Return a valid Gmail access token for user_id/feature, or None."""
-    return await oauth_manager.get_access_token(user_id, feature)
+async def get_gmail_token(user_id: str) -> Optional[str]:
+    """Return a valid Gmail access token for user_id via IAM connector, or None."""
+    from ..auth.connector import get_connector_token
+    return await get_connector_token(user_id)
 
 
 async def get_user_profile(token: str) -> Optional[dict]:

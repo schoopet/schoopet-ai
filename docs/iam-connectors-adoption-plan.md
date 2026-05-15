@@ -1,435 +1,119 @@
-# IAM Connectors Adoption Plan
+# IAM Connectors Migration — Completed
 
-Date: 2026-04-26
+Date: 2026-05-13
 
-## Goal
+## Status
 
-Adopt Google Cloud Agent Identity auth providers ("IAM connectors") for all end-user OAuth-backed agent functions so that Google-managed credential storage and token retrieval replace the repo's custom OAuth token lifecycle.
+**Fully implemented.** All Google Workspace agent tools (Calendar, Drive, Sheets, Docs, Gmail) now use Google Cloud Agent Identity IAM connectors for credential management. The custom OAuth token stack (`oauth_client.py`, Firestore access tokens, Secret Manager refresh tokens) has been removed from the agent tools.
 
-This plan covers:
+Legacy OAuth (`/oauth/google/*` endpoints, `OAuthManager`) is retained only for the Gmail background push watch setup (`register_gmail_watch`), which runs outside of interactive agent sessions.
 
-- Interactive end-user auth for personal tools
-- ADK `AuthenticatedFunctionTool` / auth-aware MCP usage
-- Agent Identity connector provisioning and IAM
-- Migration of current Google-backed user tools
+## Architecture
 
-This plan does not assume migration of:
+### Agent side
 
-- Internal service-to-service auth already handled by Cloud Run / ADC / Agent Identity
-- Non-user credentials that do not benefit from 3-legged OAuth
+- `agents/schoopet/gcp_auth.py` — registers `GcpAuthProvider` at import time (module-level side effect), provides `get_credential_manager()` factory
+- `agents/schoopet/root_agent.py` — imports `gcp_auth` to trigger registration before any tool runs
+- Tool pattern: each tool class holds a lazy `CredentialManager` instance; `_get_service(tool_context)` calls `cred_mgr.get_auth_credential(tool_context)` → returns service if credential ready, or calls `request_credential(tool_context)` and returns `None`
+- Returning `None` causes the tool function to exit early with an empty string; ADK emits `adk_request_credential` to the client
+- After user consent, IAM connector stores the token; ADK re-runs the original tool; `GcpAuthProvider._retrieve_credentials()` returns the token from the connector service
 
-## Current State
+### Gateway side
 
-The repo currently uses a custom Google OAuth stack:
+- `sms-gateway/src/agent/client.py` — `AdkCredentialRequest` dataclass, `extract_credential_requests(events)`, `send_credential_response(user_id, session_id, fc_id, auth_config_dict)`
+- `sms-gateway/src/session/manager.py` — `pending_credentials` Firestore collection; `set_pending_credential`, `get_pending_credential`, `clear_pending_credential`
+- `sms-gateway/src/oauth/handler.py` — `GET /oauth/connector/callback` endpoint; receives nonce from IAM connector redirect, looks up pending credential, calls `send_credential_response`, clears pending
+- `sms-gateway/src/discord/handler.py` — `_handle_discord_message` checks `extract_credential_requests` before text extraction; sends auth link if consent needed
+- `sms-gateway/src/email/handler.py` — `_route_email_to_agent` checks `extract_credential_requests` in offline mode; stores pending + sends auth link via Discord, does not auto-decline (unlike confirmations)
 
-- The SMS gateway initiates OAuth and handles callbacks at `/oauth/google/*`
-- Access tokens are stored in Firestore
-- Refresh tokens are stored in Secret Manager
-- The agent loads and refreshes tokens directly
-- Agent tools are mostly plain ADK `FunctionTool`s, not auth-aware tools
+### Infrastructure
 
-Primary code touchpoints:
+- `terraform/apis.tf` — `iamconnectorcredentials.googleapis.com` enabled
+- `terraform/agent_identity.tf` — `google_iam_connector.google_personal` resource; `roles/iamconnectors.user` granted to agent principal
+- `terraform/variables.tf` — `google_oauth_client_id`, `google_oauth_client_secret`
+- `terraform/sms_gateway.tf` — `IAM_CONNECTOR_GOOGLE_PERSONAL_NAME`, `IAM_CONNECTOR_CONTINUE_URI` env vars
+- `environments/prod.env`, `environments/dev.env` — connector name and continue URI set
 
-- `agents/schoopet/oauth_client.py`
-- `sms-gateway/src/oauth/manager.py`
-- `sms-gateway/src/oauth/handler.py`
-- `sms-gateway/src/agent/client.py`
-- `agents/schoopet/root_agent.py`
-- `agents/schoopet/calendar_tool.py`
-- `agents/schoopet/drive_sheets_tool.py`
-- `agents/schoopet/email_tool.py`
-- `agents/schoopet/deploy.py`
+## Flow
 
-## Target State
+### First use (consent required)
 
-The target design is:
+1. User sends a message that triggers a Google Workspace tool
+2. Agent tool calls `_get_service(tool_context)` → `CredentialManager.get_auth_credential(tool_context)`
+3. `GcpAuthProvider._retrieve_credentials(user_id, auth_scheme)` → IAM connector returns `metadata.uri_consent_required` with `authorization_uri` and `consent_nonce`
+4. `CredentialManager` stores credential with `auth_uri` in `auth_config.exchanged_auth_credential`, returns `None`
+5. Tool calls `request_credential(tool_context)` → ADK emits `adk_request_credential` event
+6. Gateway's `extract_credential_requests(events)` finds the event, extracts `auth_uri` and `nonce`
+7. Gateway stores `pending_credentials/{nonce}` in Firestore
+8. Gateway sends user: "To use this feature I need access to your Google account. Click here: {auth_uri}"
+9. User clicks link → Google consent → IAM connector callback → IAM connector stores token → redirect to `{continue_uri}?state={nonce}`
+10. `GET /oauth/connector/callback?state={nonce}` → look up pending credential → call `send_credential_response` → clear pending
+11. `send_credential_response` posts `adk_request_credential` function response → ADK re-runs original tool
+12. `GcpAuthProvider._retrieve_credentials` → IAM connector now has token → returns `AuthCredential(http=...)`
+13. Tool gets service, executes, returns result
 
-- Agent Engine remains deployed with `identity_type=AGENT_IDENTITY`
-- Google Cloud IAM connectors hold 3LO provider configuration
-- ADK tools request credentials through `GcpAuthProviderScheme`
-- The client application handles `adk_request_credential`, browser redirect, consent completion, and conversation resume
-- Tool code consumes injected `AuthCredential` values instead of loading refresh tokens from local storage
-- The repo's custom token store becomes unnecessary for migrated user functions
+### Subsequent use (token cached by IAM connector)
 
-## Important Constraint
+Steps 1–2: same as above  
+Step 3: IAM connector returns token immediately (`operation.done = True`)  
+Steps 4–13: skipped, tool executes directly
 
-This is not a storage-only migration.
+## Key decisions
 
-To adopt IAM connectors, we must change three layers together:
+- `AuthenticatedFunctionTool` was NOT used — it lacks `require_confirmation` support. `CredentialManager` is called directly inside `FunctionTool` async functions, which preserves all confirmation behavior.
+- `CredentialManager` is lazily initialized per tool class (not in `__init__`) to avoid Agent Engine pickling issues. Each tool call creates or reuses the instance.
+- `GcpAuthProvider` is registered once at module import via `gcp_auth.py`; it's a class-level registry so it persists across `CredentialManager` instances.
+- The `nonce` field from `GcpAuthProvider`'s `OAuth2Auth` response is used as the Firestore document ID in `pending_credentials` for the connector callback correlation.
+- Background email processing (offline mode) does NOT auto-decline credential requests — instead it stores the pending credential and sends the auth link via Discord, so the user can authorize and the pending action resumes automatically.
+- Legacy `/oauth/google/*` routes and `OAuthManager` are kept for Gmail push watch setup only.
 
-1. Client/gateway auth UX
-2. Tool runtime contract
-3. Cloud-side connector provisioning and IAM
-
-Without all three, the migration will stall.
-
-## Scope Breakdown
-
-### In scope
-
-- Calendar functions
-- Drive functions
-- Sheets functions
-- Gmail read functions
-- Future user-authenticated external functions
-
-### Conditionally in scope
-
-- Email-triggered automation using the user's own Gmail token
-- Shared auth helper abstractions in the agent package
-
-### Out of scope for phase 1
-
-- Non-user flows that are not clearly modeled as per-user 3LO
-- Replacing non-OAuth auth paths
-- Removing the current OAuth system before parity is proven
-
-## Adoption Strategy
-
-Use a phased migration with dual-stack operation.
-
-Do not cut over all tools at once. First add connector support and auth-aware client handling, then migrate one low-risk tool family, then expand to the rest, then retire the legacy token stack.
-
-## Workstreams
-
-### 1. Connector provisioning
-
-Deliverables:
-
-- Enable Agent Identity Connector API
-- Create one or more 3LO auth providers in each environment
-- Register connector callback URLs with the OAuth client
-- Grant `roles/iamconnectors.user` to the deployed agent identity
-- Document connector names and environment mapping
-
-Decisions to make:
-
-- Single connector for all Google personal scopes vs multiple connectors by capability
-- Scope granularity and consent UX
-- Connector naming convention per environment
-
-Recommendation:
-
-- Start with one connector for all current personal Google scopes to minimize auth fragmentation
-- Revisit scope splitting only after working end-to-end
-
-### 2. Gateway/client auth flow
-
-Deliverables:
-
-- Detect `adk_request_credential` events from Agent Engine responses
-- Extract and persist `auth_config`, function call ID, user ID, session ID, and consent nonce
-- Present or redirect the user to the returned `auth_uri`
-- Add a `continue_uri` endpoint that finalizes consent with `credentials:finalize`
-- Resume the conversation by posting the `adk_request_credential` function response back to the agent
-
-Primary files:
-
-- `sms-gateway/src/agent/client.py`
-- `sms-gateway/src/main.py`
-- New or updated web/gateway handler for `continue_uri`
-
-Notes:
-
-- Current gateway response handling appears text-centric and will need explicit auth-event handling
-- This is the critical path for every interactive 3LO tool
-
-### 3. Tool contract migration
-
-Deliverables:
-
-- Replace selected `FunctionTool` wrappers with `AuthenticatedFunctionTool`
-- Register `GcpAuthProvider` at agent startup
-- Provide `AuthConfig` with `GcpAuthProviderScheme` for each migrated tool
-- Refactor tool implementations to consume injected `AuthCredential`
-- Remove direct dependency on `OAuthClient` from migrated tools
-
-Primary files:
-
-- `agents/schoopet/root_agent.py`
-- `agents/schoopet/calendar_tool.py`
-- `agents/schoopet/drive_sheets_tool.py`
-- `agents/schoopet/email_tool.py`
-
-Recommended helper additions:
-
-- A shared auth config factory
-- A shared token extraction helper from `AuthCredential`
-- A migration-safe compatibility layer that can temporarily fall back to legacy auth if the connector flow is unavailable
-
-### 4. Legacy OAuth coexistence
-
-Deliverables:
-
-- Keep current `/oauth/google/*` flow operational during migration
-- Introduce feature flags to choose connector auth vs legacy auth per tool or per environment
-- Preserve existing Firestore/Secret Manager token logic until all target functions have parity
-
-Recommendation:
-
-- Gate connector-backed tools with explicit environment variables
-- Prefer tool-by-tool cutover, not user-by-user hidden behavior
-
-### 5. Testing and rollout
-
-Deliverables:
-
-- Unit tests for auth-event extraction and auth resume behavior
-- Tool tests for connector-backed token injection
-- End-to-end tests for initial consent, reconnect, expired token refresh, revoked consent, and resumed conversation
-- Manual validation in dev and prod-like environments
-
-## Migration Phases
-
-## Phase 0: Foundations
-
-Objective:
-
-Confirm platform prerequisites and define the auth model before code migration.
-
-Tasks:
-
-- Enable required APIs
-- Create dev connector(s)
-- Record connector resource names
-- Confirm deployed agent has Agent Identity and connector IAM access
-- Decide whether one connector will cover all current Google personal scopes
-- Define feature flags
-
-Exit criteria:
-
-- Connector exists in dev
-- Agent principal can use it
-- `continue_uri` design is approved
-
-## Phase 1: Client auth plumbing
-
-Objective:
-
-Make the gateway capable of supporting ADK credential requests without changing tool behavior yet.
-
-Tasks:
-
-- Extend event parsing in `sms-gateway/src/agent/client.py`
-- Persist auth session state
-- Add `continue_uri` endpoint and finalize call
-- Add conversation resume path
-- Add logging and observability around consent lifecycle
-
-Exit criteria:
-
-- The gateway can detect `adk_request_credential`
-- A consent flow can be started and finalized
-- A resumed agent request can be sent successfully
-
-## Phase 2: First tool pilot
-
-Objective:
-
-Migrate one small, low-risk function set first.
-
-Recommendation:
-
-- Pilot on Drive file listing or Calendar read-only behavior before Gmail automation
-
-Tasks:
-
-- Register `GcpAuthProvider`
-- Add one `AuthenticatedFunctionTool`
-- Implement credential injection and bearer-token use
-- Verify consent, reuse, refresh, and revoked-access behavior
-
-Exit criteria:
-
-- One production-like tool works end-to-end using connector-managed auth only
-- No dependence on Firestore or Secret Manager token retrieval in that tool path
-
-## Phase 3: Google personal tool migration
-
-Objective:
-
-Migrate all user-facing Google functions.
-
-Suggested order:
-
-1. Calendar
-2. Drive
-3. Sheets
-4. Gmail read paths
-5. Gmail-triggered automation
-
-Tasks:
-
-- Convert each tool family to `AuthenticatedFunctionTool` or auth-aware MCP equivalent
-- Remove `OAuthClient` dependency from migrated paths
-- Update prompt/tool descriptions if user auth behavior changes
-- Expand tests per tool family
-
-Exit criteria:
-
-- All user-facing Google personal functions use IAM connectors
-- Legacy token path is no longer needed for migrated functions
-
-## Phase 4: Legacy stack retirement
-
-Objective:
-
-Remove the old custom token management code after stable operation.
-
-Tasks:
-
-- Stop issuing legacy OAuth links for migrated functions
-- Remove Firestore token reads for migrated functions
-- Remove refresh token storage for migrated functions
-- Delete unused OAuth callback/state logic
-- Clean up secrets and Terraform references if fully obsolete
-
-Exit criteria:
-
-- No production traffic depends on legacy personal OAuth storage
-- Rollback plan is documented and tested before deletion
-
-## Proposed File-Level Change List
+## Files changed
 
 ### Agent package
-
-- `agents/schoopet/root_agent.py`
-  - Register `GcpAuthProvider`
-  - Build shared `AuthConfig`
-  - Swap selected `FunctionTool`s to `AuthenticatedFunctionTool`
-
-- `agents/schoopet/calendar_tool.py`
-  - Add connector-backed implementation
-  - Accept injected `AuthCredential`
-  - Remove direct `OAuthClient` dependency after cutover
-
-- `agents/schoopet/drive_sheets_tool.py`
-  - Same migration pattern as calendar
-
-- `agents/schoopet/email_tool.py`
-  - Use injected auth for Gmail API reads
-  - Evaluate special handling for automated email-triggered flows
-
-- `agents/schoopet/oauth_client.py`
-  - Keep temporarily for coexistence
-  - Remove only after all dependent functions are migrated
+- `agents/schoopet/gcp_auth.py` — NEW
+- `agents/schoopet/oauth_client.py` — DELETED
+- `agents/schoopet/root_agent.py` — added `gcp_auth` import
+- `agents/schoopet/calendar_tool.py` — migrated to `CredentialManager`
+- `agents/schoopet/drive_sheets_tool.py` — migrated to `CredentialManager`
+- `agents/schoopet/email_tool.py` — migrated to `CredentialManager`
+- `agents/schoopet/requirements.txt` — `google-adk[agent-identity]`
 
 ### Gateway package
+- `sms-gateway/src/config.py` — `IAM_CONNECTOR_GOOGLE_PERSONAL_NAME`, `IAM_CONNECTOR_CONTINUE_URI`
+- `sms-gateway/src/agent/client.py` — `AdkCredentialRequest`, `extract_credential_requests`, `send_credential_response`
+- `sms-gateway/src/session/manager.py` — `PENDING_CREDENTIALS_COLLECTION`, 3 pending credential methods
+- `sms-gateway/src/oauth/handler.py` — `GET /oauth/connector/callback`, updated `init_oauth_services`
+- `sms-gateway/src/discord/handler.py` — credential request handling in `_handle_discord_message`
+- `sms-gateway/src/email/handler.py` — credential request handling in `_route_email_to_agent`
+- `sms-gateway/src/main.py` — passes `agent_client` to `init_oauth_services`
 
-- `sms-gateway/src/agent/client.py`
-  - Parse auth request events
-  - Support auth resume request content
+### Infrastructure
+- `terraform/apis.tf` — `iamconnectorcredentials.googleapis.com`
+- `terraform/agent_identity.tf` — `google_iam_connector`, `google_iam_connector_iam_member`
+- `terraform/variables.tf` — `google_oauth_client_id`, `google_oauth_client_secret`
+- `terraform/sms_gateway.tf` — IAM connector env vars
+- `environments/prod.env`, `environments/dev.env` — connector name and continue URI
 
-- `sms-gateway/src/main.py`
-  - Wire new auth session components and routes
+## Deployment checklist
 
-- `sms-gateway/src/oauth/handler.py`
-  - Eventually deprecate for migrated flows
+Before deploying to an environment:
 
-- `sms-gateway/src/oauth/manager.py`
-  - Eventually deprecate for migrated flows
+1. Provision the IAM connector via Terraform (or manually if Pre-GA Terraform support is unavailable):
+   - Enable `iamconnectorcredentials.googleapis.com`
+   - Create connector with OAuth client ID/secret and scopes
+   - Grant `roles/iamconnectors.user` to agent principal
+   - Add `{gateway_url}/oauth/connector/callback` as authorized redirect URI in Google Cloud Console
 
-### Infra and deployment
+2. Set `google_oauth_client_id` and `google_oauth_client_secret` in Terraform `.tfvars` or secrets
 
-- `agents/schoopet/deploy.py`
-  - Ensure deployment requirements include Agent Identity auth support if missing
+3. Deploy agent: `./agents/deploy.sh --env=prod` (picks up `[agent-identity]` extra and `gcp_auth.py`)
 
-- `terraform/*`
-  - Add API enablement and any IAM changes not yet codified
-  - Decide whether connector resources are created via Terraform or separately for now
+4. Deploy gateway: `./sms-gateway/scripts/deploy.sh --env=prod` (picks up new env vars and `/oauth/connector/callback` endpoint)
 
-## Risks
+5. Smoke test: trigger a Calendar or Drive tool call in Discord; verify consent link is sent; click link; verify tool executes on follow-up message
 
-### 1. Preview / Pre-GA platform risk
+## Open items
 
-The connector-based 3LO path is still Pre-GA. API shapes, UX, and runtime behavior may change.
-
-Mitigation:
-
-- Keep dual-stack support until stable
-- Avoid deleting legacy auth early
-
-### 2. Multi-channel UX mismatch
-
-SMS and chat-first channels do not naturally fit browser redirect flows.
-
-Mitigation:
-
-- Design a clear link-out/link-back flow
-- Persist enough state to resume reliably across channels
-
-### 3. Gmail automation edge cases
-
-Interactive user consent is straightforward. Background email-triggered automation is more sensitive because it depends on a usable token outside the immediate interactive moment.
-
-Mitigation:
-
-- Defer Gmail automation cutover until basic interactive tools are proven
-- Explicitly validate reconnect and revoked-token behavior
-
-### 4. Scope sprawl
-
-A single broad connector may simplify rollout but increase consent breadth.
-
-Mitigation:
-
-- Start broad for delivery speed
-- Revisit splitting after adoption
-
-### 5. Operational blind spots
-
-Without logging around auth events and resume behavior, debugging failures will be difficult.
-
-Mitigation:
-
-- Add structured logs for connector name, session ID, function call ID, consent start, finalize success/failure, and resume outcome
-
-## Feature Flags
-
-Recommended flags:
-
-- `ENABLE_IAM_CONNECTOR_AUTH`
-- `IAM_CONNECTOR_GOOGLE_PERSONAL_NAME`
-- `IAM_CONNECTOR_CONTINUE_URI`
-- `ENABLE_LEGACY_GOOGLE_OAUTH_FALLBACK`
-- Optional per-tool overrides if rollout needs finer control
-
-## Rollout Recommendation
-
-Recommended rollout order:
-
-1. Dev environment
-2. One pilot tool in dev
-3. One pilot tool in prod for internal/test users
-4. Calendar and Drive
-5. Sheets
-6. Gmail read
-7. Gmail-triggered automation
-8. Legacy auth retirement
-
-## Acceptance Criteria
-
-The migration is complete when:
-
-- All target user-authenticated functions obtain credentials through IAM connectors
-- The gateway fully supports auth request, finalize, and resume flow
-- No migrated tool depends on Firestore token rows or Secret Manager refresh tokens
-- Revoked consent and expired credentials recover correctly
-- Legacy custom OAuth code can be removed without user-visible regression
-
-## Open Questions
-
-- Should Google personal scopes live in one connector or multiple connectors?
-- Can Gmail-triggered automation safely rely on connector-managed retrieval without additional runtime changes?
-- Do we want Terraform to manage connector resources now, or should connector setup remain manual until the API stabilizes?
-- Do any current non-browser channels need a specialized auth resume UX?
-
-## Recommended Next Step
-
-Build Phase 1 only:
-
-- add gateway support for `adk_request_credential`
-- implement `continue_uri` finalization
-- resume the agent conversation
-
-Do not migrate any tool until that plumbing works end-to-end.
+- Terraform resource type `google_iam_connector` is for the Pre-GA API — confirm exact resource type name when API becomes GA or if manual provisioning is needed initially
+- Gmail push watch (`register_gmail_watch`) still uses legacy OAuth; once IAM connector path is proven, it can be migrated too
+- Background email offline mode sends auth link via Discord; a future improvement could track the nonce to auto-resume the email processing after consent

@@ -55,7 +55,6 @@ class AsyncTaskTool:
             if self._project_id:
                 # Import here to avoid issues during pickling
                 from google.cloud import firestore
-
                 self._firestore_client = firestore.Client(project=self._project_id)
         return self._firestore_client
 

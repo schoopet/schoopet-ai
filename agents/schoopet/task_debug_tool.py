@@ -31,7 +31,6 @@ class TaskDebugTool:
             self._ensure_initialized()
             if self._project_id:
                 from google.cloud import firestore
-
                 self._firestore_client = firestore.Client(project=self._project_id)
         return self._firestore_client
 

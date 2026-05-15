@@ -34,6 +34,9 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
     # Note: Empty values cause deployment errors, so we filter them out
     env_vars_raw = {
         "GOOGLE_GENAI_USE_VERTEXAI": "true",
+        "GOOGLE_API_USE_CLIENT_CERTIFICATE": "true",
+        "GOOGLE_API_USE_MTLS_ENDPOINT": "always",
+        "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES": "false",
         "OAUTH_BASE_URL": os.getenv("OAUTH_BASE_URL", "https://api.schoopet.com"),
         "ARTIFACT_BUCKET_NAME": os.getenv("ARTIFACT_BUCKET_NAME", ""),
         # Async Task Configuration
@@ -42,6 +45,9 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
         "SMS_GATEWAY_SA": os.getenv("SMS_GATEWAY_SA", ""),
         # Personal agent display name (falls back to "Schoopet" if unset)
         "PERSONAL_AGENT_NAME": os.getenv("PERSONAL_AGENT_NAME", ""),
+        # IAM Connector for 3-legged OAuth
+        "IAM_CONNECTOR_GOOGLE_PERSONAL_NAME": os.getenv("IAM_CONNECTOR_GOOGLE_PERSONAL_NAME", ""),
+        "IAM_CONNECTOR_CONTINUE_URI": os.getenv("IAM_CONNECTOR_CONTINUE_URI", ""),
         # OpenTelemetry
         "OTEL_SERVICE_NAME": "schoopet-agent",
         "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true",

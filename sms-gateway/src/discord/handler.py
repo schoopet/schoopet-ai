@@ -274,8 +274,8 @@ async def _handle_discord_message(
     Flow:
     1. Check rate limit.
     2. Get or create agent session.
-    3. Query the agent.
-    4. Deliver reply via reply_fn.
+    3. Query the agent (events).
+    4. Handle credential requests, confirmations, or text response.
     """
     start_time = time.time()
     discord_context = discord_context or build_discord_context(channel_id="")
@@ -307,7 +307,7 @@ async def _handle_discord_message(
 
         # Query the agent
         try:
-            response = await _agent_client.send_message(
+            events = await _agent_client.send_message_events(
                 user_id=user_id,
                 session_id=session_info.agent_session_id,
                 message=wrap_message_with_discord_context(message, discord_context),
@@ -317,6 +317,29 @@ async def _handle_discord_message(
             await reply_fn("I'm taking longer than usual to respond. Please try again in a moment.")
             return
 
+        # Handle IAM connector credential requests (user consent required)
+        credential_requests = _agent_client.extract_credential_requests(events)
+        if credential_requests:
+            req = credential_requests[0]
+            logger.info(
+                f"IAM connector credential request for Discord user {user_id}: "
+                f"nonce={req.nonce[:8]}..., fc_id={req.function_call_id}"
+            )
+            await _session_manager.set_pending_credential(
+                nonce=req.nonce,
+                user_id=user_id,
+                session_id=session_info.agent_session_id,
+                credential_function_call_id=req.function_call_id,
+                auth_config_dict=req.auth_config_dict,
+                auth_uri=req.auth_uri,
+            )
+            await reply_fn(
+                f"To use this feature I need access to your Google account. "
+                f"Click here to authorize:\n{req.auth_uri}"
+            )
+            return
+
+        response = _agent_client.extract_text(events)
         if not response:
             logger.warning(f"Empty response from agent for Discord user {user_id}")
             await reply_fn("I couldn't generate a response. Please try again.")

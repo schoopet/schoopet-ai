@@ -32,6 +32,12 @@ variable "oauth_base_url" {
   default     = ""
 }
 
+variable "sms_gateway_url" {
+  description = "Public URL of the SMS Gateway Cloud Run service. Used as the Pub/Sub push endpoint audience for OIDC verification."
+  type        = string
+  default     = ""
+}
+
 variable "email_drive_folder_id" {
   description = "Google Drive folder ID for email attachment storage"
   type        = string
@@ -52,6 +58,25 @@ variable "discord_application_id" {
 
 variable "discord_public_key" {
   description = "Discord application Ed25519 public key (from Developer Portal)"
+  type        = string
+  default     = ""
+}
+
+variable "google_oauth_client_id" {
+  description = "Google OAuth 2.0 client ID for IAM connector"
+  type        = string
+  default     = ""
+}
+
+variable "google_oauth_client_secret" {
+  description = "Google OAuth 2.0 client secret for IAM connector"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "iam_connector_google_personal_name" {
+  description = "Full IAM connector resource name (projects/{proj}/locations/global/connectors/{id}). Set manually until google_iam_connector is GA in the Terraform provider."
   type        = string
   default     = ""
 }

@@ -4,15 +4,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from google.cloud import firestore
-from google.cloud import secretmanager
 
 from .config import get_settings
 from .agent.client import AgentEngineClient
 from .internal.handler import router as internal_router, init_internal_services
 from .internal.auth import init_allowed_service_accounts
 from .oauth.handler import router as oauth_router, init_oauth_services
-from .oauth.manager import OAuthManager
-from .oauth.secret_manager import SecretManagerClient
 from .ratelimit.limiter import RateLimiter
 from .session.manager import SessionManager
 from .email.handler import router as email_router, init_email_services
@@ -108,53 +105,20 @@ async def lifespan(app: FastAPI):
     init_allowed_service_accounts()
     logger.info("Internal services initialized")
 
-    # Initialize OAuth + Email services (both require the same OAuth manager)
-    oauth_manager = None
-    if settings.GOOGLE_OAUTH_CLIENT_ID and settings.GOOGLE_OAUTH_CLIENT_SECRET:
-        logger.info("Initializing OAuth services...")
-        secret_manager_client = SecretManagerClient(
-            project_id=settings.GOOGLE_CLOUD_PROJECT,
-        )
-        oauth_manager = OAuthManager(
-            firestore_client=firestore_client,
-            secret_manager=secret_manager_client,
-            client_id=settings.GOOGLE_OAUTH_CLIENT_ID,
-            client_secret=settings.GOOGLE_OAUTH_CLIENT_SECRET,
-            redirect_uri=settings.GOOGLE_OAUTH_REDIRECT_URI,
-            state_ttl_seconds=settings.OAUTH_STATE_TTL_SECONDS,
-        )
+    # Initialize OAuth connector callback + Email services
+    init_oauth_services(
+        session_manager=session_manager,
+        agent_client=agent_client,
+    )
+    logger.info("OAuth connector callback initialized")
 
-        init_oauth_services(
-            oauth_manager=oauth_manager,
-            session_manager=session_manager,
-        )
-
-        # Load HMAC secret for OAuth token validation
-        try:
-            sm_client = secretmanager.SecretManagerServiceClient()
-            secret_name = f"projects/{settings.GOOGLE_CLOUD_PROJECT}/secrets/oauth-hmac-secret/versions/latest"
-            response = sm_client.access_secret_version(request={"name": secret_name})
-            app.state.oauth_hmac_secret = response.payload.data.decode("UTF-8")
-            logger.info("OAuth HMAC secret loaded from Secret Manager")
-        except Exception as e:
-            logger.error(f"Failed to load OAuth HMAC secret: {e}")
-            app.state.oauth_hmac_secret = None
-
-        logger.info("OAuth services initialized")
-
-        # Initialize Email services
-        logger.info("Initializing Email services...")
-        init_email_services(
-            oauth_manager=oauth_manager,
-            db=firestore_client,
-            agent_client=agent_client,
-            session_manager=session_manager,
-            discord_sender=discord_sender,
-        )
-        logger.info("Email services initialized")
-    else:
-        logger.warning("OAuth not configured - calendar and email features disabled")
-        app.state.oauth_hmac_secret = None
+    init_email_services(
+        db=firestore_client,
+        agent_client=agent_client,
+        session_manager=session_manager,
+        discord_sender=discord_sender,
+    )
+    logger.info("Email services initialized")
 
     logger.info("SMS Gateway started successfully")
 

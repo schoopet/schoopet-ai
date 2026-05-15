@@ -1,4 +1,4 @@
-google-adk==1.33.0
+google-adk[agent-identity]==1.33.0
 google-genai==1.73.1
 google-cloud-aiplatform==1.151.0
 google-cloud-firestore==2.27.0

@@ -14,6 +14,7 @@ from ..utils import normalize_user_id
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "sms_sessions"
+PENDING_CREDENTIALS_COLLECTION = "pending_credentials"
 
 
 class SessionManager:
@@ -493,3 +494,43 @@ class SessionManager:
     def is_session_active(self, session: Optional[SessionInfo]) -> bool:
         """Check if a session is considered active."""
         return bool(session and session.agent_session_id)
+
+    # ── IAM connector pending credentials ────────────────────────────────────
+
+    async def set_pending_credential(
+        self,
+        nonce: str,
+        user_id: str,
+        session_id: str,
+        credential_function_call_id: str,
+        auth_config_dict: dict,
+        auth_uri: str,
+    ) -> None:
+        """Store a pending IAM connector credential request keyed by nonce."""
+        from datetime import datetime, timezone
+        doc_ref = self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(nonce)
+        await doc_ref.set({
+            "nonce": nonce,
+            "user_id": user_id,
+            "session_id": session_id,
+            "credential_function_call_id": credential_function_call_id,
+            "auth_config_dict": auth_config_dict,
+            "auth_uri": auth_uri,
+            "created_at": datetime.now(timezone.utc),
+        })
+
+    async def get_pending_credential(self, nonce: str) -> Optional[dict]:
+        """Retrieve a pending credential record by nonce."""
+        try:
+            doc = await self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(nonce).get()
+            return doc.to_dict() if doc.exists else None
+        except Exception as e:
+            logger.error(f"Failed to get pending credential for nonce {nonce[:8]}...: {e}")
+            return None
+
+    async def clear_pending_credential(self, nonce: str) -> None:
+        """Remove a pending credential record."""
+        try:
+            await self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(nonce).delete()
+        except Exception as e:
+            logger.error(f"Failed to clear pending credential for nonce {nonce[:8]}...: {e}")

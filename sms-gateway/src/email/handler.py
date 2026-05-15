@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["email"])
 
 # Module-level service references (set by init_email_services)
-_oauth_manager = None
 _db = None  # AsyncFirestore client
 _agent_client = None
 _session_manager = None
@@ -75,16 +74,14 @@ def _should_suppress_response(message: str) -> bool:
 
 
 def init_email_services(
-    oauth_manager,
     db,
     agent_client,
     session_manager,
     discord_sender=None,
 ) -> None:
     """Initialize module-level service references. Called by main.py."""
-    global _oauth_manager, _db, _agent_client
+    global _db, _agent_client
     global _session_manager, _discord_sender
-    _oauth_manager = oauth_manager
     _db = db
     _agent_client = agent_client
     _session_manager = session_manager
@@ -156,7 +153,7 @@ async def handle_email_webhook(
     """
     await _verify_pubsub_oidc(request)
 
-    if not _oauth_manager or not _db:
+    if not _db:
         logger.error("Email services not initialized")
         return Response(status_code=200)
 
@@ -269,9 +266,9 @@ async def process_email_notification(gmail_address: str, history_id: str) -> Non
         logger.warning(f"Watch state for {gmail_address} is missing user_id or token_feature")
         return
 
-    token = await get_gmail_token(_oauth_manager, user_id, token_feature)
+    token = await get_gmail_token(user_id)
     if not token:
-        logger.error(f"No {token_feature} token for {user_id[:4]}**** — cannot fetch messages")
+        logger.error(f"No stored token for {user_id[:4]}**** — cannot fetch messages")
         return
 
     start_history_id = watch_state.get("last_history_id")
@@ -333,6 +330,29 @@ async def _route_email_to_agent(
         )
         logger.info(f"Email routed to agent session {session_info.agent_session_id}")
 
+        # Handle IAM connector credential requests (offline: store pending + send auth link)
+        credential_requests = _agent_client.extract_credential_requests(events)
+        if credential_requests:
+            req = credential_requests[0]
+            logger.info(
+                f"Offline IAM connector credential request for {user_id[:4]}****: "
+                f"nonce={req.nonce[:8]}..."
+            )
+            await _session_manager.set_pending_credential(
+                nonce=req.nonce,
+                user_id=user_id,
+                session_id=session_info.agent_session_id,
+                credential_function_call_id=req.function_call_id,
+                auth_config_dict=req.auth_config_dict,
+                auth_uri=req.auth_uri,
+            )
+            await _send_response(
+                user_id,
+                f"An email triggered an action that requires Google authorization. "
+                f"Click here to authorize and I'll complete it automatically:\n{req.auth_uri}",
+            )
+            return
+
         confirmations = _agent_client.extract_confirmation_requests(events)
         if confirmations:
             tool_names = [confirmation.tool_name for confirmation in confirmations]
@@ -380,22 +400,17 @@ def _extract_email_address(raw: str) -> str:
 async def register_gmail_watch(
     user_id: str,
     gmail_address: str,
-    feature: str,
 ) -> bool:
-    """Set up Gmail push watch for a user after OAuth authorization.
-
-    Called automatically from the OAuth callback when a user authorizes
-    the `google` feature, which includes Gmail scope.
+    """Set up Gmail push watch for a user after IAM connector authorization.
 
     Args:
         user_id: User identifier or Discord ID.
         gmail_address: The authorized Gmail address.
-        feature: OAuth feature, currently `google`.
 
     Returns:
         True if watch was set up successfully, False otherwise.
     """
-    if not _oauth_manager or not _db:
+    if not _db:
         logger.warning("Email services not initialized — skipping Gmail watch setup")
         return False
 
@@ -406,9 +421,9 @@ async def register_gmail_watch(
         logger.warning("EMAIL_PUBSUB_TOPIC not configured — skipping Gmail watch setup")
         return False
 
-    token = await get_gmail_token(_oauth_manager, user_id, feature)
+    token = await get_gmail_token(user_id)
     if not token:
-        logger.error(f"No {feature} token for {user_id[:4]}**** — cannot set up Gmail watch")
+        logger.error(f"No stored token for {user_id[:4]}**** — cannot set up Gmail watch")
         return False
 
     watch_result = await setup_watch(token, topic)
@@ -425,7 +440,6 @@ async def register_gmail_watch(
         {
             "gmail_address": gmail_address,
             "user_id": user_id,
-            "token_feature": feature,
             "last_history_id": history_id,
             "watch_expiration": expiration,
             "updated_at": datetime.now(timezone.utc),
@@ -433,8 +447,7 @@ async def register_gmail_watch(
     )
 
     logger.info(
-        f"Gmail watch registered for {gmail_address} (user={user_id[:4]}****, "
-        f"feature={feature}, historyId={history_id})"
+        f"Gmail watch registered for {gmail_address} (user={user_id[:4]}****, historyId={history_id})"
     )
     return True
 
@@ -452,7 +465,7 @@ async def renew_gmail_watch(
     Called every ~6 days by Cloud Scheduler. Iterates all email_state/* documents
     and renews each watch using the stored user_id and token_feature.
     """
-    if not _oauth_manager or not _db:
+    if not _db:
         raise HTTPException(status_code=503, detail="Email services not initialized")
 
     renewed = 0
@@ -463,16 +476,15 @@ async def renew_gmail_watch(
             data = doc.to_dict() or {}
             gmail_address = data.get("gmail_address", "")
             user_id = data.get("user_id", "")
-            token_feature = data.get("token_feature", "")
 
-            if not gmail_address or not user_id or not token_feature:
+            if not gmail_address or not user_id:
                 logger.warning(f"Skipping email_state/{doc.id}: missing required fields")
                 continue
 
-            token = await get_gmail_token(_oauth_manager, user_id, token_feature)
+            token = await get_gmail_token(user_id)
             if not token:
                 logger.warning(
-                    f"No {token_feature} token for {user_id[:4]}**** "
+                    f"No stored token for {user_id[:4]}**** "
                     f"— skipping watch renewal for {gmail_address}"
                 )
                 failed += 1

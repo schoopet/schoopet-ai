@@ -14,6 +14,7 @@ locals {
     "cloudtrace.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
+    "iamconnectorcredentials.googleapis.com",
   ]
 }
 

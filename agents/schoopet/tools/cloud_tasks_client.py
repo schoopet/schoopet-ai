@@ -77,8 +77,7 @@ class CloudTasksClient:
             if self._project_id:
                 # Import here to avoid issues during pickling
                 from google.cloud import tasks_v2
-
-                self._client = tasks_v2.CloudTasksClient()
+                self._client = tasks_v2.CloudTasksClient(transport="rest")
         return self._client
 
     @property

@@ -1,41 +1,42 @@
-"""Google Calendar tool for agent using OAuth tokens.
-
-Uses the calling user's personal OAuth token (feature="google").
-"""
+"""Google Calendar tool for agent using IAM connector credentials."""
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from zoneinfo import ZoneInfo
 
+from google.adk.auth.credential_manager import CredentialManager
 from google.adk.tools import ToolContext
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from .oauth_client import OAuthClient
+from .gcp_auth import get_credential_manager
 from .utils import require_user_id
-
-CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 
 class CalendarTool:
-    """Tool for accessing Google Calendar via the user's personal OAuth token."""
+    """Tool for accessing Google Calendar via IAM connector credentials."""
 
     def __init__(self):
-        self._oauth_client = OAuthClient()
+        self._cred_manager: CredentialManager | None = None
 
-    def _get_service(self, user_id: str):
-        credentials = self._oauth_client.get_google_credentials(
-            user_id, "google", scopes=CALENDAR_SCOPES
-        )
-        if credentials is None:
-            return None, self._oauth_client.get_oauth_link(user_id)
+    def _get_credential_manager(self) -> CredentialManager:
+        if self._cred_manager is None:
+            self._cred_manager = get_credential_manager()
+        return self._cred_manager
 
-        service = build(
-            "calendar",
-            "v3",
-            credentials=credentials,
-            cache_discovery=False,
-        )
-        return service, None
+    async def _get_service(self, tool_context: ToolContext):
+        """Return Calendar service, or None after emitting a credential request."""
+        cred_mgr = self._get_credential_manager()
+        try:
+            credential = await cred_mgr.get_auth_credential(tool_context)
+        except Exception:
+            await cred_mgr.request_credential(tool_context)
+            return None
+        if not credential:
+            await cred_mgr.request_credential(tool_context)
+            return None
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(token=credential.http.credentials.token)
+        return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
     def _format_event(self, event: Dict[str, Any]) -> str:
         """Format a calendar event for display."""
@@ -73,10 +74,7 @@ class CalendarTool:
 
         return result
 
-    def _is_auth_error(self, error: HttpError) -> bool:
-        return getattr(error.resp, "status", None) in (401, 403)
-
-    def list_calendar_events(
+    async def list_calendar_events(
         self,
         start_date: str = None,
         end_date: str = None,
@@ -85,7 +83,7 @@ class CalendarTool:
         tool_context: ToolContext = None,
     ) -> str:
         """List calendar events within a date range."""
-        user_id, err = require_user_id(tool_context, "google")
+        _, err = require_user_id(tool_context, "google")
         if err:
             return err
 
@@ -120,9 +118,9 @@ class CalendarTool:
         except ValueError as e:
             return f"Invalid date format. Please use YYYY-MM-DD. Error: {e}"
 
-        service, auth_link = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return auth_link
+            return ""
 
         try:
             response = (
@@ -147,13 +145,11 @@ class CalendarTool:
             formatted_events = [self._format_event(event) for event in events]
             return f"Found {len(events)} event(s):\n" + "\n".join(formatted_events)
         except HttpError as e:
-            if self._is_auth_error(e):
-                return auth_link
             return f"Error accessing calendar: {e}"
         except Exception as e:
             return f"Error accessing calendar: {e}"
 
-    def create_calendar_event(
+    async def create_calendar_event(
         self,
         title: str,
         start: str,
@@ -165,7 +161,7 @@ class CalendarTool:
         tool_context: ToolContext = None,
     ) -> str:
         """Create a new calendar event."""
-        user_id, err = require_user_id(tool_context, "google")
+        _, err = require_user_id(tool_context, "google")
         if err:
             return err
 
@@ -205,9 +201,9 @@ class CalendarTool:
                 f"Error: {e}"
             )
 
-        service, auth_link = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return auth_link
+            return ""
 
         try:
             created_event = (
@@ -218,13 +214,11 @@ class CalendarTool:
             event_link = created_event.get("htmlLink", "")
             return f"Created event: '{title}' on {start}. Link: {event_link}"
         except HttpError as e:
-            if self._is_auth_error(e):
-                return auth_link
             return f"Error creating event: {e}"
         except Exception as e:
             return f"Error creating event: {e}"
 
-    def update_calendar_event(
+    async def update_calendar_event(
         self,
         event_id: str,
         title: str = None,
@@ -236,13 +230,13 @@ class CalendarTool:
         tool_context: ToolContext = None,
     ) -> str:
         """Update an existing calendar event."""
-        user_id, err = require_user_id(tool_context, "google")
+        _, err = require_user_id(tool_context, "google")
         if err:
             return err
 
-        service, auth_link = self._get_service(user_id)
+        service = await self._get_service(tool_context)
         if service is None:
-            return auth_link
+            return ""
 
         try:
             existing_event = (
@@ -254,8 +248,6 @@ class CalendarTool:
             status = getattr(e.resp, "status", None)
             if status == 404:
                 return f"Event not found: {event_id}"
-            if self._is_auth_error(e):
-                return auth_link
             return f"Error fetching event: {e}"
         except Exception as e:
             return f"Error fetching event: {e}"
@@ -300,28 +292,17 @@ class CalendarTool:
             )
             return f"Updated event: '{existing_event.get('summary', event_id)}'"
         except HttpError as e:
-            if self._is_auth_error(e):
-                return auth_link
             return f"Error updating event: {e}"
         except Exception as e:
             return f"Error updating event: {e}"
 
-    def get_calendar_status(self, tool_context: ToolContext = None) -> str:
+    async def get_calendar_status(self, tool_context: ToolContext = None) -> str:
         """Check if Google Calendar is connected."""
-        user_id, err = require_user_id(tool_context, "google")
+        _, err = require_user_id(tool_context, "google")
         if err:
             return err
 
-        user_token_data = self._oauth_client.get_token_data(user_id, "google")
-        if user_token_data:
-            email = user_token_data.get("email", "Unknown")
-            user_access_token = self._oauth_client.get_valid_access_token(
-                user_id, "google"
-            )
-            if user_access_token:
-                return f"Calendar ({email}) is connected."
-            link = self._oauth_client.get_oauth_link(user_id)
-            return f"Calendar ({email}) connection has expired. Re-authorize:\n{link}"
-
-        link = self._oauth_client.get_oauth_link(user_id)
-        return f"Calendar is not connected. Authorize here:\n{link}"
+        service = await self._get_service(tool_context)
+        if service is None:
+            return ""
+        return "Google Calendar is connected."

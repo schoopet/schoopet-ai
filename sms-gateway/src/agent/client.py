@@ -1,6 +1,6 @@
 """Vertex AI Agent Engine client wrapper."""
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import time
 from typing import Any, Union
@@ -14,6 +14,26 @@ logger = logging.getLogger(__name__)
 
 class _TokenExpiredError(Exception):
     """Internal signal that the Vertex AI access token expired mid-stream."""
+
+
+@dataclass(frozen=True)
+class AdkCredentialRequest:
+    """An adk_request_credential function call extracted from an event stream."""
+
+    function_call_id: str
+    original_function_call_id: str
+    auth_uri: str
+    nonce: str
+    auth_config_dict: dict
+
+    def to_firestore(self) -> dict[str, Any]:
+        return {
+            "function_call_id": self.function_call_id,
+            "original_function_call_id": self.original_function_call_id,
+            "auth_uri": self.auth_uri,
+            "nonce": self.nonce,
+            "auth_config_dict": self.auth_config_dict,
+        }
 
 
 @dataclass(frozen=True)
@@ -307,6 +327,69 @@ class AgentEngineClient:
                     )
                 )
         return confirmations
+
+    @staticmethod
+    def extract_credential_requests(events: list[Event]) -> list[AdkCredentialRequest]:
+        """Extract adk_request_credential function calls from events."""
+        requests: list[AdkCredentialRequest] = []
+        for event in events:
+            for function_call in event.get_function_calls() or []:
+                logger.info(f"[cred-extract] fc.name={function_call.name!r} fc.id={function_call.id!r} args_keys={list((function_call.args or {}).keys())}")
+                if function_call.name != "adk_request_credential":
+                    continue
+                args = function_call.args or {}
+                logger.info(f"[cred-extract] raw args={str(args)[:500]}")
+                fc_id = str(function_call.id or "")
+                original_fc_id = str(args.get("functionCallId") or args.get("function_call_id") or "")
+                auth_config = args.get("authConfig") or args.get("auth_config") or {}
+                logger.info(f"[cred-extract] auth_config type={type(auth_config).__name__} keys={list(auth_config.keys()) if isinstance(auth_config, dict) else 'not-dict'}")
+                if isinstance(auth_config, dict):
+                    auth_config_dict = auth_config
+                else:
+                    try:
+                        auth_config_dict = dict(auth_config)
+                    except Exception:
+                        auth_config_dict = {}
+                exchanged = (auth_config_dict.get("exchangedAuthCredential")
+                             or auth_config_dict.get("exchanged_auth_credential") or {})
+                oauth2 = exchanged.get("oauth2") or {}
+                auth_uri = str(oauth2.get("auth_uri") or oauth2.get("authUri") or "")
+                nonce = str(oauth2.get("nonce") or "")
+                logger.info(f"[cred-extract] exchanged_keys={list(exchanged.keys())} oauth2_keys={list(oauth2.keys())} auth_uri={auth_uri[:60] if auth_uri else 'EMPTY'}")
+                if not auth_uri:
+                    continue
+                requests.append(
+                    AdkCredentialRequest(
+                        function_call_id=fc_id,
+                        original_function_call_id=original_fc_id,
+                        auth_uri=auth_uri,
+                        nonce=nonce,
+                        auth_config_dict=auth_config_dict,
+                    )
+                )
+        return requests
+
+    async def send_credential_response(
+        self,
+        user_id: str,
+        session_id: str,
+        credential_function_call_id: str,
+        auth_config_dict: dict,
+    ) -> list[Event]:
+        """Resume an agent session after IAM connector consent is complete."""
+        content = types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        name="adk_request_credential",
+                        id=credential_function_call_id,
+                        response=auth_config_dict,
+                    )
+                )
+            ],
+        )
+        return await self.send_message_events(user_id, session_id, content)
 
     @staticmethod
     def _coerce_event(event: dict) -> Event:

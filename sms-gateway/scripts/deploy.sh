@@ -99,11 +99,29 @@ fi
 echo ""
 echo "Applying Terraform..."
 TFVARS_FILE="$TF_DIR/environments/${ENV_NAME}.tfvars"
+
+# Build optional -var flags for secrets loaded from the secrets env file
+OAUTH_VARS=""
+if [ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" ]; then
+    OAUTH_VARS="$OAUTH_VARS -var=google_oauth_client_id=${GOOGLE_OAUTH_CLIENT_ID}"
+fi
+if [ -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]; then
+    OAUTH_VARS="$OAUTH_VARS -var=google_oauth_client_secret=${GOOGLE_OAUTH_CLIENT_SECRET}"
+fi
+if [ -n "${IAM_CONNECTOR_GOOGLE_PERSONAL_NAME:-}" ]; then
+    OAUTH_VARS="$OAUTH_VARS -var=iam_connector_google_personal_name=${IAM_CONNECTOR_GOOGLE_PERSONAL_NAME}"
+fi
+if [ -n "${SMS_GATEWAY_URL:-}" ]; then
+    OAUTH_VARS="$OAUTH_VARS -var=sms_gateway_url=${SMS_GATEWAY_URL}"
+fi
+
 if [ ! -f "$TFVARS_FILE" ]; then
     echo "Warning: $TFVARS_FILE not found, running terraform without -var-file"
-    (cd "$TF_DIR" && terraform apply -auto-approve)
+    # shellcheck disable=SC2086
+    (cd "$TF_DIR" && terraform apply -auto-approve $OAUTH_VARS)
 else
-    (cd "$TF_DIR" && terraform apply -auto-approve -var-file="$TFVARS_FILE" -var="sms_gateway_image=$IMAGE_REF")
+    # shellcheck disable=SC2086
+    (cd "$TF_DIR" && terraform apply -auto-approve -var-file="$TFVARS_FILE" -var="sms_gateway_image=$IMAGE_REF" $OAUTH_VARS)
 fi
 
 echo ""

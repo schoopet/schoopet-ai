@@ -58,17 +58,18 @@ GEMINI_SUPPORTED_MIME_TYPES: frozenset[str] = frozenset({
 
 
 class EmailTool:
-    """Agent tool for email reading and rule management using personal Gmail OAuth token."""
+    """Agent tool for email reading and rule management using IAM connector credentials."""
 
     def __init__(self):
-        self._oauth_client = None
+        self._cred_manager = None
         self._firestore_client = None
 
-    def _get_oauth_client(self):
-        if self._oauth_client is None:
-            from .oauth_client import OAuthClient
-            self._oauth_client = OAuthClient()
-        return self._oauth_client
+    def _get_credential_manager(self):
+        if self._cred_manager is None:
+            from .gcp_auth import get_credential_manager
+            from google.adk.auth.credential_manager import CredentialManager
+            self._cred_manager = get_credential_manager()
+        return self._cred_manager
 
     def _get_firestore(self):
         if self._firestore_client is None:
@@ -78,23 +79,22 @@ class EmailTool:
                 self._firestore_client = firestore.Client(project=project)
         return self._firestore_client
 
-    # ── Token helpers ──────────────────────────────────────────────────────
+    # ── Credential helpers ─────────────────────────────────────────────────
 
-    def _get_gmail_service(self, phone: str):
-        credentials = self._get_oauth_client().get_google_credentials(
-            phone, "google", scopes=GMAIL_SCOPES
-        )
-        if credentials is None:
+    async def _get_gmail_service(self, tool_context):
+        """Return Gmail service, or None after emitting a credential request."""
+        cred_mgr = self._get_credential_manager()
+        try:
+            credential = await cred_mgr.get_auth_credential(tool_context)
+        except Exception:
+            await cred_mgr.request_credential(tool_context)
             return None
-        return build("gmail", "v1", credentials=credentials, cache_discovery=False)
-
-    def _token_missing_message(self, phone: str) -> str:
-        """Return the auth-link message when no token exists."""
-        link = self._get_oauth_client().get_oauth_link(phone)
-        return (
-            f"Your Gmail is not connected yet. "
-            f"Click this link to authorize email access:\n{link}"
-        )
+        if not credential:
+            await cred_mgr.request_credential(tool_context)
+            return None
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(token=credential.http.credentials.token)
+        return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
     # ── Firestore rule helpers ─────────────────────────────────────────────
 
@@ -128,6 +128,31 @@ class EmailTool:
             .execute()
         )
         return response.get("messages", [])
+
+    def _gmail_history(self, service, since_history_id: str, max_results: int) -> list[dict]:
+        """Return primary-inbox messages added since since_history_id via the History API."""
+        response = (
+            service.users()
+            .history()
+            .list(
+                userId="me",
+                startHistoryId=since_history_id,
+                historyTypes=["messageAdded"],
+                labelId="CATEGORY_PRIMARY",
+                maxResults=max_results,
+            )
+            .execute()
+        )
+        seen = set()
+        messages = []
+        for record in response.get("history", []):
+            for added in record.get("messagesAdded", []):
+                msg = added.get("message", {})
+                mid = msg.get("id", "")
+                if mid and mid not in seen:
+                    seen.add(mid)
+                    messages.append({"id": mid})
+        return messages
 
     def _gmail_fetch(self, service, message_id: str) -> Optional[dict]:
         """Fetch a single message with full body and attachment parts."""
@@ -268,10 +293,11 @@ class EmailTool:
 
     # ── Public tool methods ────────────────────────────────────────────────
 
-    def read_emails(
+    async def read_emails(
         self,
         query: str = "",
         max_results: int = 10,
+        since_history_id: str = "",
         tool_context: ToolContext = None,
     ) -> str:
         """
@@ -282,20 +308,25 @@ class EmailTool:
 
         Args:
             query: Gmail search query (e.g., "is:unread", "from:boss@company.com").
+                   Defaults to primary inbox only (excludes Promotions/Social/Updates tabs).
             max_results: Maximum number of emails to return (default: 10).
+            since_history_id: If set, return only messages added since this Gmail
+                              history ID (used for incremental notification processing).
         """
-        phone, err = require_user_id(tool_context, "email")
+        _, err = require_user_id(tool_context, "email")
         if err:
             return err
 
-        service = self._get_gmail_service(phone)
+        service = await self._get_gmail_service(tool_context)
         if not service:
-            return self._token_missing_message(phone)
-
-        full_query = query or "in:inbox"
+            return ""
 
         try:
-            messages = self._gmail_search(service, full_query, max_results)
+            if since_history_id:
+                messages = self._gmail_history(service, since_history_id, max_results)
+            else:
+                full_query = query or "in:inbox category:primary"
+                messages = self._gmail_search(service, full_query, max_results)
         except HttpError as e:
             return f"Error searching emails: {e}"
         except Exception as e:
@@ -354,12 +385,12 @@ class EmailTool:
             Formatted email with body and attachment artifact keys,
             or an error message.
         """
-        user_id, err = require_user_id(tool_context, "email")
+        _, err = require_user_id(tool_context, "email")
         if err:
             return err
-        service = self._get_gmail_service(user_id)
+        service = await self._get_gmail_service(tool_context)
         if not service:
-            return self._token_missing_message(user_id or "")
+            return ""
 
         try:
             raw = self._gmail_fetch(service, message_id)
@@ -481,7 +512,7 @@ class EmailTool:
 
     # ── Unified email rule tools ───────────────────────────────────────────
 
-    def get_gmail_status(
+    async def get_gmail_status(
         self,
         tool_context: ToolContext = None,
     ) -> str:
@@ -491,19 +522,14 @@ class EmailTool:
         Checks the current user's Gmail connection.
 
         Returns:
-            Status string. If not connected, includes an authorization link.
+            Status string. If not connected, emits a credential request.
         """
-        phone, err = require_user_id(tool_context, "gmail status")
+        _, err = require_user_id(tool_context, "gmail status")
         if err:
             return err
-        token = self._get_oauth_client().get_valid_access_token(phone, "google")
-        if not token:
-            link = self._get_oauth_client().get_oauth_link(phone)
-            return (
-                f"Your Gmail is not connected. "
-                f"Click this link to authorize:\n{link}\n\n"
-                f"Once authorized, I'll automatically monitor your inbox and act on emails according to your rules."
-            )
+        service = await self._get_gmail_service(tool_context)
+        if service is None:
+            return ""
         return "Your Gmail is connected. I'm monitoring your inbox for new emails."
 
     def add_email_rule(

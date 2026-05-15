@@ -34,12 +34,6 @@ class Settings(BaseSettings):
     DISCORD_PUBLIC_KEY: str = ""      # Ed25519 public key from Discord Developer Portal
     DISCORD_APPLICATION_ID: str = ""  # Discord application (client) ID
 
-    # OAuth Configuration
-    GOOGLE_OAUTH_CLIENT_ID: str = ""
-    GOOGLE_OAUTH_CLIENT_SECRET: str = ""
-    GOOGLE_OAUTH_REDIRECT_URI: str = ""  # e.g., https://sms-gateway-xxx.run.app/oauth/google/callback
-    OAUTH_STATE_TTL_SECONDS: int = 600  # 10 minutes
-    
     # Email configuration
     EMAIL_PUBSUB_TOPIC: str = ""  # Full Pub/Sub topic name for Gmail watch
     EMAIL_DRIVE_FOLDER_ID: str = ""  # Default Drive folder for email attachments
@@ -47,6 +41,10 @@ class Settings(BaseSettings):
 
     # Artifact registry
     ARTIFACT_BUCKET_NAME: str = ""  # GCS bucket for email attachment binaries; computed from project if unset
+
+    # IAM Connector auth (agent-identity migration)
+    IAM_CONNECTOR_GOOGLE_PERSONAL_NAME: str = ""  # projects/{proj}/locations/global/connectors/{id}
+    IAM_CONNECTOR_CONTINUE_URI: str = ""  # https://{gateway_url}/oauth/connector/callback
 
     # Scopes per feature.
     # "google" — all personal-user scopes (calendar, drive, docs, sheets, gmail)

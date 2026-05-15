@@ -245,6 +245,23 @@ class SchoopetGateway(discord.Client):
         for chunk in _split_message(response_text):
             await channel.send(chunk)
 
+    async def _send_auth_link(self, channel, auth_uri: str, nonce: str) -> None:
+        from ..config import get_settings
+        settings = get_settings()
+        short_url = f"{settings.SMS_GATEWAY_URL}/oauth/authorize?nonce={nonce}"
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(
+            label="Authorize Google Account",
+            style=discord.ButtonStyle.link,
+            url=short_url,
+            emoji="🔗",
+        ))
+        await channel.send(
+            "I need access to your Google account to use this feature. "
+            "Click the button below to authorize:",
+            view=view,
+        )
+
     async def _store_and_send_confirmations(
         self,
         user_id: str,
@@ -335,6 +352,29 @@ class SchoopetGateway(discord.Client):
                 await self._send_channel_text(
                     channel,
                     "I'm taking longer than usual to respond. Please try again in a moment.",
+                )
+                return
+
+            credential_requests = self._agent_client.extract_credential_requests(events)
+            if credential_requests:
+                req = credential_requests[0]
+                logger.info(
+                    f"IAM connector credential request for Discord gateway user {user_id}: "
+                    f"nonce={req.nonce[:8]}..., fc_id={req.function_call_id}"
+                )
+                await self._session_manager.set_pending_credential(
+                    nonce=req.nonce,
+                    user_id=user_id,
+                    session_id=session_info.agent_session_id,
+                    credential_function_call_id=req.function_call_id,
+                    auth_config_dict=req.auth_config_dict,
+                    auth_uri=req.auth_uri,
+                )
+                await self._send_auth_link(channel, req.auth_uri, req.nonce)
+                await self._session_manager.update_last_activity(
+                    user_id,
+                    channel="discord",
+                    session_scope=discord_context.session_scope,
                 )
                 return
 

@@ -1,6 +1,8 @@
 import os
 
 from vertexai.agent_engines.templates.adk import AdkApp
+from . import gcp_auth as _gcp_auth  # noqa: F401 — registers GcpAuthProvider
+from .adc_diagnostic_tool import get_adc_token_info
 from .memory_tool import save_memory, save_multiple_memories, save_session_to_memory
 from .calendar_tool import CalendarTool
 from .preferences_tool import PreferencesTool
@@ -128,15 +130,15 @@ def _personal_prompt() -> str:
         "- update_calendar_event(event_id, title, start, end, description, location, user_timezone)\n"
         "- get_calendar_status()\n\n"
         "Use for scheduling, checking availability, and managing events. "
-        "Always pass the user's timezone. If calendar is not connected, share the authorization link.\n\n"
+        "Always pass the user's timezone. If a tool returns empty, Google authorization is being requested — do not say anything, the user is being prompted to authorize.\n\n"
 
         "## Google Drive\n"
         "- save_file_to_drive(filename, content, folder_id): Save text content\n"
         "- save_attachment_to_drive(artifact_filename, drive_filename, folder_id): Save binary files\n"
         "- list_drive_files(folder_id, query, max_results): List files\n"
         "- get_drive_status(): Check connection\n\n"
-        "Drive and Sheets share one Google authorization. "
-        "If not connected, the tool returns a single auth link covering both.\n\n"
+        "Drive, Sheets, and Docs share one Google authorization. "
+        "If a tool returns empty, authorization is being requested — stay silent, the user will receive a consent link.\n\n"
 
         "## Google Docs\n"
         "- create_google_doc(title, content, folder_id)\n"
@@ -219,8 +221,9 @@ def _personal_prompt() -> str:
         "You can monitor the user's Gmail inbox and proactively act on incoming emails.\n\n"
 
         "**Setup:**\n"
-        "- get_gmail_status(): Check if Gmail is connected; returns auth link if not\n"
-        "When the user asks to monitor or connect their email, call this first.\n\n"
+        "- get_gmail_status(): Check if Gmail is connected\n"
+        "When the user asks to monitor or connect their email, call this first. "
+        "If it returns empty, a consent link is being sent to the user — do not add any message.\n\n"
 
         "**Reading emails on demand:**\n"
         "- read_emails(query, max_results): Search your Gmail inbox\n"
@@ -338,6 +341,7 @@ def create_agent(
     get_cloud_task_status_tool = FunctionTool(func=task_debug_tool.get_cloud_task_status)
     list_scheduled_tasks_tool = FunctionTool(func=task_debug_tool.list_scheduled_tasks)
     debug_task_tool = FunctionTool(func=task_debug_tool.debug_task)
+    adc_diagnostic_tool = FunctionTool(func=get_adc_token_info)
 
     # Initialize Search Subagent (handles Google Search)
     search_agent = create_search_agent(
@@ -406,6 +410,7 @@ def create_agent(
         get_cloud_task_status_tool,
         list_scheduled_tasks_tool,
         debug_task_tool,
+        adc_diagnostic_tool,
     ]
 
     email_tool = EmailTool()

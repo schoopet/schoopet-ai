@@ -71,6 +71,7 @@ def email_services(monkeypatch):
     discord_sender = AsyncMock()
     agent_client.extract_text = AgentEngineClient.extract_text
     agent_client.extract_confirmation_requests = AgentEngineClient.extract_confirmation_requests
+    agent_client.extract_credential_requests = AgentEngineClient.extract_credential_requests
 
     monkeypatch.setattr(handler, "_agent_client", agent_client)
     monkeypatch.setattr(handler, "_session_manager", session_manager)

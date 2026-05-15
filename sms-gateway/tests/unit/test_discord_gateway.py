@@ -137,6 +137,7 @@ def gateway_services():
     agent_client = AsyncMock()
     agent_client.extract_text = AgentEngineClient.extract_text
     agent_client.extract_confirmation_requests = AgentEngineClient.extract_confirmation_requests
+    agent_client.extract_credential_requests = AgentEngineClient.extract_credential_requests
     gateway = SchoopetGateway(session_manager, agent_client)
     return gateway, session_manager, agent_client
 
