@@ -169,6 +169,9 @@ class _ConfirmationView(discord.ui.View):
 class SchoopetGateway(discord.Client):
     """Discord gateway client that routes DMs and @mentions to the agent."""
 
+    # Fix 3: bounded set of recently processed message IDs to drop Discord duplicates
+    _SEEN_IDS_MAX = 500
+
     def __init__(self, session_manager, agent_client, rate_limiter=None):
         intents = discord.Intents.none()
         intents.dm_messages = True       # receive DMs (not privileged)
@@ -178,6 +181,7 @@ class SchoopetGateway(discord.Client):
         self._session_manager = session_manager
         self._agent_client = agent_client
         self._rate_limiter = rate_limiter
+        self._seen_message_ids: set[int] = set()
 
     async def on_ready(self):
         logger.info(f"Discord gateway connected: {self.user} (id={self.user.id})")
@@ -186,6 +190,14 @@ class SchoopetGateway(discord.Client):
         # Never respond to ourselves
         if message.author == self.user or message.author.bot:
             return
+
+        # Fix 3: drop duplicate deliveries (can occur after WebSocket reconnects)
+        if message.id in self._seen_message_ids:
+            logger.warning(f"Duplicate message {message.id} ignored")
+            return
+        if len(self._seen_message_ids) >= self._SEEN_IDS_MAX:
+            self._seen_message_ids.pop()
+        self._seen_message_ids.add(message.id)
 
         is_mention = self.user in message.mentions
 
@@ -202,27 +214,17 @@ class SchoopetGateway(discord.Client):
         if not text and not message.attachments:
             return
 
+        # Fix 1: build context once and reuse for both logging and the handler
+        discord_context = context_from_discord_channel(message.channel)
         user_id = str(message.author.id)
         logger.info(
             f"Discord gateway message: user={user_id} "
-            f"scope={context_from_discord_channel(message.channel).session_scope} "
+            f"scope={discord_context.session_scope} "
             f"len={len(text)} "
             f"attachments={len(message.attachments)}"
         )
 
-        try:
-            content = await _build_discord_message_content(text, message.attachments)
-        except ValueError as e:
-            await message.channel.send(str(e))
-            return
-        except Exception as e:
-            logger.exception(f"Failed to read Discord attachments for user {user_id}: {e}")
-            await message.channel.send(
-                "I couldn't read one of your attachments. Please try again."
-            )
-            return
-
-        # Fire typing indicator as a background task so it never blocks message processing.
+        # Fix 2: start typing before downloading attachments so the user sees feedback immediately
         async def _keep_typing():
             try:
                 async with message.channel.typing():
@@ -232,11 +234,25 @@ class SchoopetGateway(discord.Client):
 
         typing_task = asyncio.create_task(_keep_typing())
         try:
+            content = await _build_discord_message_content(text, message.attachments)
+        except ValueError as e:
+            typing_task.cancel()
+            await message.channel.send(str(e))
+            return
+        except Exception as e:
+            typing_task.cancel()
+            logger.exception(f"Failed to read Discord attachments for user {user_id}: {e}")
+            await message.channel.send(
+                "I couldn't read one of your attachments. Please try again."
+            )
+            return
+
+        try:
             await self._handle_gateway_message(
                 user_id,
                 content,
                 message.channel,
-                discord_context=context_from_discord_channel(message.channel),
+                discord_context=discord_context,
             )
         finally:
             typing_task.cancel()
@@ -246,9 +262,13 @@ class SchoopetGateway(discord.Client):
             await channel.send(chunk)
 
     async def _send_auth_link(self, channel, auth_uri: str, nonce: str) -> None:
+        from urllib.parse import urlparse
         from ..config import get_settings
         settings = get_settings()
-        short_url = f"{settings.SMS_GATEWAY_URL}/oauth/authorize?nonce={nonce}"
+        continue_uri = settings.IAM_CONNECTOR_CONTINUE_URI
+        parsed = urlparse(continue_uri)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        short_url = f"{base_url}/oauth/authorize?nonce={nonce}"
         view = discord.ui.View()
         view.add_item(discord.ui.Button(
             label="Authorize Google Account",
@@ -479,13 +499,14 @@ class SchoopetGateway(discord.Client):
 
             new_confirmations = self._agent_client.extract_confirmation_requests(all_events)
             if new_confirmations:
+                # Fix 4: send chained confirmations to the channel, not interaction.followup
+                # (interaction tokens expire after 15 min; channel.send has no such limit)
                 await self._store_and_send_confirmations(
                     user_id=user_id,
                     confirmations=new_confirmations,
                     session_id=pending["agent_session_id"],
-                    channel=None,
+                    channel=interaction.channel,
                     session_scope=session_scope,
-                    followup=interaction.followup,
                 )
             else:
                 response = self._agent_client.extract_text(all_events)

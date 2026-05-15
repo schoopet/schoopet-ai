@@ -528,6 +528,26 @@ class SessionManager:
             logger.error(f"Failed to get pending credential for nonce {nonce[:8]}...: {e}")
             return None
 
+    async def get_latest_pending_credential(self) -> Optional[tuple[str, dict]]:
+        """Return (nonce, data) for the most recently created pending credential.
+
+        Used when the IAM connector callback does not echo the nonce back
+        (it sends user_id_validation_state instead, which is opaque to us).
+        Safe for single-user deployments.
+        """
+        try:
+            query = (
+                self._db.collection(PENDING_CREDENTIALS_COLLECTION)
+                .order_by("created_at", direction=firestore.Query.DESCENDING)
+                .limit(1)
+            )
+            async for doc in query.stream():
+                return doc.id, doc.to_dict()
+            return None, None
+        except Exception as e:
+            logger.error(f"Failed to get latest pending credential: {e}")
+            return None, None
+
     async def clear_pending_credential(self, nonce: str) -> None:
         """Remove a pending credential record."""
         try:

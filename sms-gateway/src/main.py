@@ -109,6 +109,7 @@ async def lifespan(app: FastAPI):
     init_oauth_services(
         session_manager=session_manager,
         agent_client=agent_client,
+        discord_sender=discord_sender,
     )
     logger.info("OAuth connector callback initialized")
 

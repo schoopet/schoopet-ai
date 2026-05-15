@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from ..auth.connector import finalize_iam_credentials
 from ..email.handler import register_gmail_watch
 from ..email.gmail_client import get_gmail_token, get_user_profile
 
@@ -14,13 +15,15 @@ router = APIRouter(prefix="/oauth", tags=["oauth"])
 
 _session_manager = None
 _agent_client = None
+_discord_sender = None
 
 
-def init_oauth_services(session_manager=None, agent_client=None):
+def init_oauth_services(session_manager=None, agent_client=None, discord_sender=None):
     """Initialize OAuth services for the handler."""
-    global _session_manager, _agent_client
+    global _session_manager, _agent_client, _discord_sender
     _session_manager = session_manager
     _agent_client = agent_client
+    _discord_sender = discord_sender
 
 
 def _success_html(email: str, service_name: str = "Google Calendar") -> str:
@@ -149,6 +152,8 @@ async def oauth_authorize(nonce: str = Query(..., description="Pending credentia
 async def connector_callback(
     state: str = Query(None, description="Nonce from IAM connector consent flow"),
     nonce: str = Query(None, description="Alternate nonce parameter"),
+    user_id_validation_state: str = Query(None, description="Opaque state from IAM connector (no nonce echoed)"),
+    connector_name: str = Query(None, description="Connector resource name from IAM connector"),
     error: str = Query(None),
     error_description: str = Query(None),
 ):
@@ -156,11 +161,6 @@ async def connector_callback(
     if error:
         logger.warning(f"IAM connector callback error: {error} - {error_description}")
         return HTMLResponse(_error_html(error_description or error), status_code=400)
-
-    consent_nonce = state or nonce
-    if not consent_nonce:
-        logger.warning("IAM connector callback: missing state/nonce parameter")
-        return HTMLResponse(_error_html("Missing authorization state."), status_code=400)
 
     if not _session_manager:
         logger.error("IAM connector callback: session manager not initialized")
@@ -170,13 +170,34 @@ async def connector_callback(
         logger.error("IAM connector callback: agent client not initialized")
         return HTMLResponse(_error_html("Service not initialized."), status_code=503)
 
-    pending = await _session_manager.get_pending_credential(consent_nonce)
-    if not pending:
-        logger.warning(f"IAM connector callback: no pending credential for nonce {consent_nonce[:8]}...")
-        return HTMLResponse(
-            _error_html("Authorization session not found or already completed."),
-            status_code=400,
+    consent_nonce = state or nonce
+    needs_finalize = False
+
+    if consent_nonce:
+        pending = await _session_manager.get_pending_credential(consent_nonce)
+        if not pending:
+            logger.warning(f"IAM connector callback: no pending credential for nonce {consent_nonce[:8]}...")
+            return HTMLResponse(
+                _error_html("Authorization session not found or already completed."),
+                status_code=400,
+            )
+    elif user_id_validation_state:
+        # IAM connector does not echo the nonce — look up the most recent pending credential.
+        logger.info(
+            f"IAM connector callback via user_id_validation_state "
+            f"(connector={connector_name or 'unknown'})"
         )
+        consent_nonce, pending = await _session_manager.get_latest_pending_credential()
+        if not pending:
+            logger.warning("IAM connector callback: no pending credential found")
+            return HTMLResponse(
+                _error_html("No pending authorization found. Please try again."),
+                status_code=400,
+            )
+        needs_finalize = True
+    else:
+        logger.warning("IAM connector callback: no state, nonce, or user_id_validation_state")
+        return HTMLResponse(_error_html("Missing authorization state."), status_code=400)
 
     user_id = pending.get("user_id", "")
     session_id = pending.get("session_id", "")
@@ -185,11 +206,29 @@ async def connector_callback(
 
     logger.info(
         f"IAM connector consent complete for user {user_id[:4]}****, "
-        f"session={session_id}, nonce={consent_nonce[:8]}..."
+        f"session={session_id}, nonce={consent_nonce[:8] if consent_nonce else 'n/a'}..."
     )
 
+    # Call credentials:finalize to store the token in the IAM connector backend.
+    # Required per the IAM connector 3LO spec — without this the credential is
+    # not stored and subsequent get_auth_credential calls keep returning None.
+    if needs_finalize:
+        effective_connector = connector_name or pending.get("auth_config_dict", {}).get(
+            "authScheme", {}
+        ).get("name", "")
+        try:
+            await finalize_iam_credentials(
+                connector_name=effective_connector,
+                user_id=user_id,
+                consent_nonce=consent_nonce,
+                user_id_validation_state=user_id_validation_state,
+            )
+        except Exception as e:
+            logger.error(f"credentials:finalize failed for {user_id[:4]}****: {e}")
+            return HTMLResponse(_error_html("Failed to finalize authorization. Please try again."), status_code=500)
+
     try:
-        await _agent_client.send_credential_response(
+        events = await _agent_client.send_credential_response(
             user_id=user_id,
             session_id=session_id,
             credential_function_call_id=credential_fc_id,
@@ -200,6 +239,17 @@ async def connector_callback(
         return HTMLResponse(_error_html("Failed to resume your session. Please try again."), status_code=500)
 
     await _session_manager.clear_pending_credential(consent_nonce)
+
+    # Forward the agent's post-consent response to the user via Discord DM.
+    if _discord_sender and events:
+        from ..agent.client import AgentEngineClient
+        response_text = AgentEngineClient.extract_text(events)
+        if response_text:
+            try:
+                await _discord_sender.send(user_id, response_text)
+                logger.info(f"Forwarded post-consent agent response to Discord user {user_id[:4]}****")
+            except Exception as e:
+                logger.warning(f"Failed to forward post-consent response to Discord for {user_id[:4]}****: {e}")
 
     # Register Gmail watch now that a token is available
     gmail_address = ""
