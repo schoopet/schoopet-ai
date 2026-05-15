@@ -390,12 +390,6 @@ async def _send_response(user_id: str, message: str) -> None:
         logger.error(f"Failed to send email response via Discord: {e}")
 
 
-def _extract_email_address(raw: str) -> str:
-    """Extract the bare email from strings like 'Name <email@example.com>'."""
-    if "<" in raw and ">" in raw:
-        return raw.split("<")[1].split(">")[0].strip().lower()
-    return raw.strip().lower()
-
 
 async def register_gmail_watch(
     user_id: str,

@@ -1,20 +1,15 @@
 """Discord interaction webhook handler."""
-import asyncio
 import json
 import logging
-import time
-from typing import Union
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse
-from google.genai import types
 
 from ..config import get_settings
 from ..messages import RATE_LIMIT_MSG
 from .context import (
     DiscordContext,
     build_discord_context,
-    wrap_message_with_discord_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,36 +59,6 @@ def _context_from_interaction(data: dict) -> DiscordContext:
         channel_name=channel_name,
     )
 
-
-async def _get_pending_approval(user_id: str, pending_id: str, session_scope: str = ""):
-    if session_scope:
-        return await _session_manager.get_pending_approval(
-            user_id,
-            pending_id,
-            session_scope=session_scope,
-        )
-    return await _session_manager.get_pending_approval(user_id, pending_id)
-
-
-async def _get_pending_approval_group(user_id: str, pending_id: str, session_scope: str = ""):
-    if session_scope:
-        return await _session_manager.get_pending_approval_group(
-            user_id,
-            pending_id,
-            session_scope=session_scope,
-        )
-    return await _session_manager.get_pending_approval_group(user_id, pending_id)
-
-
-async def _clear_pending_approval_group(user_id: str, pending_id: str, session_scope: str = ""):
-    if session_scope:
-        await _session_manager.clear_pending_approval_group(
-            user_id,
-            pending_id,
-            session_scope=session_scope,
-        )
-        return
-    await _session_manager.clear_pending_approval_group(user_id, pending_id)
 
 
 @router.post("/webhook/discord")
@@ -155,10 +120,10 @@ async def handle_discord_webhook(
                 },
             })
 
-        pending = await _get_pending_approval(
+        pending = await _session_manager.get_pending_approval(
             user_id,
             pending_id,
-            session_scope=discord_context.session_scope,
+            session_scope=discord_context.session_scope or None,
         )
         if not pending:
             return JSONResponse({
@@ -205,10 +170,10 @@ async def process_discord_confirmation_component(
 ) -> None:
     """Resolve an ADK confirmation from a Discord component webhook."""
     try:
-        pending = await _get_pending_approval(
+        pending = await _session_manager.get_pending_approval(
             user_id,
             pending_id,
-            session_scope=session_scope,
+            session_scope=session_scope or None,
         )
         if not pending:
             await _discord_sender.send_followup(
@@ -217,10 +182,10 @@ async def process_discord_confirmation_component(
             )
             return
 
-        pending_group = await _get_pending_approval_group(
+        pending_group = await _session_manager.get_pending_approval_group(
             user_id,
             pending_id,
-            session_scope=session_scope,
+            session_scope=session_scope or None,
         )
         if not pending_group:
             pending_group = [pending]
@@ -235,10 +200,10 @@ async def process_discord_confirmation_component(
             )
             all_events.extend(events)
 
-        await _clear_pending_approval_group(
+        await _session_manager.clear_pending_approval_group(
             user_id,
             pending_id,
-            session_scope=session_scope,
+            session_scope=session_scope or None,
         )
 
         response = _agent_client.extract_text(all_events)
@@ -260,107 +225,3 @@ async def process_discord_confirmation_component(
             logger.error(f"Failed to send Discord confirmation error followup: {send_err}")
 
 
-async def _handle_discord_message(
-    user_id: str,
-    message: Union[str, types.Content],
-    reply_fn,
-    discord_context: DiscordContext | None = None,
-) -> None:
-    """Shared processing pipeline for all Discord message sources.
-
-    Used by the gateway DM/mention handler. The caller provides a reply_fn
-    coroutine that delivers the response via the appropriate Discord mechanism.
-
-    Flow:
-    1. Check rate limit.
-    2. Get or create agent session.
-    3. Query the agent (events).
-    4. Handle credential requests, confirmations, or text response.
-    """
-    start_time = time.time()
-    discord_context = discord_context or build_discord_context(channel_id="")
-
-    try:
-        # Check rate limit
-        if _rate_limiter:
-            is_allowed, count = await _rate_limiter.check_and_increment(user_id)
-            if not is_allowed:
-                logger.warning(
-                    f"Rate limit exceeded for Discord user {user_id}: {count} messages today"
-                )
-                await reply_fn(RATE_LIMIT_MSG)
-                return
-
-        # Get or create agent session
-        session_info = await _session_manager.get_or_create_session(
-            user_id,
-            channel="discord",
-            session_scope=discord_context.session_scope,
-            state_extra=discord_context.state_extra,
-        )
-        logger.info(
-            f"Forwarding to agent for Discord user {user_id}: "
-            f"session={session_info.agent_session_id}, "
-            f"scope={discord_context.session_scope}, "
-            f"is_new_session={session_info.is_new_session}"
-        )
-
-        # Query the agent
-        try:
-            events = await _agent_client.send_message_events(
-                user_id=user_id,
-                session_id=session_info.agent_session_id,
-                message=wrap_message_with_discord_context(message, discord_context),
-            )
-        except asyncio.TimeoutError:
-            logger.error(f"Agent timeout for Discord user {user_id}")
-            await reply_fn("I'm taking longer than usual to respond. Please try again in a moment.")
-            return
-
-        # Handle IAM connector credential requests (user consent required)
-        credential_requests = _agent_client.extract_credential_requests(events)
-        if credential_requests:
-            req = credential_requests[0]
-            logger.info(
-                f"IAM connector credential request for Discord user {user_id}: "
-                f"nonce={req.nonce[:8]}..., fc_id={req.function_call_id}"
-            )
-            await _session_manager.set_pending_credential(
-                nonce=req.nonce,
-                user_id=user_id,
-                session_id=session_info.agent_session_id,
-                credential_function_call_id=req.function_call_id,
-                auth_config_dict=req.auth_config_dict,
-                auth_uri=req.auth_uri,
-            )
-            await reply_fn(
-                f"To use this feature I need access to your Google account. "
-                f"Click here to authorize:\n{req.auth_uri}"
-            )
-            return
-
-        response = _agent_client.extract_text(events)
-        if not response:
-            logger.warning(f"Empty response from agent for Discord user {user_id}")
-            await reply_fn("I couldn't generate a response. Please try again.")
-            return
-
-        await reply_fn(response)
-        await _session_manager.update_last_activity(
-            user_id,
-            channel="discord",
-            session_scope=discord_context.session_scope,
-        )
-
-        processing_time = (time.time() - start_time) * 1000
-        logger.info(
-            f"Processed Discord message in {processing_time:.0f}ms: "
-            f"response sent to {user_id} ({len(response)} chars)"
-        )
-
-    except Exception as e:
-        logger.exception(f"Error processing Discord message for {user_id}: {e}")
-        try:
-            await reply_fn("Something went wrong. Please try again.")
-        except Exception as send_err:
-            logger.error(f"Failed to send error reply to Discord user {user_id}: {send_err}")

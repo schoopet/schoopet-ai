@@ -173,8 +173,8 @@ async def run_agent(project_id: str, location: str, agent_engine_id: str):
 def main():
     parser = argparse.ArgumentParser(description="ADK Sheets Agent CLI")
     
-    args = parser.parse_args()
-    
+    parser.parse_args()
+
     # Read environment variables here
     project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
     location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")

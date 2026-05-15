@@ -284,6 +284,7 @@ async def test_approve_callback_sends_confirmation_clears_pending_and_sends_resu
         pending_id="pending-123",
         confirmed=True,
         view=view,
+        session_scope="discord:dm:99999",
     )
 
     agent_client.send_confirmation_response.assert_awaited_once_with(
@@ -292,7 +293,7 @@ async def test_approve_callback_sends_confirmation_clears_pending_and_sends_resu
         confirmation_function_call_id="confirm-1",
         confirmed=True,
     )
-    session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-123")
+    session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-123", session_scope="discord:dm:99999")
     interaction.response.edit_message.assert_awaited_once_with(view=view)
     interaction.followup.send.assert_awaited_once_with("Done.")
     assert all(item.disabled for item in view.children)
@@ -332,10 +333,11 @@ async def test_reject_callback_sends_false_confirmation(gateway_services):
         pending_id="pending-123",
         confirmed=False,
         view=view,
+        session_scope="discord:dm:99999",
     )
 
     assert agent_client.send_confirmation_response.await_args.kwargs["confirmed"] is False
-    session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-123")
+    session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-123", session_scope="discord:dm:99999")
     interaction.followup.send.assert_not_awaited()
 
 
@@ -373,6 +375,7 @@ async def test_approve_callback_resolves_entire_pending_group(gateway_services):
         pending_id="pending-a",
         confirmed=True,
         view=view,
+        session_scope="discord:dm:99999",
     )
 
     assert agent_client.send_confirmation_response.await_count == 2
@@ -380,7 +383,7 @@ async def test_approve_callback_resolves_entire_pending_group(gateway_services):
         call.kwargs["confirmation_function_call_id"]
         for call in agent_client.send_confirmation_response.await_args_list
     ] == ["confirm-a", "confirm-b"]
-    session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-a")
+    session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-a", session_scope="discord:dm:99999")
 
 
 @pytest.mark.asyncio

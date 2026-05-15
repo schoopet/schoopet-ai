@@ -2,7 +2,6 @@ import os
 
 from vertexai.agent_engines.templates.adk import AdkApp
 from . import gcp_auth as _gcp_auth  # noqa: F401 — registers GcpAuthProvider
-from .adc_diagnostic_tool import get_adc_token_info
 from .memory_tool import save_memory, save_multiple_memories, save_session_to_memory
 from .calendar_tool import CalendarTool
 from .preferences_tool import PreferencesTool
@@ -341,7 +340,6 @@ def create_agent(
     get_cloud_task_status_tool = FunctionTool(func=task_debug_tool.get_cloud_task_status)
     list_scheduled_tasks_tool = FunctionTool(func=task_debug_tool.list_scheduled_tasks)
     debug_task_tool = FunctionTool(func=task_debug_tool.debug_task)
-    adc_diagnostic_tool = FunctionTool(func=get_adc_token_info)
 
     # Initialize Search Subagent (handles Google Search)
     search_agent = create_search_agent(
@@ -410,7 +408,6 @@ def create_agent(
         get_cloud_task_status_tool,
         list_scheduled_tasks_tool,
         debug_task_tool,
-        adc_diagnostic_tool,
     ]
 
     email_tool = EmailTool()

@@ -32,36 +32,6 @@ MAX_INLINE_ATTACHMENT_BYTES = 10 * 1024 * 1024
 FALLBACK_MIME_TYPE = "application/octet-stream"
 
 
-async def _get_pending_approval(session_manager, user_id: str, pending_id: str, session_scope: str = ""):
-    if session_scope:
-        return await session_manager.get_pending_approval(
-            user_id,
-            pending_id,
-            session_scope=session_scope,
-        )
-    return await session_manager.get_pending_approval(user_id, pending_id)
-
-
-async def _get_pending_approval_group(session_manager, user_id: str, pending_id: str, session_scope: str = ""):
-    if session_scope:
-        return await session_manager.get_pending_approval_group(
-            user_id,
-            pending_id,
-            session_scope=session_scope,
-        )
-    return await session_manager.get_pending_approval_group(user_id, pending_id)
-
-
-async def _clear_pending_approval_group(session_manager, user_id: str, pending_id: str, session_scope: str = ""):
-    if session_scope:
-        await session_manager.clear_pending_approval_group(
-            user_id,
-            pending_id,
-            session_scope=session_scope,
-        )
-        return
-    await session_manager.clear_pending_approval_group(user_id, pending_id)
-
 
 async def _build_discord_message_content(
     text: str,
@@ -456,11 +426,10 @@ class SchoopetGateway(discord.Client):
             )
             return
 
-        pending = await _get_pending_approval(
-            self._session_manager,
+        pending = await self._session_manager.get_pending_approval(
             user_id,
             pending_id,
-            session_scope=session_scope,
+            session_scope=session_scope or None,
         )
         if not pending:
             view.disable_buttons()
@@ -469,11 +438,10 @@ class SchoopetGateway(discord.Client):
             return
 
         try:
-            pending_group = await _get_pending_approval_group(
-                self._session_manager,
+            pending_group = await self._session_manager.get_pending_approval_group(
                 user_id,
                 pending_id,
-                session_scope=session_scope,
+                session_scope=session_scope or None,
             )
             if not pending_group:
                 pending_group = [pending]
@@ -488,11 +456,10 @@ class SchoopetGateway(discord.Client):
                 )
                 all_events.extend(events)
 
-            await _clear_pending_approval_group(
-                self._session_manager,
+            await self._session_manager.clear_pending_approval_group(
                 user_id,
                 pending_id,
-                session_scope=session_scope,
+                session_scope=session_scope or None,
             )
             view.disable_buttons()
             await interaction.response.edit_message(view=view)

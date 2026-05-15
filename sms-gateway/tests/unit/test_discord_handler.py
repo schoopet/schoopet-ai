@@ -123,6 +123,7 @@ async def test_process_component_confirmation_sends_adk_response_and_followup(
         pending_id="pending-123",
         interaction_token="interaction-token",
         confirmed=True,
+        session_scope="discord:dm:99999",
     )
 
     agent_client.send_confirmation_response.assert_awaited_once_with(
@@ -131,5 +132,5 @@ async def test_process_component_confirmation_sends_adk_response_and_followup(
         confirmation_function_call_id="confirm-1",
         confirmed=True,
     )
-    session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-123")
+    session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-123", session_scope="discord:dm:99999")
     discord_sender.send_followup.assert_awaited_once_with("interaction-token", "Done.")
