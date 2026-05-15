@@ -73,7 +73,7 @@ async def finalize_iam_credentials(
         "consentNonce": consent_nonce,
     }
     logger.info(
-        f"Calling credentials:finalize for user {user_id[:4]}****, "
+        f"[connector] credentials:finalize user_id={user_id!r} "
         f"connector={connector_name.split('/')[-1]}"
     )
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -87,7 +87,7 @@ async def finalize_iam_credentials(
                 f"credentials:finalize failed: status={resp.status_code} body={resp.text[:200]}"
             )
         resp.raise_for_status()
-    logger.info(f"credentials:finalize succeeded for user {user_id[:4]}****")
+    logger.info(f"[connector] credentials:finalize succeeded for user_id={user_id!r}")
 
 
 async def get_connector_token(user_id: str) -> Optional[str]:
@@ -97,26 +97,43 @@ async def get_connector_token(user_id: str) -> Optional[str]:
     consent is still required or retrieval fails.
     """
     provider, scheme = _get_provider_and_scheme()
+    logger.info(
+        f"[connector] retrieveCredentials: user_id={user_id!r} "
+        f"connector={scheme.name.split('/')[-1] if scheme.name else 'unset'}"
+    )
     try:
         operation = await provider._retrieve_credentials(user_id, scheme)
     except Exception as e:
-        logger.warning(f"IAM connector retrieval failed for {user_id[:4]}****: {e}")
+        logger.warning(f"[connector] retrieveCredentials failed for user_id={user_id!r}: {e}")
         return None
 
     response, metadata = provider._unpack_operation(operation)
 
+    logger.info(
+        f"[connector] retrieveCredentials result: user_id={user_id!r} "
+        f"done={operation.done} "
+        f"has_error={operation.HasField('error')} "
+        f"response_type={type(response).__name__} "
+        f"response_fields={[f.name for f, _ in response.ListFields()] if hasattr(response, 'ListFields') else 'n/a'}"
+    )
+
     if operation.HasField("error"):
-        logger.warning(f"IAM connector error for {user_id[:4]}****: {operation.error.message}")
+        logger.warning(
+            f"[connector] error for user_id={user_id!r}: "
+            f"code={operation.error.code} message={operation.error.message}"
+        )
         return None
 
     if not operation.done:
-        logger.info(f"No stored token for {user_id[:4]}**** (consent required or pending)")
+        logger.info(f"[connector] No stored token for user_id={user_id!r} (consent required or pending)")
         return None
 
     try:
         from google.adk.integrations.agent_identity.gcp_auth_provider import _construct_auth_credential
         credential = _construct_auth_credential(response)
-        return credential.http.credentials.token
+        token = credential.http.credentials.token
+        logger.info(f"[connector] Token retrieved for user_id={user_id!r} token_prefix={token[:8] if token else 'None'}...")
+        return token
     except Exception as e:
-        logger.warning(f"Failed to extract token for {user_id[:4]}****: {e}")
+        logger.warning(f"[connector] Failed to extract token for user_id={user_id!r}: {e}")
         return None
