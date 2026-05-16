@@ -532,6 +532,65 @@ class EmailTool:
             return ""
         return "Your Gmail is connected. I'm monitoring your inbox for new emails."
 
+    async def setup_gmail_watch(
+        self,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """
+        Register Gmail push notifications for new emails.
+
+        Sets up a Gmail push watch so the system automatically processes new
+        emails as they arrive. Call this once to enable email monitoring, and
+        again every ~7 days to keep the watch active.
+        """
+        _, err = require_user_id(tool_context, "gmail watch")
+        if err:
+            return err
+
+        user_id = tool_context.user_id
+        service = await self._get_gmail_service(tool_context)
+        if not service:
+            return ""
+
+        topic = os.getenv("EMAIL_PUBSUB_TOPIC", "")
+        if not topic:
+            return "ERROR: EMAIL_PUBSUB_TOPIC is not configured."
+
+        try:
+            profile = service.users().getProfile(userId="me").execute()
+            gmail_address = profile.get("emailAddress", "")
+            if not gmail_address:
+                return "ERROR: Could not determine Gmail address."
+
+            result = service.users().watch(
+                userId="me",
+                body={"labelIds": ["CATEGORY_PERSONAL"], "topicName": topic},
+            ).execute()
+
+            history_id = str(result.get("historyId", ""))
+            expiration = result.get("expiration", "")
+
+            db = self._get_firestore()
+            if db:
+                from datetime import datetime, timezone
+                doc_id = gmail_address.lower().replace("@", "_at_").replace(".", "_")
+                db.collection("email_state").document(doc_id).set(
+                    {
+                        "gmail_address": gmail_address,
+                        "user_id": user_id,
+                        "last_history_id": history_id,
+                        "watch_expiration": expiration,
+                        "updated_at": datetime.now(timezone.utc),
+                    },
+                    merge=True,
+                )
+
+            return f"Gmail watch registered for {gmail_address}. historyId={history_id}"
+        except HttpError as e:
+            return f"Error setting up Gmail watch: {e}"
+        except Exception as e:
+            return f"Error setting up Gmail watch: {e}"
+
     def add_email_rule(
         self,
         prompt: str,

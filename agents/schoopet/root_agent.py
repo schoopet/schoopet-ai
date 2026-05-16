@@ -2,6 +2,7 @@ import os
 
 from vertexai.agent_engines.templates.adk import AdkApp
 from . import gcp_auth as _gcp_auth  # noqa: F401 — registers GcpAuthProvider
+from .admin_plugin import AdminCommandPlugin
 from .memory_tool import save_memory, save_multiple_memories, save_session_to_memory
 from .calendar_tool import CalendarTool
 from .preferences_tool import PreferencesTool
@@ -418,6 +419,7 @@ def create_agent(
         FunctionTool(func=email_tool.list_artifacts),
         FunctionTool(func=email_tool.read_artifact),
         FunctionTool(func=email_tool.get_gmail_status),
+        FunctionTool(func=email_tool.setup_gmail_watch),
         FunctionTool(func=email_tool.add_email_rule, require_confirmation=True),
         FunctionTool(func=email_tool.list_email_rules),
         FunctionTool(func=email_tool.update_email_rule, require_confirmation=True),
@@ -460,6 +462,7 @@ def create_adk_agent() -> AdkApp:
     return AdkApp(
         agent=create_agent(),
         artifact_service_builder=_artifact_service,
+        plugins=[AdminCommandPlugin()],
     )
 
 

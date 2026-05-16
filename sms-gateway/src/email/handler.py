@@ -17,12 +17,10 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
+from google.cloud import firestore
 
 from ..internal.auth import verify_internal_request
-from .gmail_client import (
-    EMAIL_RULES_COLLECTION, get_gmail_token, get_new_messages, setup_watch,
-    normalize_gmail_address,
-)
+from .gmail_client import EMAIL_RULES_COLLECTION, normalize_gmail_address
 
 logger = logging.getLogger(__name__)
 
@@ -48,16 +46,11 @@ will receive "This tool call is rejected." When that happens:
 If no user-visible reminder or summary is needed, start your response with:
 <SUPPRESS RESPONSE>
 
-A new email has arrived. It may contain attachments with important information
-that you must read before processing.
+One or more new emails have arrived for {gmail_address}.
 
-IMPORTANT: Call fetch_email(message_id="{message_id}") first. This fetches
-the full email body and stores any attachments (PDFs, images, docs) as
-artifacts so you can read their content.
-
-From: {from_}
-Subject: {subject}
-Message ID: {message_id}
+IMPORTANT: Call read_emails(since_history_id="{start_history_id}") to get the
+new messages. For each message ID returned, call fetch_email(message_id=...) to
+read the full content and any attachments before processing.
 
 Your active email rules:
 {rules}
@@ -217,6 +210,43 @@ async def _write_watch_state(gmail_address: str, updates: dict) -> None:
         logger.error(f"Failed to write watch state for {gmail_address}: {e}")
 
 
+_ALREADY_PROCESSED = object()
+
+
+async def _atomic_advance_history_id(
+    gmail_address: str,
+    new_history_id: str,
+) -> object:
+    """Atomically advance last_history_id and return the prior value.
+
+    Returns _ALREADY_PROCESSED if new_history_id is not greater than the
+    stored value (concurrent notification already covered this range).
+    Returns None if there was no stored history_id (caller should use fallback).
+    Returns the stored history_id string otherwise.
+    """
+    if not _db:
+        return None
+    doc_id = normalize_gmail_address(gmail_address)
+    doc_ref = _db.collection("email_state").document(doc_id)
+
+    @firestore.async_transactional
+    async def _txn(transaction):
+        doc = await doc_ref.get(transaction=transaction)
+        data = doc.to_dict() if doc.exists else {}
+        stored_id = data.get("last_history_id")
+        if stored_id and int(stored_id) >= int(new_history_id):
+            return _ALREADY_PROCESSED
+        transaction.set(doc_ref, {"last_history_id": new_history_id}, merge=True)
+        return stored_id
+
+    try:
+        transaction = _db.transaction()
+        return await _txn(transaction)
+    except Exception as e:
+        logger.error(f"Failed to advance history_id for {gmail_address}: {e}")
+        return None
+
+
 # ──────────────────────────── email rules ────────────────────────────
 
 
@@ -251,9 +281,9 @@ def _format_rules_for_prompt(rules: list[dict]) -> str:
 
 
 async def process_email_notification(gmail_address: str, history_id: str) -> None:
-    """Fetch new messages for any Gmail account and route each to the appropriate agent.
+    """Route a Gmail push notification to the agent.
 
-    The watch state doc drives which user_id, token, agent, and channel to use.
+    The agent fetches the actual emails using its own IAM connector credentials.
     """
     watch_state = await _read_watch_state(gmail_address)
     if not watch_state:
@@ -261,52 +291,38 @@ async def process_email_notification(gmail_address: str, history_id: str) -> Non
         return
 
     user_id = watch_state.get("user_id", "")
-    token_feature = watch_state.get("token_feature", "")
-    if not user_id or not token_feature:
-        logger.warning(f"Watch state for {gmail_address} is missing user_id or token_feature")
+    if not user_id:
+        logger.warning(f"Watch state for {gmail_address} is missing user_id")
         return
 
-    token = await get_gmail_token(user_id)
-    if not token:
-        logger.error(f"No stored token for {user_id[:4]}**** — cannot fetch messages")
+    # Atomically advance last_history_id so concurrent Pub/Sub notifications
+    # cannot process the same email range twice.
+    prior_history_id = await _atomic_advance_history_id(gmail_address, history_id)
+    if prior_history_id is _ALREADY_PROCESSED:
+        logger.debug(f"Notification history_id={history_id} for {gmail_address} already processed")
         return
 
-    start_history_id = watch_state.get("last_history_id")
+    start_history_id = prior_history_id
     if not start_history_id:
         start_history_id = str(int(history_id) - 1)
         logger.warning(
             f"No stored history_id for {gmail_address}; using fallback start={start_history_id}"
         )
 
-    try:
-        emails = await get_new_messages(token, start_history_id, history_id)
-    except Exception as e:
-        logger.error(f"Failed to fetch messages for {gmail_address}: {e}")
-        return
-
-    await _write_watch_state(gmail_address, {"last_history_id": history_id})
-
-    if not emails:
-        logger.debug(f"No new messages for {gmail_address}")
-        return
-
     rules = await _load_email_rules(user_id)
     rules_text = _format_rules_for_prompt(rules)
 
-    for email in emails:
-        logger.info(
-            f"Routing email from {email.get('from', '')[:30]}... "
-            f"(user={user_id[:4]}****, channel=discord)"
-        )
-        await _route_email_to_agent(email, user_id, rules_text)
+    logger.info(f"Routing email notification for {gmail_address} (user={user_id[:4]}****)")
+    await _notify_agent_of_emails(gmail_address, start_history_id, user_id, rules_text)
 
 
-async def _route_email_to_agent(
-    email: dict,
+async def _notify_agent_of_emails(
+    gmail_address: str,
+    start_history_id: str,
     user_id: str,
     rules_text: str,
 ) -> None:
-    """Send an email notification prompt to the agent and reply via Discord."""
+    """Send an email push notification to the agent."""
     if not _agent_client:
         logger.error("Agent client not initialized")
         return
@@ -317,9 +333,8 @@ async def _route_email_to_agent(
         )
 
         prompt = _NOTIFICATION_WRAPPER.format(
-            from_=email.get("from", ""),
-            subject=email.get("subject", ""),
-            message_id=email.get("id", ""),
+            gmail_address=gmail_address,
+            start_history_id=start_history_id,
             rules=rules_text,
         )
 
@@ -328,7 +343,7 @@ async def _route_email_to_agent(
             session_id=session_info.agent_session_id,
             message=prompt,
         )
-        logger.info(f"Email routed to agent session {session_info.agent_session_id}")
+        logger.info(f"Email notification routed to agent session {session_info.agent_session_id}")
 
         # Handle IAM connector credential requests (offline: store pending + send auth link)
         credential_requests = _agent_client.extract_credential_requests(events)
@@ -376,7 +391,7 @@ async def _route_email_to_agent(
                 return
             await _send_response(user_id, response)
     except Exception as e:
-        logger.error(f"Failed to route email for {user_id[:4]}****: {e}")
+        logger.error(f"Failed to route email notification for {user_id[:4]}****: {e}")
 
 
 async def _send_response(user_id: str, message: str) -> None:
@@ -393,57 +408,31 @@ async def _send_response(user_id: str, message: str) -> None:
 
 async def register_gmail_watch(
     user_id: str,
-    gmail_address: str,
+    gmail_address: str = "",
 ) -> bool:
-    """Set up Gmail push watch for a user after IAM connector authorization.
+    """Ask the agent to register a Gmail push watch.
 
-    Args:
-        user_id: User identifier or Discord ID.
-        gmail_address: The authorized Gmail address.
-
-    Returns:
-        True if watch was set up successfully, False otherwise.
+    Called after OAuth consent completes. The agent uses its own IAM connector
+    credentials to call the Gmail watch API and writes the result to Firestore.
     """
-    if not _db:
+    if not _agent_client or not _session_manager:
         logger.warning("Email services not initialized — skipping Gmail watch setup")
         return False
 
-    from ..config import get_settings
-    settings = get_settings()
-    topic = settings.EMAIL_PUBSUB_TOPIC
-    if not topic:
-        logger.warning("EMAIL_PUBSUB_TOPIC not configured — skipping Gmail watch setup")
+    try:
+        session_info = await _session_manager.get_or_create_session(
+            user_id, channel="email"
+        )
+        await _agent_client.send_message_events(
+            user_id=user_id,
+            session_id=session_info.agent_session_id,
+            message="__ADMIN:setup_gmail_watch__",
+        )
+        logger.info(f"Gmail watch setup requested for user={user_id[:4]}****")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to request Gmail watch setup for {user_id[:4]}****: {e}")
         return False
-
-    token = await get_gmail_token(user_id)
-    if not token:
-        logger.error(f"No stored token for {user_id[:4]}**** — cannot set up Gmail watch")
-        return False
-
-    watch_result = await setup_watch(token, topic)
-    if not watch_result:
-        logger.error(f"Failed to set up Gmail watch for {gmail_address}")
-        return False
-
-    from datetime import datetime, timezone
-    history_id = str(watch_result.get("historyId", ""))
-    expiration = watch_result.get("expiration", "")
-
-    await _write_watch_state(
-        gmail_address,
-        {
-            "gmail_address": gmail_address,
-            "user_id": user_id,
-            "last_history_id": history_id,
-            "watch_expiration": expiration,
-            "updated_at": datetime.now(timezone.utc),
-        },
-    )
-
-    logger.info(
-        f"Gmail watch registered for {gmail_address} (user={user_id[:4]}****, historyId={history_id})"
-    )
-    return True
 
 
 # ──────────────────────────── internal endpoints ────────────────────────────
@@ -451,13 +440,13 @@ async def register_gmail_watch(
 
 @router.get("/internal/email/renew-watch")
 async def renew_gmail_watch(
-    topic: str = Query(..., description="Full Pub/Sub topic name"),
+    topic: str = Query(default="", description="Ignored — agent reads topic from env"),
     caller: str = Depends(verify_internal_request),
 ) -> dict:
     """Renew Gmail push watches for all registered accounts.
 
-    Called every ~6 days by Cloud Scheduler. Iterates all email_state/* documents
-    and renews each watch using the stored user_id and token_feature.
+    Called every ~6 days by Cloud Scheduler. Asks each user's agent to renew
+    the Gmail watch using its own IAM connector credentials.
     """
     if not _db:
         raise HTTPException(status_code=503, detail="Email services not initialized")
@@ -468,39 +457,24 @@ async def renew_gmail_watch(
     try:
         async for doc in _db.collection("email_state").stream():
             data = doc.to_dict() or {}
-            gmail_address = data.get("gmail_address", "")
             user_id = data.get("user_id", "")
+            gmail_address = data.get("gmail_address", "")
 
-            if not gmail_address or not user_id:
-                logger.warning(f"Skipping email_state/{doc.id}: missing required fields")
-                continue
-
-            token = await get_gmail_token(user_id)
-            if not token:
-                logger.warning(
-                    f"No stored token for {user_id[:4]}**** "
-                    f"— skipping watch renewal for {gmail_address}"
-                )
+            if not user_id:
+                logger.warning(f"Skipping email_state/{doc.id}: missing user_id")
                 failed += 1
                 continue
 
-            watch_result = await setup_watch(token, topic)
-            if watch_result:
-                new_hid = str(watch_result.get("historyId", ""))
-                expiration = watch_result.get("expiration", "")
-                await _write_watch_state(
-                    gmail_address,
-                    {"last_history_id": new_hid, "watch_expiration": expiration},
-                )
-                logger.info(f"Watch renewed for {gmail_address}")
+            success = await register_gmail_watch(user_id, gmail_address)
+            if success:
+                logger.info(f"Watch renewal requested for {gmail_address}")
                 renewed += 1
             else:
-                logger.warning(f"Failed to renew watch for {gmail_address}")
                 failed += 1
     except Exception as e:
         logger.error(f"Error iterating email_state documents: {e}")
 
-    logger.info(f"Watch renewal complete by {caller}: {renewed} renewed, {failed} failed")
+    logger.info(f"Watch renewal complete by {caller}: {renewed} requested, {failed} failed")
     return {
         "status": "renewed",
         "renewed": renewed,

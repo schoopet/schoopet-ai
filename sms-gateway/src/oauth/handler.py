@@ -7,7 +7,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..auth.connector import finalize_iam_credentials
 from ..email.handler import register_gmail_watch
-from ..email.gmail_client import get_gmail_token, get_user_profile
 
 logger = logging.getLogger(__name__)
 
@@ -251,16 +250,9 @@ async def connector_callback(
             except Exception as e:
                 logger.warning(f"Failed to forward post-consent response to Discord for {user_id[:4]}****: {e}")
 
-    # Register Gmail watch now that a token is available
-    gmail_address = ""
     try:
-        token = await get_gmail_token(user_id)
-        if token:
-            profile = await get_user_profile(token)
-            if profile and profile.get("emailAddress"):
-                gmail_address = profile["emailAddress"]
-                await register_gmail_watch(user_id, gmail_address)
+        await register_gmail_watch(user_id)
     except Exception as e:
-        logger.warning(f"Gmail watch setup failed for {user_id[:4]}****: {e}")
+        logger.warning(f"Gmail watch setup request failed for {user_id[:4]}****: {e}")
 
-    return HTMLResponse(_success_html(gmail_address or "your Google account", "Google Workspace"))
+    return HTMLResponse(_success_html("your Google account", "Google Workspace"))

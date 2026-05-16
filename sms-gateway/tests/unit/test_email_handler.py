@@ -81,14 +81,15 @@ def email_services(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_route_email_to_agent_suppressed_response_does_not_send(email_services):
+async def test_notify_agent_suppressed_response_does_not_send(email_services):
     agent_client, _, discord_sender = email_services
     agent_client.send_message_events = AsyncMock(
         return_value=_text_events("<SUPPRESS RESPONSE>\nNo user update needed.")
     )
 
-    await handler._route_email_to_agent(
-        {"from": "sender@example.com", "subject": "Promo", "id": "msg-123"},
+    await handler._notify_agent_of_emails(
+        gmail_address="user@gmail.com",
+        start_history_id="12345",
         user_id="user-123",
         rules_text="(no rules)",
     )
@@ -97,14 +98,15 @@ async def test_route_email_to_agent_suppressed_response_does_not_send(email_serv
 
 
 @pytest.mark.asyncio
-async def test_route_email_to_agent_normal_response_routes_to_discord(email_services):
+async def test_notify_agent_normal_response_routes_to_discord(email_services):
     agent_client, _, discord_sender = email_services
     agent_client.send_message_events = AsyncMock(
         return_value=_text_events("You have an invoice due tomorrow.")
     )
 
-    await handler._route_email_to_agent(
-        {"from": "billing@example.com", "subject": "Invoice", "id": "msg-456"},
+    await handler._notify_agent_of_emails(
+        gmail_address="billing@example.com",
+        start_history_id="12345",
         user_id="user-123",
         rules_text="(no rules)",
     )
@@ -115,14 +117,15 @@ async def test_route_email_to_agent_normal_response_routes_to_discord(email_serv
 
 
 @pytest.mark.asyncio
-async def test_route_email_prompt_includes_offline_safety_and_suppression_instruction(
+async def test_notify_agent_prompt_includes_offline_safety_and_history_id(
     email_services,
 ):
     agent_client, _, _ = email_services
     agent_client.send_message_events = AsyncMock(return_value=_text_events("<SUPPRESS RESPONSE>"))
 
-    await handler._route_email_to_agent(
-        {"from": "sender@example.com", "subject": "Newsletter", "id": "msg-789"},
+    await handler._notify_agent_of_emails(
+        gmail_address="user@gmail.com",
+        start_history_id="99999",
         user_id="user-123",
         rules_text="- Match [topic: newsletters] -> ignore",
     )
@@ -131,17 +134,19 @@ async def test_route_email_prompt_includes_offline_safety_and_suppression_instru
     assert "OFFLINE MODE" in prompt
     assert "will be rejected" in prompt
     assert "<SUPPRESS RESPONSE>" in prompt
+    assert "since_history_id=\"99999\"" in prompt
+    assert "read_emails" in prompt
 
 
 @pytest.mark.asyncio
-async def test_route_email_confirmation_declines_and_forwards_fallback(email_services):
+async def test_notify_agent_confirmation_declines_and_forwards_fallback(email_services):
     agent_client, _, discord_sender = email_services
     agent_client.send_message_events = AsyncMock(return_value=_confirmation_events())
-    # Fallback response: agent replies naturally after the tool is declined
     agent_client.send_confirmation_response = AsyncMock(return_value=_text_events("I'll note that for you."))
 
-    await handler._route_email_to_agent(
-        {"from": "sender@example.com", "subject": "Action", "id": "msg-999"},
+    await handler._notify_agent_of_emails(
+        gmail_address="user@gmail.com",
+        start_history_id="12345",
         user_id="user-123",
         rules_text="(no rules)",
     )
