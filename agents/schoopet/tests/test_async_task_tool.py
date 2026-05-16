@@ -39,6 +39,7 @@ def mock_cloud_tasks():
     """Mock Cloud Tasks client."""
     with patch("agents.schoopet.tools.async_task_tool.get_cloud_tasks_client") as mock_ct:
         client = MagicMock()
+        client.get_task_name.return_value = "projects/p/locations/l/queues/q/tasks/execute-t-initial"
         mock_ct.return_value = client
         yield client
 

@@ -132,9 +132,8 @@ async def _make_artifact_service_with_save(user_id: str = PHONE):
 
 def _make_email_tool(service=None) -> EmailTool:
     tool = EmailTool()
-    tool._oauth_client = MagicMock()
     tool._firestore_client = None
-    tool._get_gmail_service = MagicMock(return_value=service)
+    tool._get_gmail_service = AsyncMock(return_value=service)
     return tool
 
 
@@ -236,10 +235,11 @@ async def test_fetch_email_artifact_service_failure():
 
 @pytest.mark.asyncio
 async def test_fetch_email_no_user_token():
+    # When the IAM connector has no credential it emits a request and returns None;
+    # fetch_email should return "" (credential request sent, nothing to display).
     _, ctx = await _make_artifact_service_with_save()
     tool = _make_email_tool(None)
-    tool._get_oauth_client().get_oauth_link.return_value = "https://example.com/oauth"
 
     result = await tool.fetch_email(message_id=MSG_ID, tool_context=ctx)
 
-    assert "not connected" in result.lower()
+    assert result == ""

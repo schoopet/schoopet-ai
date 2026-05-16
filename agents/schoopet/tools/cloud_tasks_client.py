@@ -104,6 +104,11 @@ class CloudTasksClient:
             task_id,
         )
 
+    def get_task_name(self, task_id: str) -> Optional[str]:
+        """Return the deterministic Cloud Task name for task_id without creating it."""
+        self._ensure_initialized()
+        return self._build_task_name("execute", f"{task_id}-initial")
+
     def create_task(
         self,
         task_id: str,

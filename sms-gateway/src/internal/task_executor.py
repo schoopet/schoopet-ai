@@ -260,20 +260,48 @@ class GatewayTaskExecutor:
                 errors += 1
                 continue
 
-            cloud_task_name = self._create_cloud_task(
+            # Write the deterministic name before creating the Cloud Task so that
+            # the executor can read it even if the task fires before this method
+            # returns (possible for tasks whose scheduled_at is imminent).
+            expected_name = self._compute_cloud_task_name(task_id)
+            doc_ref = self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id)
+            if expected_name:
+                await doc_ref.update({"cloud_task_name": expected_name})
+
+            created_name = self._create_cloud_task(
                 task_id=task_id,
                 user_id=data["user_id"],
                 schedule_time=scheduled_at,
             )
-            if cloud_task_name:
-                await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update(
-                    {"cloud_task_name": cloud_task_name}
-                )
+            if created_name:
                 queued += 1
             else:
+                # Cloud Task creation failed; undo the pre-written name so a
+                # future requeue attempt can retry this task.
+                if expected_name:
+                    try:
+                        await doc_ref.update({"cloud_task_name": firestore.DELETE_FIELD})
+                    except Exception as cleanup_exc:
+                        logger.warning(
+                            "Task %s: Cloud Task creation failed and cleanup failed: %s",
+                            task_id, cleanup_exc,
+                        )
                 errors += 1
 
         return {"queued": queued, "errors": errors}
+
+    def _compute_cloud_task_name(self, task_id: str) -> Optional[str]:
+        """Return the deterministic Cloud Task name for task_id without creating it."""
+        project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+        if not project_id:
+            return None
+        location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+        queue = os.getenv("ASYNC_TASKS_QUEUE", "async-agent-tasks")
+        normalized = re.sub(r"[^a-zA-Z0-9-]", "-", task_id).strip("-").lower()
+        return (
+            f"projects/{project_id}/locations/{location}"
+            f"/queues/{queue}/tasks/execute-{normalized}-initial"
+        )
 
     def _create_cloud_task(
         self,

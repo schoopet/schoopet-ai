@@ -215,7 +215,14 @@ class AsyncTaskTool:
                 "Please retry from the Discord channel where the result should be posted."
             )
 
-        # Create task document
+        # Compute the Cloud Task name deterministically before writing to Firestore
+        # so the initial document write is atomic — no separate update needed after
+        # Cloud Task creation. This prevents a race where an immediate Cloud Task
+        # fires and claims the document while the cloud_task_name update is in flight.
+        cloud_tasks = get_cloud_tasks_client()
+        cloud_task_name = cloud_tasks.get_task_name(task_id)
+
+        # Create task document with cloud_task_name already populated
         task = AsyncTaskDocument(
             task_id=task_id,
             user_id=user_id,
@@ -224,6 +231,7 @@ class AsyncTaskTool:
             context=context or {},
             allowed_resource_ids=allowed_resource_ids or [],
             scheduled_at=scheduled_at_dt,
+            cloud_task_name=cloud_task_name,
             notification_session_scope=notification_context.get("notification_session_scope", ""),
             notification_target_type=notification_context.get("notification_target_type", ""),
             discord_channel_id=notification_context.get("discord_channel_id", ""),
@@ -232,22 +240,18 @@ class AsyncTaskTool:
         )
 
         try:
-            # Store in Firestore
+            # Single atomic write — cloud_task_name already included
             doc_ref = firestore_client.collection(ASYNC_TASKS_COLLECTION).document(task_id)
             doc_ref.set(task.to_firestore())
 
             # Create Cloud Task for execution
-            cloud_tasks = get_cloud_tasks_client()
-            cloud_task_name = cloud_tasks.create_task(
+            created_name = cloud_tasks.create_task(
                 task_id=task_id,
                 user_id=user_id,
                 schedule_time=scheduled_at_dt,
             )
 
-            if cloud_task_name:
-                # Update document with Cloud Task reference
-                doc_ref.update({"cloud_task_name": cloud_task_name})
-
+            if created_name:
                 if scheduled_at_dt:
                     time_str = scheduled_at_dt.strftime("%Y-%m-%d at %H:%M UTC")
                     return f"Scheduled {task_type} task for {time_str}. Task ID: {task_id}"
