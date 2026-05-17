@@ -1,0 +1,24 @@
+.gcloudignore
+.git
+.gitignore
+
+# Python virtualenvs and bytecode
+agents/.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Node / web build artifacts
+web/node_modules/
+web/dist/
+
+# Terraform provider cache and state
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+
+# Local dev / test artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/

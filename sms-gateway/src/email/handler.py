@@ -361,6 +361,11 @@ async def _notify_agent_of_emails(
                 auth_config_dict=req.auth_config_dict,
                 auth_uri=req.auth_uri,
             )
+            logger.warning(
+                f"Sending offline auth link to {user_id[:4]}**** via Discord DM: "
+                f"nonce={req.nonce[:8]}... credentialKey={req.auth_config_dict.get('credentialKey', 'unknown')!r} "
+                f"auth_uri={req.auth_uri[:80]}..."
+            )
             await _send_response(
                 user_id,
                 f"An email triggered an action that requires Google authorization. "

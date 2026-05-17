@@ -43,7 +43,12 @@ class DriveTool:
             await cred_mgr.request_credential(tool_context)
             return None
         from google.oauth2.credentials import Credentials
-        creds = Credentials(token=credential.http.credentials.token)
+        from .gcp_auth import extract_and_validate_token
+        token = extract_and_validate_token(credential, "drive")
+        if not token:
+            await cred_mgr.request_credential(tool_context)
+            return None
+        creds = Credentials(token=token)
         return build("drive", "v3", credentials=creds, cache_discovery=False)
 
     # ── Private token-specific helpers ─────────────────────────────────────────
@@ -321,7 +326,12 @@ class SheetsTool:
             await cred_mgr.request_credential(tool_context)
             return None
         from google.oauth2.credentials import Credentials
-        creds = Credentials(token=credential.http.credentials.token)
+        from .gcp_auth import extract_and_validate_token
+        token = extract_and_validate_token(credential, "sheets")
+        if not token:
+            await cred_mgr.request_credential(tool_context)
+            return None
+        creds = Credentials(token=token)
         return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
     # ── Private token-specific helpers ─────────────────────────────────────────
@@ -1079,7 +1089,12 @@ class DocsTool:
             await cred_mgr.request_credential(tool_context)
             return None, None
         from google.oauth2.credentials import Credentials
-        creds = Credentials(token=credential.http.credentials.token)
+        from .gcp_auth import extract_and_validate_token
+        token = extract_and_validate_token(credential, "docs")
+        if not token:
+            await cred_mgr.request_credential(tool_context)
+            return None, None
+        creds = Credentials(token=token)
         docs_service = build("docs", "v1", credentials=creds, cache_discovery=False)
         drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
         return docs_service, drive_service

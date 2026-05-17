@@ -36,8 +36,10 @@ async def finalize_iam_credentials(
         "consentNonce": consent_nonce,
     }
     logger.info(
-        f"[connector] credentials:finalize user_id={user_id!r} "
-        f"connector={connector_name.split('/')[-1]}"
+        f"[connector] credentials:finalize → POST {finalize_url} "
+        f"user_id={user_id!r} "
+        f"nonce={consent_nonce[:8] if consent_nonce else 'n/a'}... "
+        f"user_id_validation_state={user_id_validation_state[:16] if user_id_validation_state else 'n/a'}..."
     )
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
@@ -45,9 +47,17 @@ async def finalize_iam_credentials(
             json=payload,
             headers={"Authorization": f"Bearer {credentials.token}"},
         )
-        if not resp.is_success:
+        if resp.is_success:
+            logger.info(
+                f"[connector] credentials:finalize succeeded: "
+                f"status={resp.status_code} user_id={user_id!r} "
+                f"body={resp.text[:200] if resp.text else '(empty)'}"
+            )
+        else:
             logger.error(
-                f"credentials:finalize failed: status={resp.status_code} body={resp.text[:200]}"
+                f"[connector] credentials:finalize failed: "
+                f"status={resp.status_code} user_id={user_id!r} "
+                f"nonce={consent_nonce[:8] if consent_nonce else 'n/a'}... "
+                f"body={resp.text[:400]}"
             )
         resp.raise_for_status()
-    logger.info(f"[connector] credentials:finalize succeeded for user_id={user_id!r}")

@@ -93,7 +93,12 @@ class EmailTool:
             await cred_mgr.request_credential(tool_context)
             return None
         from google.oauth2.credentials import Credentials
-        creds = Credentials(token=credential.http.credentials.token)
+        from .gcp_auth import extract_and_validate_token
+        token = extract_and_validate_token(credential, "gmail")
+        if not token:
+            await cred_mgr.request_credential(tool_context)
+            return None
+        creds = Credentials(token=token)
         return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
     # ── Firestore rule helpers ─────────────────────────────────────────────

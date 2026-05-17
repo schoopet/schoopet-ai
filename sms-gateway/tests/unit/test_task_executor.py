@@ -1,9 +1,10 @@
 """Unit tests for gateway-owned async task execution."""
 from datetime import datetime, timezone
-from unittest.mock import ANY, AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock, call
 
 import pytest
 
+from src.agent.client import AdkConfirmationRequest
 from src.internal.task_executor import (
     GatewayTaskExecutor,
     build_allowed_resource_state,
@@ -52,6 +53,8 @@ def agent_client():
     client.send_message_events = AsyncMock(return_value=["event"])
     client.delete_session = AsyncMock()
     client.extract_text = MagicMock(return_value="Task result")
+    client.extract_confirmation_requests = MagicMock(return_value=[])
+    client.send_confirmation_response = AsyncMock(return_value=["follow-up-event"])
     return client
 
 
@@ -268,3 +271,52 @@ class TestGatewayTaskExecutor:
         agent_client.create_session.assert_not_awaited()
         discord_sender.send_channel.assert_not_awaited()
         discord_sender.send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_offline_confirmation_auto_declined_and_task_succeeds(
+        self, executor, firestore_client, agent_client, discord_sender
+    ):
+        confirmation = AdkConfirmationRequest(
+            function_call_id="fc-123",
+            original_function_call={
+                "name": "append_record_to_sheet",
+                "args": {"sheet_id": "bad-id,sheet_tab:", "record": {}},
+            },
+            tool_confirmation={},
+        )
+        agent_client.extract_confirmation_requests = MagicMock(return_value=[confirmation])
+        agent_client.send_confirmation_response = AsyncMock(return_value=["follow-up-event"])
+        agent_client.extract_text = MagicMock(return_value="29 books transferred; 1 failed: sheet_id 'bad-id,sheet_tab:' not authorized")
+
+        result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is True
+        agent_client.send_confirmation_response.assert_awaited_once()
+        call_kwargs = agent_client.send_confirmation_response.await_args.kwargs
+        assert call_kwargs["confirmed"] is False
+        assert "bad-id" in call_kwargs["reason"]
+        discord_sender.send_channel.assert_awaited_once()
+        _, text = discord_sender.send_channel.await_args.args
+        assert "29 books" in text
+
+    @pytest.mark.asyncio
+    async def test_offline_confirmation_empty_followup_still_fails(
+        self, executor, firestore_client, agent_client, discord_sender
+    ):
+        confirmation = AdkConfirmationRequest(
+            function_call_id="fc-456",
+            original_function_call={
+                "name": "append_record_to_sheet",
+                "args": {"sheet_id": "bad-id", "record": {}},
+            },
+            tool_confirmation={},
+        )
+        agent_client.extract_confirmation_requests = MagicMock(return_value=[confirmation])
+        agent_client.send_confirmation_response = AsyncMock(return_value=["follow-up-event"])
+        agent_client.extract_text = MagicMock(return_value="")
+
+        result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is False
+        assert "empty response" in result["error"].lower()
+        agent_client.send_confirmation_response.assert_awaited_once()

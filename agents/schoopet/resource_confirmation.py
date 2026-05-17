@@ -94,6 +94,18 @@ def make_resource_confirmation(id_arg: str):
             )
             return False
 
+        if confirmation is not None and not confirmation.confirmed:
+            # Confirmation was declined (offline auto-decline or interactive user reject).
+            # Don't request confirmation again — let the tool run so the model gets
+            # the real API error (e.g. 404 for invalid ID) and can recover.
+            logger.info(
+                "resource_confirmation: decision=declined source=user_confirmation "
+                "id_arg=%s actual_resource_id=%s — skipping re-confirmation",
+                id_arg,
+                resource_id,
+            )
+            return False
+
         logger.warning(
             "resource_confirmation: decision=require_confirmation reason=resource_not_preapproved "
             "id_arg=%s actual_resource_id=%s approved_resource_ids=%s missing_state_key=%s",

@@ -132,6 +132,35 @@ class GatewayTaskExecutor:
                 session_id=session_id,
                 message=prompt,
             )
+            # In the offline path there is no human to approve confirmations.
+            # Auto-decline so the model receives a real API error (e.g. 404 for
+            # an invalid resource ID) and can recover on its own.
+            confirmations = self._agent_client.extract_confirmation_requests(events)
+            if confirmations:
+                logger.warning(
+                    "Task %s: %d confirmation request(s) in offline mode — auto-declining",
+                    task.get("task_id"),
+                    len(confirmations),
+                )
+                follow_up_events: list = []
+                for confirmation in confirmations:
+                    resource_id = (
+                        confirmation.tool_args.get("sheet_id")
+                        or confirmation.tool_args.get("document_id")
+                        or confirmation.tool_args.get("folder_id")
+                        or "unknown"
+                    )
+                    follow_up_events = await self._agent_client.send_confirmation_response(
+                        user_id=user_id,
+                        session_id=session_id,
+                        confirmation_function_call_id=confirmation.function_call_id,
+                        confirmed=False,
+                        reason=(
+                            f"Resource '{resource_id}' is not in the pre-authorized resource "
+                            "list for this task. The write was not performed."
+                        ),
+                    )
+                events = follow_up_events
             result = self._agent_client.extract_text(events)
             if not result:
                 raise RuntimeError(

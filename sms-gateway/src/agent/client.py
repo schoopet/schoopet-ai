@@ -94,7 +94,16 @@ def _log_tool_activity(event: Event, user_id: str) -> None:
         output_str = str(output)
         if len(output_str) > 200:
             output_str = output_str[:200] + "…"
-        logger.info(f"Tool response [{uid}]: {fr.name} → {output_str}")
+        # Empty result on a workspace tool almost always means the IAM connector
+        # credential was auto-resolved but the underlying API call still failed
+        # (e.g. token not yet propagated, wrong scopes, or connector state mismatch).
+        if "result" in response and response["result"] == "":
+            logger.warning(
+                f"Tool response [{uid}]: {fr.name} → EMPTY RESULT "
+                f"(credential may not be providing a valid token)"
+            )
+        else:
+            logger.info(f"Tool response [{uid}]: {fr.name} → {output_str}")
 
 
 class AgentEngineClient:
@@ -355,7 +364,14 @@ class AgentEngineClient:
                 oauth2 = exchanged.get("oauth2") or {}
                 if oauth2.get("auth_uri") or oauth2.get("authUri"):
                     continue  # has auth URI — needs user action, handled by extract_credential_requests
+                credential_key = auth_config.get("credentialKey", "unknown")
+                logger.info(
+                    f"[auto-cred] Stored IAM credential request: "
+                    f"fc_id={fc.id!r} credentialKey={credential_key!r}"
+                )
                 results.append((str(fc.id or ""), auth_config))
+        if results:
+            logger.info(f"[auto-cred] {len(results)} auto-resolvable credential request(s) found")
         return results
 
     @staticmethod
@@ -364,15 +380,12 @@ class AgentEngineClient:
         requests: list[AdkCredentialRequest] = []
         for event in events:
             for function_call in event.get_function_calls() or []:
-                logger.info(f"[cred-extract] fc.name={function_call.name!r} fc.id={function_call.id!r} args_keys={list((function_call.args or {}).keys())}")
                 if function_call.name != "adk_request_credential":
                     continue
                 args = function_call.args or {}
-                logger.info(f"[cred-extract] raw args={str(args)[:500]}")
                 fc_id = str(function_call.id or "")
                 original_fc_id = str(args.get("functionCallId") or args.get("function_call_id") or "")
                 auth_config = args.get("authConfig") or args.get("auth_config") or {}
-                logger.info(f"[cred-extract] auth_config type={type(auth_config).__name__} keys={list(auth_config.keys()) if isinstance(auth_config, dict) else 'not-dict'}")
                 if isinstance(auth_config, dict):
                     auth_config_dict = auth_config
                 else:
@@ -380,14 +393,25 @@ class AgentEngineClient:
                         auth_config_dict = dict(auth_config)
                     except Exception:
                         auth_config_dict = {}
+                scheme_type = (auth_config_dict.get("authScheme") or {}).get("type", "")
+                credential_key = auth_config_dict.get("credentialKey", "unknown")
                 exchanged = (auth_config_dict.get("exchangedAuthCredential")
                              or auth_config_dict.get("exchanged_auth_credential") or {})
                 oauth2 = exchanged.get("oauth2") or {}
                 auth_uri = str(oauth2.get("auth_uri") or oauth2.get("authUri") or "")
                 nonce = str(oauth2.get("nonce") or "")
-                logger.info(f"[cred-extract] exchanged_keys={list(exchanged.keys())} oauth2_keys={list(oauth2.keys())} auth_uri={auth_uri[:60] if auth_uri else 'EMPTY'}")
+                logger.info(
+                    f"[cred-extract] adk_request_credential: fc_id={fc_id!r} "
+                    f"scheme={scheme_type!r} credentialKey={credential_key!r} "
+                    f"has_auth_uri={bool(auth_uri)}"
+                )
                 if not auth_uri:
                     continue
+                logger.warning(
+                    f"[cred-extract] Interactive auth URI required: fc_id={fc_id!r} "
+                    f"credentialKey={credential_key!r} nonce={nonce!r} "
+                    f"auth_uri={auth_uri[:80]}..."
+                )
                 requests.append(
                     AdkCredentialRequest(
                         function_call_id=fc_id,
@@ -407,6 +431,12 @@ class AgentEngineClient:
         auth_config_dict: dict,
     ) -> list[Event]:
         """Resume an agent session after IAM connector consent is complete."""
+        uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+        credential_key = auth_config_dict.get("credentialKey", "unknown")
+        logger.info(
+            f"Sending credential response: user={uid} "
+            f"fc_id={credential_function_call_id!r} credentialKey={credential_key!r}"
+        )
         content = types.Content(
             role="user",
             parts=[
