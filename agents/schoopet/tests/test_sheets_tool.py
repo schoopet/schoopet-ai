@@ -1,7 +1,7 @@
 """Unit tests for SheetsTool record-oriented helpers."""
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -205,8 +205,9 @@ def test_update_row_with_token_updates_by_header(sheets_tool):
     )
 
 
-def test_public_read_sheet_records_returns_json(sheets_tool):
-    sheets_tool._get_service = MagicMock(return_value=(MagicMock(), None))
+@pytest.mark.asyncio
+async def test_public_read_sheet_records_returns_json(sheets_tool):
+    sheets_tool._get_service = AsyncMock(return_value=(MagicMock(), None))
     sheets_tool._read_records_with_token = MagicMock(
         return_value={
             "sheet_id": "sheet123",
@@ -220,7 +221,7 @@ def test_public_read_sheet_records_returns_json(sheets_tool):
     tool_context = MagicMock()
     tool_context.user_id = "+15555550123"
 
-    result = sheets_tool.read_sheet_records("sheet123", "Leads", 10, tool_context)
+    result = await sheets_tool.read_sheet_records("sheet123", "Leads", 10, tool_context)
 
     parsed = json.loads(result)
     assert parsed["records"] == [{"Name": "Ada"}]
@@ -281,8 +282,9 @@ def test_add_sheet_tab_with_headers(sheets_tool):
     }
 
 
-def test_public_create_spreadsheet_returns_json(sheets_tool):
-    sheets_tool._get_service = MagicMock(return_value=(MagicMock(), None))
+@pytest.mark.asyncio
+async def test_public_create_spreadsheet_returns_json(sheets_tool):
+    sheets_tool._get_service = AsyncMock(return_value=(MagicMock(), None))
     sheets_tool._create_spreadsheet_with_token = MagicMock(
         return_value={
             "spreadsheet_id": "sheet123",
@@ -295,7 +297,7 @@ def test_public_create_spreadsheet_returns_json(sheets_tool):
     tool_context = MagicMock()
     tool_context.user_id = "+15555550123"
 
-    result = sheets_tool.create_spreadsheet(
+    result = await sheets_tool.create_spreadsheet(
         "Hiring Tracker",
         "Candidates",
         ["Name"],

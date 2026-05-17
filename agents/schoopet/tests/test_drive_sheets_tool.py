@@ -75,7 +75,7 @@ async def test_save_attachment_uses_service_for_user_upload(drive_tool):
     svc = await _make_artifact_service()
     ctx = _make_tool_context(svc)
     drive_service = _make_drive_service()
-    drive_tool._get_service = MagicMock(return_value=(drive_service, None))
+    drive_tool._get_service = AsyncMock(return_value=drive_service)
 
     result = await drive_tool.save_attachment_to_drive(
         artifact_filename=ARTIFACT_FILENAME,
@@ -86,7 +86,7 @@ async def test_save_attachment_uses_service_for_user_upload(drive_tool):
     assert "Saved" in result
     assert DRIVE_FILENAME in result
     assert DRIVE_FILE_ID in result
-    drive_tool._get_service.assert_called_once_with(PHONE)
+    drive_tool._get_service.assert_called_once_with(ctx)
 
     create_call = drive_service.files.return_value.create.call_args.kwargs
     assert create_call["body"] == {"name": DRIVE_FILENAME, "mimeType": "application/pdf"}
@@ -131,7 +131,7 @@ async def test_save_attachment_no_user_id(drive_tool):
 async def test_save_attachment_no_token_returns_auth_instructions(drive_tool):
     svc = await _make_artifact_service()
     ctx = _make_tool_context(svc)
-    drive_tool._get_service = MagicMock(return_value=(None, "https://example.com/oauth"))
+    drive_tool._get_service = AsyncMock(return_value=None)
 
     result = await drive_tool.save_attachment_to_drive(
         artifact_filename=ARTIFACT_FILENAME,
@@ -139,7 +139,7 @@ async def test_save_attachment_no_token_returns_auth_instructions(drive_tool):
         tool_context=ctx,
     )
 
-    assert "https://example.com/oauth" in result
+    assert result == ""
 
 
 def test_save_binary_with_token_builds_media_upload(drive_tool):

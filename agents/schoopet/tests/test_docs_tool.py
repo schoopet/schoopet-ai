@@ -1,7 +1,9 @@
 """Unit tests for DocsTool helpers."""
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from agents.schoopet.drive_sheets_tool import DocsTool
 
@@ -118,10 +120,11 @@ def test_replace_text_in_google_doc_with_token():
     assert result["occurrences_changed"] == 2
 
 
-def test_public_read_google_doc_returns_json():
+@pytest.mark.asyncio
+async def test_public_read_google_doc_returns_json():
     tool = DocsTool.__new__(DocsTool)
     tool._oauth_client = MagicMock()
-    tool._get_services = MagicMock(return_value=(MagicMock(), MagicMock(), None))
+    tool._get_services = AsyncMock(return_value=(MagicMock(), MagicMock()))
     tool._read_google_doc_with_token = MagicMock(
         return_value={
             "document_id": "doc123",
@@ -132,7 +135,7 @@ def test_public_read_google_doc_returns_json():
     tool_context = MagicMock()
     tool_context.user_id = "+15555550123"
 
-    result = tool.read_google_doc("doc123", tool_context)
+    result = await tool.read_google_doc("doc123", tool_context)
 
     parsed = json.loads(result)
     assert parsed["document_id"] == "doc123"
