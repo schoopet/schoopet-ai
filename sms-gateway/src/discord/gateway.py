@@ -18,6 +18,7 @@ import time
 import discord
 from google.genai import types
 
+from ..agent.client import AgentEngineClient as _AgentEngineClient
 from .context import (
     DiscordContext,
     context_from_discord_channel,
@@ -344,6 +345,28 @@ class SchoopetGateway(discord.Client):
                     "I'm taking longer than usual to respond. Please try again in a moment.",
                 )
                 return
+
+            # If ADK re-requests credentials without an auth URI, the IAM connector
+            # credential is already stored in the backend (user previously consented).
+            # Auto-respond so ADK can pick up the stored token without prompting again.
+            for _ in range(3):
+                auto_creds = _AgentEngineClient.extract_gcp_auto_credential_requests(events)
+                if not auto_creds:
+                    break
+                fc_id, auth_config = auto_creds[0]
+                logger.info(
+                    f"Auto-resolving stored IAM connector credential for {user_id}: fc_id={fc_id}"
+                )
+                try:
+                    events = await self._agent_client.send_credential_response(
+                        user_id=user_id,
+                        session_id=session_info.agent_session_id,
+                        credential_function_call_id=fc_id,
+                        auth_config_dict=auth_config,
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"Timeout during IAM credential auto-resolve for {user_id}")
+                    break
 
             credential_requests = self._agent_client.extract_credential_requests(events)
             if credential_requests:

@@ -329,6 +329,36 @@ class AgentEngineClient:
         return confirmations
 
     @staticmethod
+    def extract_gcp_auto_credential_requests(events: list[Event]) -> list[tuple[str, dict]]:
+        """Find gcpAuthProviderScheme adk_request_credential calls without an auth URI.
+
+        These occur when the IAM connector credential is already stored in the backend
+        (user already consented) but ADK's session state still has a pending credential
+        request. The gateway should auto-respond so ADK can fetch the stored token
+        without prompting the user again.
+
+        Returns list of (function_call_id, auth_config_dict) tuples.
+        """
+        results = []
+        for event in events:
+            for fc in event.get_function_calls() or []:
+                if fc.name != "adk_request_credential":
+                    continue
+                args = fc.args or {}
+                auth_config = args.get("authConfig") or args.get("auth_config") or {}
+                if not isinstance(auth_config, dict):
+                    continue
+                scheme_type = (auth_config.get("authScheme") or {}).get("type", "")
+                if scheme_type != "gcpAuthProviderScheme":
+                    continue
+                exchanged = auth_config.get("exchangedAuthCredential") or {}
+                oauth2 = exchanged.get("oauth2") or {}
+                if oauth2.get("auth_uri") or oauth2.get("authUri"):
+                    continue  # has auth URI — needs user action, handled by extract_credential_requests
+                results.append((str(fc.id or ""), auth_config))
+        return results
+
+    @staticmethod
     def extract_credential_requests(events: list[Event]) -> list[AdkCredentialRequest]:
         """Extract adk_request_credential function calls from events."""
         requests: list[AdkCredentialRequest] = []
