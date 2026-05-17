@@ -1,4 +1,5 @@
 """Google Calendar tool for agent using IAM connector credentials."""
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from zoneinfo import ZoneInfo
@@ -35,7 +36,12 @@ class CalendarTool:
             await cred_mgr.request_credential(tool_context)
             return None
         from google.oauth2.credentials import Credentials
-        creds = Credentials(token=credential.http.credentials.token)
+        from .gcp_auth import extract_and_validate_token
+        token = extract_and_validate_token(credential, "calendar")
+        if not token:
+            await cred_mgr.request_credential(tool_context)
+            return None
+        creds = Credentials(token=token)
         return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
     def _format_event(self, event: Dict[str, Any]) -> str:
@@ -69,6 +75,21 @@ class CalendarTool:
         result = f"- {summary}: {time_str}"
         if location:
             result += f" @ {location}"
+
+        attendees = event.get("attendees", [])
+        if attendees:
+            emails = [a["email"] for a in attendees if "email" in a]
+            if emails:
+                result += f" | attendees: {', '.join(emails)}"
+
+        for ep in event.get("conferenceData", {}).get("entryPoints", []):
+            if ep.get("entryPointType") == "video":
+                result += f" | meet: {ep.get('uri', '')}"
+                break
+
+        if event.get("recurrence"):
+            result += " [recurring]"
+
         if event_id:
             result += f" [ID: {event_id}]"
 
@@ -158,6 +179,13 @@ class CalendarTool:
         location: str = None,
         all_day: bool = False,
         user_timezone: str = "UTC",
+        attendees: list = None,
+        add_google_meet: bool = False,
+        reminders: list = None,
+        recurrence: str = None,
+        color_id: int = None,
+        visibility: str = None,
+        transparency: str = None,
         tool_context: ToolContext = None,
     ) -> str:
         """Create a new calendar event."""
@@ -201,18 +229,48 @@ class CalendarTool:
                 f"Error: {e}"
             )
 
+        if attendees:
+            event["attendees"] = [{"email": e} for e in attendees]
+        if add_google_meet:
+            event["conferenceData"] = {
+                "createRequest": {
+                    "requestId": str(uuid.uuid4()),
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                }
+            }
+        if reminders is not None:
+            event["reminders"] = {
+                "useDefault": False,
+                "overrides": [{"method": "popup", "minutes": m} for m in reminders],
+            }
+        if recurrence:
+            event["recurrence"] = [recurrence]
+        if color_id is not None:
+            event["colorId"] = str(color_id)
+        if visibility:
+            event["visibility"] = visibility
+        if transparency:
+            event["transparency"] = transparency
+
         service = await self._get_service(tool_context)
         if service is None:
             return ""
 
         try:
-            created_event = (
-                service.events()
-                .insert(calendarId="primary", body=event)
-                .execute()
-            )
+            insert_kwargs = {"calendarId": "primary", "body": event}
+            if attendees:
+                insert_kwargs["sendUpdates"] = "all"
+            if add_google_meet:
+                insert_kwargs["conferenceDataVersion"] = 1
+            created_event = service.events().insert(**insert_kwargs).execute()
+
             event_link = created_event.get("htmlLink", "")
-            return f"Created event: '{title}' on {start}. Link: {event_link}"
+            result = f"Created event: '{title}' on {start}. Link: {event_link}"
+            for ep in created_event.get("conferenceData", {}).get("entryPoints", []):
+                if ep.get("entryPointType") == "video":
+                    result += f" Meet: {ep['uri']}"
+                    break
+            return result
         except HttpError as e:
             return f"Error creating event: {e}"
         except Exception as e:
@@ -227,6 +285,12 @@ class CalendarTool:
         description: str = None,
         location: str = None,
         user_timezone: str = "UTC",
+        attendees: list = None,
+        reminders: list = None,
+        recurrence: str = None,
+        color_id: int = None,
+        visibility: str = None,
+        transparency: str = None,
         tool_context: ToolContext = None,
     ) -> str:
         """Update an existing calendar event."""
@@ -284,17 +348,61 @@ class CalendarTool:
         except ValueError as e:
             return f"Invalid datetime format: {e}"
 
+        if attendees is not None:
+            existing_event["attendees"] = [{"email": e} for e in attendees]
+        if reminders is not None:
+            existing_event["reminders"] = {
+                "useDefault": False,
+                "overrides": [{"method": "popup", "minutes": m} for m in reminders],
+            }
+        if recurrence is not None:
+            existing_event["recurrence"] = [recurrence]
+        if color_id is not None:
+            existing_event["colorId"] = str(color_id)
+        if visibility is not None:
+            existing_event["visibility"] = visibility
+        if transparency is not None:
+            existing_event["transparency"] = transparency
+
         try:
-            (
-                service.events()
-                .update(calendarId="primary", eventId=event_id, body=existing_event)
-                .execute()
-            )
+            update_kwargs = {
+                "calendarId": "primary",
+                "eventId": event_id,
+                "body": existing_event,
+            }
+            if attendees is not None:
+                update_kwargs["sendUpdates"] = "all"
+            service.events().update(**update_kwargs).execute()
             return f"Updated event: '{existing_event.get('summary', event_id)}'"
         except HttpError as e:
             return f"Error updating event: {e}"
         except Exception as e:
             return f"Error updating event: {e}"
+
+    async def delete_calendar_event(
+        self,
+        event_id: str,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Delete a calendar event by ID."""
+        _, err = require_user_id(tool_context, "google")
+        if err:
+            return err
+
+        service = await self._get_service(tool_context)
+        if service is None:
+            return ""
+
+        try:
+            service.events().delete(calendarId="primary", eventId=event_id).execute()
+            return f"Deleted event: {event_id}"
+        except HttpError as e:
+            status = getattr(e.resp, "status", None)
+            if status == 404:
+                return f"Event not found: {event_id}"
+            return f"Error deleting event: {e}"
+        except Exception as e:
+            return f"Error deleting event: {e}"
 
     async def get_calendar_status(self, tool_context: ToolContext = None) -> str:
         """Check if Google Calendar is connected."""

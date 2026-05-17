@@ -126,8 +126,20 @@ def _personal_prompt() -> str:
 
         "## Google Calendar\n"
         "- list_calendar_events(start_date, end_date, max_results, user_timezone)\n"
-        "- create_calendar_event(title, start, end, description, location, user_timezone)\n"
-        "- update_calendar_event(event_id, title, start, end, description, location, user_timezone)\n"
+        "- create_calendar_event(title, start, end, description, location, all_day, user_timezone,\n"
+        "    attendees, add_google_meet, reminders, recurrence, color_id, visibility, transparency)\n"
+        "  - attendees: list of email strings — Google Calendar sends invites automatically\n"
+        "  - add_google_meet: True to attach a Google Meet link\n"
+        "  - reminders: list of ints (minutes before the event, popup notification)\n"
+        "  - recurrence: RRULE string e.g. 'RRULE:FREQ=WEEKLY;BYDAY=MO'\n"
+        "  - color_id: 1-11 (1=lavender, 2=sage, 3=grape, 4=flamingo, 5=banana,\n"
+        "      6=tangerine, 7=peacock, 8=graphite, 9=blueberry, 10=basil, 11=tomato)\n"
+        "  - visibility: 'public', 'private', or 'confidential'\n"
+        "  - transparency: 'opaque' (shows as busy) or 'transparent' (shows as free)\n"
+        "- update_calendar_event(event_id, title, start, end, description, location, user_timezone,\n"
+        "    attendees, reminders, recurrence, color_id, visibility, transparency)\n"
+        "  - attendees replaces the full attendee list and re-sends invites; pass [] to remove all\n"
+        "- delete_calendar_event(event_id)\n"
         "- get_calendar_status()\n\n"
         "Use for scheduling, checking availability, and managing events. "
         "Always pass the user's timezone. If a tool returns empty, Google authorization is being requested — do not say anything, the user is being prompted to authorize.\n\n"
@@ -299,6 +311,7 @@ def create_agent(
     list_events_tool = FunctionTool(func=calendar_tool.list_calendar_events)
     create_event_tool = FunctionTool(func=calendar_tool.create_calendar_event, require_confirmation=True)
     update_event_tool = FunctionTool(func=calendar_tool.update_calendar_event, require_confirmation=True)
+    delete_event_tool = FunctionTool(func=calendar_tool.delete_calendar_event, require_confirmation=True)
     calendar_status_tool = FunctionTool(func=calendar_tool.get_calendar_status)
 
     # Drive tools
@@ -368,6 +381,7 @@ def create_agent(
         list_events_tool,
         create_event_tool,
         update_event_tool,
+        delete_event_tool,
         calendar_status_tool,
         # Drive tools
         save_to_drive_tool,

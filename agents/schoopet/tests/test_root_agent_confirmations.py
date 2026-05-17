@@ -8,6 +8,7 @@ REQUIRE_CONFIRMATION_BOOL = {
     "cancel_task",
     "create_calendar_event",
     "update_calendar_event",
+    "delete_calendar_event",
     "save_file_to_drive",
     "create_google_doc",
     "create_spreadsheet",
