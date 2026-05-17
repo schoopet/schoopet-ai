@@ -73,6 +73,11 @@ def email_services(monkeypatch):
     agent_client.extract_confirmation_requests = AgentEngineClient.extract_confirmation_requests
     agent_client.extract_credential_requests = AgentEngineClient.extract_credential_requests
 
+    async def _resolve_passthrough(user_id, session_id, events, context=""):
+        return (events, None)
+
+    agent_client.resolve_iam_credential_events = _resolve_passthrough
+
     monkeypatch.setattr(handler, "_agent_client", agent_client)
     monkeypatch.setattr(handler, "_session_manager", session_manager)
     monkeypatch.setattr(handler, "_discord_sender", discord_sender)

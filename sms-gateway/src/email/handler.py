@@ -345,31 +345,25 @@ async def _notify_agent_of_emails(
         )
         logger.info(f"Email notification routed to agent session {session_info.agent_session_id}")
 
-        # Handle IAM connector credential requests (offline: store pending + send auth link)
-        credential_requests = _agent_client.extract_credential_requests(events)
-        if credential_requests:
-            req = credential_requests[0]
-            logger.info(
-                f"Offline IAM connector credential request for {user_id[:4]}****: "
-                f"nonce={req.nonce[:8]}..."
-            )
+        events, credential_req = await _agent_client.resolve_iam_credential_events(
+            user_id=user_id,
+            session_id=session_info.agent_session_id,
+            events=events,
+            context="email",
+        )
+        if credential_req:
             await _session_manager.set_pending_credential(
-                nonce=req.nonce,
+                nonce=credential_req.nonce,
                 user_id=user_id,
                 session_id=session_info.agent_session_id,
-                credential_function_call_id=req.function_call_id,
-                auth_config_dict=req.auth_config_dict,
-                auth_uri=req.auth_uri,
-            )
-            logger.warning(
-                f"Sending offline auth link to {user_id[:4]}**** via Discord DM: "
-                f"nonce={req.nonce[:8]}... credentialKey={req.auth_config_dict.get('credentialKey', 'unknown')!r} "
-                f"auth_uri={req.auth_uri[:80]}..."
+                credential_function_call_id=credential_req.function_call_id,
+                auth_config_dict=credential_req.auth_config_dict,
+                auth_uri=credential_req.auth_uri,
             )
             await _send_response(
                 user_id,
                 f"An email triggered an action that requires Google authorization. "
-                f"Click here to authorize and I'll complete it automatically:\n{req.auth_uri}",
+                f"Click here to authorize and I'll complete it automatically:\n{credential_req.auth_uri}",
             )
             return
 

@@ -138,6 +138,11 @@ def gateway_services():
     agent_client.extract_text = AgentEngineClient.extract_text
     agent_client.extract_confirmation_requests = AgentEngineClient.extract_confirmation_requests
     agent_client.extract_credential_requests = AgentEngineClient.extract_credential_requests
+
+    async def _resolve_passthrough(user_id, session_id, events, context=""):
+        return (events, None)
+
+    agent_client.resolve_iam_credential_events = _resolve_passthrough
     gateway = SchoopetGateway(session_manager, agent_client)
     return gateway, session_manager, agent_client
 

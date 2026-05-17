@@ -346,63 +346,22 @@ class SchoopetGateway(discord.Client):
                 )
                 return
 
-            # If ADK re-requests credentials without an auth URI, the IAM connector
-            # credential is already stored in the backend (user previously consented).
-            # Auto-respond so ADK can pick up the stored token without prompting again.
-            _AUTO_RESOLVE_CAP = 3
-            for _i in range(_AUTO_RESOLVE_CAP):
-                auto_creds = _AgentEngineClient.extract_gcp_auto_credential_requests(events)
-                if not auto_creds:
-                    if _i > 0:
-                        logger.info(
-                            f"IAM connector auto-resolve complete after {_i} iteration(s) "
-                            f"for {user_id}"
-                        )
-                    break
-                fc_id, auth_config = auto_creds[0]
-                credential_key = auth_config.get("credentialKey", "unknown")
-                logger.info(
-                    f"Auto-resolving stored IAM connector credential for {user_id}: "
-                    f"fc_id={fc_id} credentialKey={credential_key!r} "
-                    f"(iteration {_i + 1}/{_AUTO_RESOLVE_CAP}, {len(auto_creds)} pending)"
-                )
-                try:
-                    events = await self._agent_client.send_credential_response(
-                        user_id=user_id,
-                        session_id=session_info.agent_session_id,
-                        credential_function_call_id=fc_id,
-                        auth_config_dict=auth_config,
-                    )
-                except asyncio.TimeoutError:
-                    logger.error(f"Timeout during IAM credential auto-resolve for {user_id}")
-                    break
-            else:
-                # All 3 iterations exhausted — credential requests are not clearing.
-                remaining = _AgentEngineClient.extract_gcp_auto_credential_requests(events)
-                logger.warning(
-                    f"IAM connector auto-resolve cap ({_AUTO_RESOLVE_CAP}) reached for {user_id}: "
-                    f"{len(remaining)} credential request(s) still pending — "
-                    f"stored credential may be invalid or IAM connector state is inconsistent"
-                )
-
-            credential_requests = self._agent_client.extract_credential_requests(events)
-            if credential_requests:
-                req = credential_requests[0]
-                logger.warning(
-                    f"IAM connector interactive auth required for Discord user {user_id}: "
-                    f"nonce={req.nonce[:8]}... fc_id={req.function_call_id} "
-                    f"credentialKey={req.auth_config_dict.get('credentialKey', 'unknown')!r} "
-                    f"auth_uri={req.auth_uri[:80]}..."
-                )
+            events, credential_req = await self._agent_client.resolve_iam_credential_events(
+                user_id=user_id,
+                session_id=session_info.agent_session_id,
+                events=events,
+                context="discord",
+            )
+            if credential_req:
                 await self._session_manager.set_pending_credential(
-                    nonce=req.nonce,
+                    nonce=credential_req.nonce,
                     user_id=user_id,
                     session_id=session_info.agent_session_id,
-                    credential_function_call_id=req.function_call_id,
-                    auth_config_dict=req.auth_config_dict,
-                    auth_uri=req.auth_uri,
+                    credential_function_call_id=credential_req.function_call_id,
+                    auth_config_dict=credential_req.auth_config_dict,
+                    auth_uri=credential_req.auth_uri,
                 )
-                await self._send_auth_link(channel, req.auth_uri, req.nonce)
+                await self._send_auth_link(channel, credential_req.auth_uri, credential_req.nonce)
                 await self._session_manager.update_last_activity(
                     user_id,
                     channel="discord",

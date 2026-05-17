@@ -423,6 +423,72 @@ class AgentEngineClient:
                 )
         return requests
 
+    async def resolve_iam_credential_events(
+        self,
+        user_id: str,
+        session_id: str,
+        events: list[Event],
+        context: str = "",
+    ) -> tuple[list[Event], "AdkCredentialRequest | None"]:
+        """Auto-resolve stored IAM credentials; detect interactive auth requests.
+
+        Runs the auto-resolve loop (credentials already consented, no auth URI),
+        then checks whether an interactive credential request (with auth URI) remains.
+
+        Returns (final_events, credential_request_or_none). If credential_request_or_none
+        is not None, the caller must store the pending credential and send an auth link.
+        """
+        uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+        ctx = f"[{context}] " if context else ""
+
+        _AUTO_RESOLVE_CAP = 3
+        for _i in range(_AUTO_RESOLVE_CAP):
+            auto_creds = self.extract_gcp_auto_credential_requests(events)
+            if not auto_creds:
+                if _i > 0:
+                    logger.info(
+                        f"{ctx}IAM connector auto-resolve complete after {_i} iteration(s) "
+                        f"for {uid}"
+                    )
+                break
+            fc_id, auth_config = auto_creds[0]
+            credential_key = auth_config.get("credentialKey", "unknown")
+            logger.info(
+                f"{ctx}Auto-resolving stored IAM connector credential for {uid}: "
+                f"fc_id={fc_id!r} credentialKey={credential_key!r} "
+                f"(iteration {_i + 1}/{_AUTO_RESOLVE_CAP}, {len(auto_creds)} pending)"
+            )
+            try:
+                events = await self.send_credential_response(
+                    user_id=user_id,
+                    session_id=session_id,
+                    credential_function_call_id=fc_id,
+                    auth_config_dict=auth_config,
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"{ctx}Timeout during IAM credential auto-resolve for {uid}")
+                break
+        else:
+            remaining = self.extract_gcp_auto_credential_requests(events)
+            logger.warning(
+                f"{ctx}IAM connector auto-resolve cap ({_AUTO_RESOLVE_CAP}) reached for {uid}: "
+                f"{len(remaining)} credential request(s) still pending — "
+                f"stored credential may be invalid or IAM connector state is inconsistent"
+            )
+
+        credential_requests = self.extract_credential_requests(events)
+        if credential_requests:
+            req = credential_requests[0]
+            logger.warning(
+                f"{ctx}IAM connector interactive auth required for {uid}: "
+                f"nonce={req.nonce[:8]}... fc_id={req.function_call_id!r} "
+                f"credentialKey={req.auth_config_dict.get('credentialKey', 'unknown')!r} "
+                f"auth_uri={req.auth_uri[:80]}..."
+            )
+            return events, req
+
+        return events, None
+
     async def send_credential_response(
         self,
         user_id: str,
