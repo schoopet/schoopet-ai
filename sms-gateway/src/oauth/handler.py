@@ -1,8 +1,9 @@
 """OAuth HTTP handler — IAM connector callback only."""
+import asyncio
 import html
 import logging
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, BackgroundTasks, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..auth.connector import finalize_iam_credentials
@@ -15,6 +16,54 @@ router = APIRouter(prefix="/oauth", tags=["oauth"])
 _session_manager = None
 _agent_client = None
 _discord_sender = None
+
+# Seconds to wait after credentials:finalize before resuming the agent.
+# Gives the IAM connector backend time to transition from uri_consent_required
+# to consent_pending so the ADK poll loop (not the immediate-raise path) runs.
+_CREDENTIAL_PROPAGATION_DELAY_SECONDS: float = 5.0
+
+
+async def _resume_agent_after_consent(
+    user_id: str,
+    session_id: str,
+    credential_fc_id: str,
+    auth_config_dict: dict,
+    consent_nonce: str,
+) -> None:
+    """Background task: wait for IAM connector propagation then resume the agent.
+
+    The delay lets the IAM connector transition from uri_consent_required to
+    consent_pending before the agent retries the blocked workspace tool, so
+    the ADK's consent_pending poll loop runs instead of the immediate-raise path.
+    """
+    await asyncio.sleep(_CREDENTIAL_PROPAGATION_DELAY_SECONDS)
+    try:
+        events = await _agent_client.send_credential_response(
+            user_id=user_id,
+            session_id=session_id,
+            credential_function_call_id=credential_fc_id,
+            auth_config_dict=auth_config_dict,
+        )
+    except Exception as e:
+        logger.error(f"IAM connector: failed to resume agent for {user_id[:4]}****: {e}")
+        return
+
+    await _session_manager.clear_pending_credential(consent_nonce)
+
+    if _discord_sender and events:
+        from ..agent.client import AgentEngineClient
+        response_text = AgentEngineClient.extract_text(events)
+        if response_text:
+            try:
+                await _discord_sender.send(user_id, response_text)
+                logger.info(f"Forwarded post-consent agent response to Discord user {user_id[:4]}****")
+            except Exception as e:
+                logger.warning(f"Failed to forward post-consent response to Discord for {user_id[:4]}****: {e}")
+
+    try:
+        await register_gmail_watch(user_id)
+    except Exception as e:
+        logger.warning(f"Gmail watch setup request failed for {user_id[:4]}****: {e}")
 
 
 def init_oauth_services(session_manager=None, agent_client=None, discord_sender=None):
@@ -149,6 +198,7 @@ async def oauth_authorize(nonce: str = Query(..., description="Pending credentia
 
 @router.get("/connector/callback", response_class=HTMLResponse)
 async def connector_callback(
+    background_tasks: BackgroundTasks,
     state: str = Query(None, description="Nonce from IAM connector consent flow"),
     nonce: str = Query(None, description="Alternate nonce parameter"),
     user_id_validation_state: str = Query(None, description="Opaque state from IAM connector (no nonce echoed)"),
@@ -226,33 +276,12 @@ async def connector_callback(
             logger.error(f"credentials:finalize failed for {user_id[:4]}****: {e}")
             return HTMLResponse(_error_html("Failed to finalize authorization. Please try again."), status_code=500)
 
-    try:
-        events = await _agent_client.send_credential_response(
-            user_id=user_id,
-            session_id=session_id,
-            credential_function_call_id=credential_fc_id,
-            auth_config_dict=auth_config_dict,
-        )
-    except Exception as e:
-        logger.error(f"IAM connector callback: failed to resume agent for {user_id[:4]}****: {e}")
-        return HTMLResponse(_error_html("Failed to resume your session. Please try again."), status_code=500)
-
-    await _session_manager.clear_pending_credential(consent_nonce)
-
-    # Forward the agent's post-consent response to the user via Discord DM.
-    if _discord_sender and events:
-        from ..agent.client import AgentEngineClient
-        response_text = AgentEngineClient.extract_text(events)
-        if response_text:
-            try:
-                await _discord_sender.send(user_id, response_text)
-                logger.info(f"Forwarded post-consent agent response to Discord user {user_id[:4]}****")
-            except Exception as e:
-                logger.warning(f"Failed to forward post-consent response to Discord for {user_id[:4]}****: {e}")
-
-    try:
-        await register_gmail_watch(user_id)
-    except Exception as e:
-        logger.warning(f"Gmail watch setup request failed for {user_id[:4]}****: {e}")
-
+    background_tasks.add_task(
+        _resume_agent_after_consent,
+        user_id=user_id,
+        session_id=session_id,
+        credential_fc_id=credential_fc_id,
+        auth_config_dict=auth_config_dict,
+        consent_nonce=consent_nonce,
+    )
     return HTMLResponse(_success_html("your Google account", "Google Workspace"))

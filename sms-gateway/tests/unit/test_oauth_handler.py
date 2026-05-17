@@ -14,6 +14,7 @@ def reset_handler_globals(monkeypatch):
     monkeypatch.setattr(handler, "_session_manager", None)
     monkeypatch.setattr(handler, "_agent_client", None)
     monkeypatch.setattr(handler, "_discord_sender", None)
+    monkeypatch.setattr(handler, "_CREDENTIAL_PROPAGATION_DELAY_SECONDS", 0.0)
 
 
 @pytest.fixture
