@@ -110,22 +110,29 @@ Sessions expire after `SESSION_TIMEOUT_MINUTES` and are retired by deleting the 
 
 ## OAuth
 
-The active OAuth system is custom.
+The active OAuth system is Google Cloud Agent Identity IAM connectors (migrated from custom OAuth 2026-05-13, see [iam-connectors-adoption-plan.md](iam-connectors-adoption-plan.md)).
 
-Flow:
+Agent tools call `get_workspace_service()` in `agents/schoopet/gcp_auth.py`. `GcpAuthProvider` is registered at module import. On each tool call, `CredentialManager.get_auth_credential()` queries the IAM connector for a stored token.
 
-1. Agent tool detects missing Google credentials and returns an authorization link.
-2. User opens `/oauth/google/initiate`.
-3. Gateway creates an `oauth_states` Firestore document with a TTL and feature.
-4. Google redirects to `/oauth/google/callback`.
-5. Gateway exchanges the code for tokens.
-6. Access token metadata is stored in Firestore.
-7. Refresh token is stored in Secret Manager.
-8. Agent tools retrieve and refresh tokens through `agents/schoopet/oauth_client.py`.
+First-use flow (consent required):
 
-The active configured OAuth feature is `google`, which covers Calendar, Drive, Docs, Sheets, and Gmail for personal users.
+1. IAM connector returns `uri_consent_required` with `auth_uri` and `nonce` → tool returns `None`.
+2. ADK emits `adk_request_credential` event; gateway extracts it via `extract_credential_requests()`.
+3. Gateway stores pending credential in Firestore `pending_credentials/{user_id}`.
+4. Gateway sends a Discord button pointing to `/oauth/authorize?nonce=...&uid=...` (short URL — `auth_uri` exceeds Discord's URL length limit).
+5. User clicks → gateway redirects to Google OAuth consent page.
+6. User consents → IAM connector redirects to `/oauth/connector/callback?uid=...&user_id_validation_state=...`.
+7. Gateway calls `credentials:finalize` at `iamconnectorcredentials.googleapis.com`.
+8. After a 5-second propagation delay, gateway calls `send_credential_response()` to resume the agent.
+9. Agent retries the tool; IAM connector returns stored token; tool executes.
 
-The IAM Connectors plan in [iam-connectors-adoption-plan.md](/Users/mmontan/schoopet/docs/iam-connectors-adoption-plan.md) is a future migration plan, not the active runtime.
+Subsequent use: IAM connector returns stored token immediately; steps 2–8 are skipped.
+
+Scopes: Calendar events, Drive, Docs, Sheets, Gmail read+modify, userinfo.email.
+
+Legacy OAuth routes (`/oauth/google/*`, `OAuthManager`) are retained only for Gmail background push watch setup.
+
+For the full flow with sequence diagrams and design notes, see [auth-flow.md](auth-flow.md).
 
 ## Confirmations
 
