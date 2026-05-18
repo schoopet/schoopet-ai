@@ -169,6 +169,7 @@ async def process_discord_confirmation_component(
     session_scope: str = "",
 ) -> None:
     """Resolve an ADK confirmation from a Discord component webhook."""
+    uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
     try:
         pending = await _session_manager.get_pending_approval(
             user_id,
@@ -182,6 +183,13 @@ async def process_discord_confirmation_component(
             )
             return
 
+        tool_name = pending.get("tool_name", "unknown")
+        action = "approved" if confirmed else "rejected"
+        logger.info(
+            f"[confirm] User response (online/webhook): user={uid} pending_id={pending_id} "
+            f"tool={tool_name} action={action}"
+        )
+
         pending_group = await _session_manager.get_pending_approval_group(
             user_id,
             pending_id,
@@ -192,6 +200,12 @@ async def process_discord_confirmation_component(
 
         all_events = []
         for grouped_pending in pending_group:
+            logger.info(
+                f"[confirm] Agent resuming (online/webhook): user={uid} "
+                f"tool={grouped_pending.get('tool_name', tool_name)} "
+                f"fc_id={grouped_pending.get('adk_confirmation_function_call_id')!r} "
+                f"confirmed={confirmed}"
+            )
             events = await _agent_client.send_confirmation_response(
                 user_id=user_id,
                 session_id=grouped_pending["agent_session_id"],
@@ -207,6 +221,10 @@ async def process_discord_confirmation_component(
         )
 
         response = _agent_client.extract_text(all_events)
+        logger.info(
+            f"[confirm] Agent resumed (online/webhook): user={uid} pending_id={pending_id} "
+            f"tool={tool_name} response_chars={len(response)}"
+        )
         if response:
             await _discord_sender.send_followup(interaction_token, response)
         await _session_manager.update_last_activity(
@@ -222,6 +240,6 @@ async def process_discord_confirmation_component(
                 "I couldn't resolve that approval. Please try again.",
             )
         except Exception as send_err:
-            logger.error(f"Failed to send Discord confirmation error followup: {send_err}")
+            logger.exception(f"Failed to send Discord confirmation error followup")
 
 

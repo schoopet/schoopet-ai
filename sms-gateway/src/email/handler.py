@@ -104,7 +104,7 @@ async def _verify_pubsub_oidc(request: Request) -> None:
     try:
         claims = await _verify_oidc_claims(token, audience)
     except HTTPException:
-        logger.warning("Email webhook: OIDC token verification failed")
+        logger.warning("Email webhook: OIDC token verification failed", exc_info=True)
         raise HTTPException(status_code=401, detail="Invalid Pub/Sub OIDC token")
 
     email = claims.get("email", "")
@@ -139,7 +139,7 @@ async def handle_email_webhook(
     try:
         body = await request.json()
     except Exception:
-        logger.warning("Email webhook: invalid JSON body")
+        logger.warning("Email webhook: invalid JSON body", exc_info=True)
         return Response(status_code=200)
 
     message = body.get("message", {})
@@ -150,7 +150,7 @@ async def handle_email_webhook(
     try:
         payload = json.loads(base64.b64decode(data_b64).decode("utf-8"))
     except Exception as e:
-        logger.warning(f"Email webhook: could not decode message data: {e}")
+        logger.warning(f"Email webhook: could not decode message data: {e}", exc_info=True)
         return Response(status_code=200)
 
     history_id = str(payload.get("historyId", ""))
@@ -181,7 +181,7 @@ async def _read_watch_state(gmail_address: str) -> Optional[dict]:
         doc = await _db.collection("email_state").document(doc_id).get()
         return doc.to_dict() if doc.exists else None
     except Exception as e:
-        logger.error(f"Failed to read watch state for {gmail_address}: {e}")
+        logger.exception(f"Failed to read watch state for {gmail_address}")
         return None
 
 
@@ -193,7 +193,7 @@ async def _write_watch_state(gmail_address: str, updates: dict) -> None:
         doc_id = normalize_gmail_address(gmail_address)
         await _db.collection("email_state").document(doc_id).set(updates, merge=True)
     except Exception as e:
-        logger.error(f"Failed to write watch state for {gmail_address}: {e}")
+        logger.exception(f"Failed to write watch state for {gmail_address}")
 
 
 _ALREADY_PROCESSED = object()
@@ -229,7 +229,7 @@ async def _atomic_advance_history_id(
         transaction = _db.transaction()
         return await _txn(transaction)
     except Exception as e:
-        logger.error(f"Failed to advance history_id for {gmail_address}: {e}")
+        logger.exception(f"Failed to advance history_id for {gmail_address}")
         return None
 
 
@@ -244,7 +244,7 @@ async def _load_email_rules(user_id: str) -> list[dict]:
         rules_ref = _db.collection(EMAIL_RULES_COLLECTION).document(user_id).collection("rules")
         return [doc.to_dict() async for doc in rules_ref.stream()]
     except Exception as e:
-        logger.error(f"Failed to load email rules for {user_id[:4]}****: {e}")
+        logger.exception(f"Failed to load email rules for {user_id[:4]}****")
         return []
 
 
@@ -338,18 +338,9 @@ async def _notify_agent_of_emails(
             context="email",
         )
         if credential_req:
-            await _session_manager.set_pending_credential(
-                nonce=credential_req.nonce,
-                user_id=user_id,
-                session_id=session_info.agent_session_id,
-                credential_function_call_id=credential_req.function_call_id,
-                auth_config_dict=credential_req.auth_config_dict,
-                auth_uri=credential_req.auth_uri,
-            )
-            await _send_response(
-                user_id,
-                f"An email triggered an action that requires Google authorization. "
-                f"Click here to authorize and I'll complete it automatically:\n{credential_req.auth_uri}",
+            logger.error(
+                f"Email path received auth credential request for {user_id[:4]}**** "
+                f"— auth requests are not supported in offline mode; dropping notification"
             )
             return
 
@@ -376,7 +367,7 @@ async def _notify_agent_of_emails(
                 return
             await _send_response(user_id, response)
     except Exception as e:
-        logger.error(f"Failed to route email notification for {user_id[:4]}****: {e}")
+        logger.exception(f"Failed to route email notification for {user_id[:4]}****")
 
 
 async def _send_response(user_id: str, message: str) -> None:
@@ -387,7 +378,7 @@ async def _send_response(user_id: str, message: str) -> None:
         else:
             logger.warning("No Discord sender available for email response")
     except Exception as e:
-        logger.error(f"Failed to send email response via Discord: {e}")
+        logger.exception(f"Failed to send email response via Discord")
 
 
 
@@ -416,7 +407,7 @@ async def register_gmail_watch(
         logger.info(f"Gmail watch setup requested for user={user_id[:4]}****")
         return True
     except Exception as e:
-        logger.error(f"Failed to request Gmail watch setup for {user_id[:4]}****: {e}")
+        logger.exception(f"Failed to request Gmail watch setup for {user_id[:4]}****")
         return False
 
 
@@ -457,7 +448,7 @@ async def renew_gmail_watch(
             else:
                 failed += 1
     except Exception as e:
-        logger.error(f"Error iterating email_state documents: {e}")
+        logger.exception(f"Error iterating email_state documents")
 
     logger.info(f"Watch renewal complete by {caller}: {renewed} requested, {failed} failed")
     return {

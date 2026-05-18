@@ -85,6 +85,10 @@ class GatewayTaskExecutor:
             return {"claimed": False, "prior_status": status, "task": task}
 
         started_at = datetime.now(timezone.utc)
+        logger.info(
+            "[firestore] update %s/%s: status=running (was %s)",
+            ASYNC_TASKS_COLLECTION, task_id, status,
+        )
         try:
             await doc_ref.update(
                 {
@@ -137,9 +141,10 @@ class GatewayTaskExecutor:
             # an invalid resource ID) and can recover on its own.
             confirmations = self._agent_client.extract_confirmation_requests(events)
             if confirmations:
+                task_id = task.get("task_id")
                 logger.warning(
                     "Task %s: %d confirmation request(s) in offline mode — auto-declining",
-                    task.get("task_id"),
+                    task_id,
                     len(confirmations),
                 )
                 follow_up_events: list = []
@@ -150,15 +155,31 @@ class GatewayTaskExecutor:
                         or confirmation.tool_args.get("folder_id")
                         or "unknown"
                     )
+                    reason = (
+                        f"Resource '{resource_id}' is not in the pre-authorized resource "
+                        "list for this task. The write was not performed."
+                    )
+                    logger.info(
+                        "[confirm] Agent suspended (offline): task_id=%s tool=%s "
+                        "args=%s fc_id=%s",
+                        task_id, confirmation.tool_name,
+                        confirmation.tool_args, confirmation.function_call_id,
+                    )
+                    logger.info(
+                        "[confirm] Auto-declining (offline): task_id=%s tool=%s "
+                        "resource=%s reason=%r",
+                        task_id, confirmation.tool_name, resource_id, reason,
+                    )
                     follow_up_events = await self._agent_client.send_confirmation_response(
                         user_id=user_id,
                         session_id=session_id,
                         confirmation_function_call_id=confirmation.function_call_id,
                         confirmed=False,
-                        reason=(
-                            f"Resource '{resource_id}' is not in the pre-authorized resource "
-                            "list for this task. The write was not performed."
-                        ),
+                        reason=reason,
+                    )
+                    logger.info(
+                        "[confirm] Agent resumed (offline): task_id=%s tool=%s events=%d",
+                        task_id, confirmation.tool_name, len(follow_up_events),
                     )
                 events = follow_up_events
             result = self._agent_client.extract_text(events)
@@ -193,6 +214,10 @@ class GatewayTaskExecutor:
         return state
 
     async def _update_task_result(self, task_id: str, result: str) -> None:
+        logger.info(
+            "[firestore] update %s/%s: status=completed result_chars=%d",
+            ASYNC_TASKS_COLLECTION, task_id, len(result),
+        )
         await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update({
             "status": "completed",
             "result": result,
@@ -200,12 +225,20 @@ class GatewayTaskExecutor:
         })
 
     async def _mark_task_notified(self, task_id: str) -> None:
+        logger.info(
+            "[firestore] update %s/%s: status=notified",
+            ASYNC_TASKS_COLLECTION, task_id,
+        )
         await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update({
             "status": "notified",
             "notified_at": datetime.now(timezone.utc),
         })
 
     async def _update_task_error(self, task_id: str, error: str) -> None:
+        logger.warning(
+            "[firestore] update %s/%s: status=failed error=%r",
+            ASYNC_TASKS_COLLECTION, task_id, error[:200],
+        )
         await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update({
             "status": "failed",
             "error": error,
@@ -314,6 +347,7 @@ class GatewayTaskExecutor:
                         logger.warning(
                             "Task %s: Cloud Task creation failed and cleanup failed: %s",
                             task_id, cleanup_exc,
+                            exc_info=True,
                         )
                 errors += 1
 
@@ -387,5 +421,5 @@ class GatewayTaskExecutor:
         except AlreadyExists:
             return task_name
         except Exception as exc:
-            logger.error("Failed to create Cloud Task for %s: %s", task_id, exc)
+            logger.exception("Failed to create Cloud Task for %s", task_id)
             return None

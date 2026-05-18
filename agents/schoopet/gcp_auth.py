@@ -1,4 +1,5 @@
 """GCP Agent Identity auth provider — registers GcpAuthProvider at import time."""
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -12,6 +13,12 @@ logger = logging.getLogger(__name__)
 
 _provider = GcpAuthProvider()
 CredentialManager.register_auth_provider(_provider)
+
+# GcpAuthProvider is a module-level singleton with a single HTTP client whose SSL
+# context (pyopenssl) is not safe for concurrent use. Concurrent get_auth_credential
+# calls from different tools cause "Context has already been used to create a Connection".
+# This lock serializes all IAM connector RetrieveCredentials calls.
+_iam_lock = asyncio.Lock()
 
 GOOGLE_PERSONAL_SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
@@ -58,13 +65,13 @@ def extract_and_validate_token(credential, tool_name: str) -> str | None:
     # Log raw credential structure — helps detect unexpected types from ADK.
     auth_type = getattr(credential, "auth_type", "<unknown>")
     has_http = getattr(credential, "http", None) is not None
-    logger.debug(f"{tag} credential received: auth_type={auth_type}, has_http={has_http}")
+    logger.info(f"{tag} credential received: auth_type={auth_type}, has_http={has_http}")
 
     try:
         http_creds = credential.http.credentials
         token: str | None = http_creds.token
     except AttributeError as e:
-        logger.warning(f"{tag} unexpected credential structure: {e!r} — credential={credential!r}")
+        logger.warning(f"{tag} unexpected credential structure: {e!r} — credential={credential!r}", exc_info=True)
         return None
 
     if not token:
@@ -131,15 +138,32 @@ async def get_workspace_service(api_name: str, version: str, tool_name: str, too
     )
 
     cred_mgr = CredentialManager(auth_config=build_auth_config(user_id))
-    try:
-        credential = await cred_mgr.get_auth_credential(tool_context)
-    except Exception as exc:
-        logger.warning(
-            f"[iam-flow:{tool_name}] get_auth_credential raised {type(exc).__name__}: {exc!r} "
-            f"— requesting interactive credential for user={uid_tag}"
-        )
-        await cred_mgr.request_credential(tool_context)
-        return None
+    async with _iam_lock:
+        try:
+            credential = await cred_mgr.get_auth_credential(tool_context)
+        except Exception as exc:
+            # Walk the exception chain to surface the underlying HTTP status/body from ADK.
+            cause = exc.__cause__ or exc.__context__
+            cause_detail = f" caused_by={type(cause).__name__}: {cause!r}" if cause else ""
+            http_status = None
+            for ex in (exc, cause):
+                if ex is None:
+                    continue
+                http_status = (
+                    getattr(getattr(ex, "resp", None), "status", None)
+                    or getattr(ex, "status_code", None)
+                    or getattr(ex, "code", None)
+                )
+                if http_status:
+                    break
+            logger.warning(
+                f"[iam-flow:{tool_name}] get_auth_credential raised {type(exc).__name__}: {exc!r}"
+                f"{cause_detail} http_status={http_status}"
+                f" — requesting interactive credential for user={uid_tag}",
+                exc_info=True,
+            )
+            await cred_mgr.request_credential(tool_context)
+            return None
 
     if not credential:
         logger.warning(

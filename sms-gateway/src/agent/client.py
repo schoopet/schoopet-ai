@@ -100,7 +100,8 @@ def _log_tool_activity(event: Event, user_id: str) -> None:
         if "result" in response and response["result"] == "":
             logger.warning(
                 f"Tool response [{uid}]: {fr.name} → EMPTY RESULT "
-                f"(credential may not be providing a valid token)"
+                f"(credential may not be providing a valid token) "
+                f"full_response={response!r}"
             )
         else:
             logger.info(f"Tool response [{uid}]: {fr.name} → {output_str}")
@@ -499,9 +500,15 @@ class AgentEngineClient:
         """Resume an agent session after IAM connector consent is complete."""
         uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
         credential_key = auth_config_dict.get("credentialKey", "unknown")
+        exchanged = auth_config_dict.get("exchangedAuthCredential") or {}
+        oauth2 = exchanged.get("oauth2") or {}
+        token_val = oauth2.get("accessToken") or oauth2.get("access_token") or oauth2.get("token") or ""
         logger.info(
             f"Sending credential response: user={uid} "
-            f"fc_id={credential_function_call_id!r} credentialKey={credential_key!r}"
+            f"fc_id={credential_function_call_id!r} credentialKey={credential_key!r} "
+            f"has_exchangedAuthCredential={bool(exchanged)} "
+            f"has_token={bool(token_val)} "
+            f"auth_config_keys={list(auth_config_dict.keys())}"
         )
         content = types.Content(
             role="user",

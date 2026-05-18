@@ -268,6 +268,10 @@ class SessionManager:
             }
             if channel:
                 update_fields["channel"] = channel
+            logger.info(
+                f"[firestore] update {COLLECTION_NAME}/{doc_id}: "
+                f"fields={list(update_fields.keys())} agent_session={agent_session_id}"
+            )
             await doc_ref.update(update_fields)
         else:
             session_doc = SessionDocument(
@@ -280,6 +284,11 @@ class SessionManager:
                 channel=channel or "discord",
                 session_scope=session_scope or "",
                 state_extra=state_extra or {},
+            )
+            logger.info(
+                f"[firestore] set {COLLECTION_NAME}/{doc_id}: "
+                f"new session doc channel={channel!r} scope={session_scope!r} "
+                f"agent_session={agent_session_id}"
             )
             await doc_ref.set(session_doc.to_firestore())
 
@@ -314,6 +323,10 @@ class SessionManager:
             "message_count": firestore.Increment(1),
             "channel": channel,
         }
+        logger.info(
+            f"[firestore] update {COLLECTION_NAME}/{doc_id}: "
+            f"last_activity+message_count channel={channel!r} scope={session_scope!r}"
+        )
         await doc_ref.update(update_data)
 
     async def get_session(
@@ -375,6 +388,11 @@ class SessionManager:
             session_scope=session_scope or "",
             created_at=datetime.now(timezone.utc),
         )
+        logger.info(
+            f"[firestore] update {COLLECTION_NAME}/{doc_id}: "
+            f"pending_confirmations ArrayUnion pending_id={pending_id} "
+            f"tool={pending.get('tool_name', 'unknown')} session={session_id}"
+        )
         await doc_ref.update({"pending_confirmations": firestore.ArrayUnion([pending])})
         return pending
 
@@ -422,6 +440,11 @@ class SessionManager:
         remaining = [c for c in session.pending_confirmations if c.get("id") != pending_id]
         doc_id = self._doc_id(user_id, session_scope)
         doc_ref = self._collection.document(doc_id)
+        logger.info(
+            f"[firestore] update {COLLECTION_NAME}/{doc_id}: "
+            f"clear pending_approval pending_id={pending_id} "
+            f"remaining={len(remaining)}"
+        )
         await doc_ref.update({"pending_confirmations": remaining})
 
     async def clear_pending_approval_group(
@@ -441,6 +464,11 @@ class SessionManager:
         )
         doc_id = self._doc_id(user_id, session_scope)
         doc_ref = self._collection.document(doc_id)
+        logger.info(
+            f"[firestore] update {COLLECTION_NAME}/{doc_id}: "
+            f"clear pending_approval_group pending_id={pending_id} "
+            f"remaining={len(remaining)}"
+        )
         await doc_ref.update({"pending_confirmations": remaining})
 
     def should_send_pending_approval_notification(self, pending_group: list[dict]) -> bool:
@@ -508,9 +536,18 @@ class SessionManager:
     ) -> None:
         """Store a pending IAM connector credential request keyed by user_id."""
         from datetime import datetime, timezone
-        doc_ref = self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(
-            normalize_user_id(user_id)
+        doc_id = normalize_user_id(user_id)
+        uid_tag = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+        credential_key = auth_config_dict.get("credentialKey", "unknown") if auth_config_dict else "unknown"
+        logger.info(
+            f"[firestore] set {PENDING_CREDENTIALS_COLLECTION}/{doc_id}: "
+            f"user={uid_tag} session={session_id} "
+            f"nonce={nonce[:8] if nonce else 'n/a'}... "
+            f"credentialKey={credential_key!r} "
+            f"fc_id={credential_function_call_id!r} "
+            f"auth_uri={auth_uri[:80] if auth_uri else 'n/a'}..."
         )
+        doc_ref = self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(doc_id)
         await doc_ref.set({
             "nonce": nonce,
             "user_id": user_id,
@@ -529,14 +566,17 @@ class SessionManager:
             ).get()
             return doc.to_dict() if doc.exists else None
         except Exception as e:
-            logger.error(f"Failed to get pending credential for user {user_id[:4]}****: {e}")
+            logger.exception(f"Failed to get pending credential for user {user_id[:4]}****")
             return None
 
     async def clear_pending_credential(self, user_id: str) -> None:
         """Remove a pending credential record."""
+        doc_id = normalize_user_id(user_id)
+        uid_tag = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+        logger.info(
+            f"[firestore] delete {PENDING_CREDENTIALS_COLLECTION}/{doc_id}: user={uid_tag}"
+        )
         try:
-            await self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(
-                normalize_user_id(user_id)
-            ).delete()
+            await self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(doc_id).delete()
         except Exception as e:
-            logger.error(f"Failed to clear pending credential for user {user_id[:4]}****: {e}")
+            logger.exception(f"Failed to clear pending credential for user {uid_tag}")

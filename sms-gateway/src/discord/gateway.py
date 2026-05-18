@@ -339,7 +339,7 @@ class SchoopetGateway(discord.Client):
                     message=wrap_message_with_discord_context(message, discord_context),
                 )
             except asyncio.TimeoutError:
-                logger.error(f"Agent timeout for Discord gateway user {user_id}")
+                logger.error(f"Agent timeout for Discord gateway user {user_id}", exc_info=True)
                 await self._send_channel_text(
                     channel,
                     "I'm taking longer than usual to respond. Please try again in a moment.",
@@ -371,6 +371,13 @@ class SchoopetGateway(discord.Client):
 
             confirmations = self._agent_client.extract_confirmation_requests(events)
             if confirmations:
+                uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+                tool_names = [c.tool_name for c in confirmations]
+                logger.info(
+                    f"[confirm] Agent suspended (online): user={uid} "
+                    f"tools={tool_names} count={len(confirmations)} "
+                    f"session={session_info.agent_session_id}"
+                )
                 await self._store_and_send_confirmations(
                     user_id=user_id,
                     confirmations=confirmations,
@@ -438,6 +445,14 @@ class SchoopetGateway(discord.Client):
             await interaction.followup.send("That approval is no longer pending.")
             return
 
+        uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+        tool_name = pending.get("tool_name", "unknown")
+        action = "approved" if confirmed else "rejected"
+        logger.info(
+            f"[confirm] User response (online): user={uid} pending_id={pending_id} "
+            f"tool={tool_name} action={action}"
+        )
+
         try:
             pending_group = await self._session_manager.get_pending_approval_group(
                 user_id,
@@ -449,6 +464,12 @@ class SchoopetGateway(discord.Client):
 
             all_events = []
             for grouped_pending in pending_group:
+                logger.info(
+                    f"[confirm] Agent resuming (online): user={uid} "
+                    f"tool={grouped_pending.get('tool_name', tool_name)} "
+                    f"fc_id={grouped_pending.get('adk_confirmation_function_call_id')!r} "
+                    f"confirmed={confirmed}"
+                )
                 events = await self._agent_client.send_confirmation_response(
                     user_id=user_id,
                     session_id=grouped_pending["agent_session_id"],
@@ -466,9 +487,19 @@ class SchoopetGateway(discord.Client):
             await interaction.response.edit_message(view=view)
 
             new_confirmations = self._agent_client.extract_confirmation_requests(all_events)
+            response = self._agent_client.extract_text(all_events)
+            logger.info(
+                f"[confirm] Agent resumed (online): user={uid} pending_id={pending_id} "
+                f"tool={tool_name} response_chars={len(response)} "
+                f"chained_confirmations={len(new_confirmations)}"
+            )
             if new_confirmations:
-                # Fix 4: send chained confirmations to the channel, not interaction.followup
-                # (interaction tokens expire after 15 min; channel.send has no such limit)
+                chained_tools = [c.tool_name for c in new_confirmations]
+                logger.info(
+                    f"[confirm] Agent suspended (online, chained): user={uid} "
+                    f"tools={chained_tools} count={len(new_confirmations)}"
+                )
+                # send chained confirmations to channel (interaction tokens expire after 15 min)
                 await self._store_and_send_confirmations(
                     user_id=user_id,
                     confirmations=new_confirmations,
@@ -477,7 +508,6 @@ class SchoopetGateway(discord.Client):
                     session_scope=session_scope,
                 )
             else:
-                response = self._agent_client.extract_text(all_events)
                 if response:
                     for chunk in _split_message(response):
                         await interaction.followup.send(chunk)
@@ -501,7 +531,7 @@ async def _run_gateway_with_retry(client: "SchoopetGateway", bot_token: str) -> 
         try:
             await client.start(bot_token)
         except Exception as e:
-            logger.warning(f"Discord gateway disconnected ({e}), retrying in {delay}s")
+            logger.warning(f"Discord gateway disconnected ({e}), retrying in {delay}s", exc_info=True)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 300)  # cap at 5 minutes
 

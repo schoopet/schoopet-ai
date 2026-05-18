@@ -96,34 +96,58 @@ class EmailTool:
         try:
             return [doc.to_dict() for doc in ref.stream()]
         except Exception as e:
-            logger.error(f"Failed to load email rules for {user_id[:4]}****: {e}")
+            logger.exception(f"Failed to load email rules for {user_id[:4]}****")
             return []
 
     # ── Gmail helpers ──────────────────────────────────────────────────────
 
     def _gmail_search(self, service, query: str, max_results: int) -> list[dict]:
-        response = (
-            service.users()
-            .messages()
-            .list(userId="me", q=query, maxResults=max_results)
-            .execute()
+        logger.info(f"[gmail-api] messages.list → q={query!r} maxResults={max_results}")
+        try:
+            response = (
+                service.users()
+                .messages()
+                .list(userId="me", q=query, maxResults=max_results)
+                .execute()
+            )
+        except HttpError as e:
+            logger.error(
+                f"[gmail-api] messages.list failed: status={e.resp.status} "
+                f"reason={e.reason!r} body={e.content[:300]!r}"
+            )
+            raise
+        messages = response.get("messages", [])
+        logger.info(
+            f"[gmail-api] messages.list ok: {len(messages)} messages "
+            f"resultSizeEstimate={response.get('resultSizeEstimate')}"
         )
-        return response.get("messages", [])
+        return messages
 
     def _gmail_history(self, service, since_history_id: str, max_results: int) -> list[dict]:
         """Return primary-inbox messages added since since_history_id via the History API."""
-        response = (
-            service.users()
-            .history()
-            .list(
-                userId="me",
-                startHistoryId=since_history_id,
-                historyTypes=["messageAdded"],
-                labelId="CATEGORY_PRIMARY",
-                maxResults=max_results,
-            )
-            .execute()
+        logger.info(
+            f"[gmail-api] history.list → startHistoryId={since_history_id!r} "
+            f"maxResults={max_results}"
         )
+        try:
+            response = (
+                service.users()
+                .history()
+                .list(
+                    userId="me",
+                    startHistoryId=since_history_id,
+                    historyTypes=["messageAdded"],
+                    labelId="CATEGORY_PRIMARY",
+                    maxResults=max_results,
+                )
+                .execute()
+            )
+        except HttpError as e:
+            logger.error(
+                f"[gmail-api] history.list failed: startHistoryId={since_history_id!r} "
+                f"status={e.resp.status} reason={e.reason!r} body={e.content[:300]!r}"
+            )
+            raise
         seen = set()
         messages = []
         for record in response.get("history", []):
@@ -133,30 +157,57 @@ class EmailTool:
                 if mid and mid not in seen:
                     seen.add(mid)
                     messages.append({"id": mid})
+        logger.info(
+            f"[gmail-api] history.list ok: {len(messages)} new messages "
+            f"historyId={response.get('historyId')}"
+        )
         return messages
 
     def _gmail_fetch(self, service, message_id: str) -> Optional[dict]:
         """Fetch a single message with full body and attachment parts."""
-        return (
-            service.users()
-            .messages()
-            .get(userId="me", id=message_id, format="full")
-            .execute()
+        logger.info(f"[gmail-api] messages.get → id={message_id!r} format=full")
+        try:
+            result = (
+                service.users()
+                .messages()
+                .get(userId="me", id=message_id, format="full")
+                .execute()
+            )
+        except HttpError as e:
+            logger.error(
+                f"[gmail-api] messages.get failed: id={message_id!r} "
+                f"status={e.resp.status} reason={e.reason!r} body={e.content[:300]!r}"
+            )
+            raise
+        logger.info(
+            f"[gmail-api] messages.get ok: id={message_id!r} "
+            f"sizeEstimate={result.get('sizeEstimate')} labels={result.get('labelIds')}"
         )
+        return result
 
     def _gmail_fetch_metadata(self, service, message_id: str) -> Optional[dict]:
         """Fetch a single message with metadata headers only (lighter)."""
-        return (
-            service.users()
-            .messages()
-            .get(
-                userId="me",
-                id=message_id,
-                format="metadata",
-                metadataHeaders=["From", "Subject", "Date"],
+        logger.info(f"[gmail-api] messages.get → id={message_id!r} format=metadata")
+        try:
+            result = (
+                service.users()
+                .messages()
+                .get(
+                    userId="me",
+                    id=message_id,
+                    format="metadata",
+                    metadataHeaders=["From", "Subject", "Date"],
+                )
+                .execute()
             )
-            .execute()
-        )
+        except HttpError as e:
+            logger.error(
+                f"[gmail-api] messages.get(metadata) failed: id={message_id!r} "
+                f"status={e.resp.status} reason={e.reason!r} body={e.content[:300]!r}"
+            )
+            raise
+        logger.info(f"[gmail-api] messages.get(metadata) ok: id={message_id!r}")
+        return result
 
     @staticmethod
     def _decode_body(part: dict) -> str:
@@ -249,7 +300,7 @@ class EmailTool:
             try:
                 return base64.urlsafe_b64decode(body["data"] + "==")
             except Exception as e:
-                logger.warning(f"Failed to decode inline attachment data: {e}")
+                logger.warning(f"Failed to decode inline attachment data: {e}", exc_info=True)
                 return None
 
         attachment_id = body.get("attachmentId")
@@ -268,7 +319,7 @@ class EmailTool:
             if data:
                 return base64.urlsafe_b64decode(data + "==")
         except Exception as e:
-            logger.warning(f"Failed to fetch attachment {attachment_id}: {e}")
+            logger.warning(f"Failed to fetch attachment {attachment_id}: {e}", exc_info=True)
 
         return None
 
@@ -309,8 +360,10 @@ class EmailTool:
                 full_query = query or "in:inbox category:primary"
                 messages = self._gmail_search(service, full_query, max_results)
         except HttpError as e:
+            logger.exception(f"[gmail-tool] read_emails error")
             return f"Error searching emails: {e}"
         except Exception as e:
+            logger.exception(f"[gmail-tool] read_emails error")
             return f"Error searching emails: {e}"
 
         if not messages:
@@ -339,6 +392,7 @@ class EmailTool:
                     f"Preview: {snippet}"
                 )
             except Exception as e:
+                logger.exception(f"[gmail-tool] error fetching message metadata {m['id']}")
                 results.append(f"[Error fetching message {m['id']}: {e}]")
 
         return (
@@ -376,8 +430,10 @@ class EmailTool:
         try:
             raw = self._gmail_fetch(service, message_id)
         except HttpError as e:
+            logger.exception(f"[gmail-tool] fetch_email error id={message_id}")
             return f"Error fetching email {message_id}: {e}"
         except Exception as e:
+            logger.exception(f"[gmail-tool] fetch_email error id={message_id}")
             return f"Error fetching email {message_id}: {e}"
 
         parsed = self._parse_message(raw)
@@ -404,7 +460,7 @@ class EmailTool:
                         )
                         artifact_keys.append((artifact_key, a["mime_type"]))
                     except Exception as e:
-                        logger.warning(f"Failed to save artifact {artifact_key}: {e}")
+                        logger.warning(f"Failed to save artifact {artifact_key}: {e}", exc_info=True)
             else:
                 unsupported_files.append(a["filename"])
 
@@ -442,6 +498,7 @@ class EmailTool:
         try:
             keys = await tool_context.list_artifacts()
         except Exception as e:
+            logger.exception("[gmail-tool] list_artifacts error")
             return f"Error listing artifacts: {e}"
         if not keys:
             return "No artifacts stored in this session."
@@ -453,6 +510,7 @@ class EmailTool:
                 size = len(part.inline_data.data) if part and part.inline_data else 0
                 lines.append(f'  "{key}"  ({mime}, {size:,} bytes)')
             except Exception:
+                logger.exception(f"[gmail-tool] artifact metadata error key={key}")
                 lines.append(f'  "{key}"  (metadata unavailable)')
         return "\n".join(lines)
 
@@ -473,6 +531,7 @@ class EmailTool:
         try:
             part = await tool_context.load_artifact(artifact_key)
         except Exception as e:
+            logger.exception(f"[gmail-tool] read_artifact error key={artifact_key}")
             return {"status": "error", "message": str(e), "tool_response_artifact_id": ""}
         if part is None or part.inline_data is None:
             return {"status": "error",
@@ -538,15 +597,22 @@ class EmailTool:
             return "ERROR: EMAIL_PUBSUB_TOPIC is not configured."
 
         try:
+            logger.info("[gmail-api] users.getProfile → userId=me")
             profile = service.users().getProfile(userId="me").execute()
             gmail_address = profile.get("emailAddress", "")
+            logger.info(f"[gmail-api] users.getProfile ok: emailAddress={gmail_address!r}")
             if not gmail_address:
                 return "ERROR: Could not determine Gmail address."
 
+            logger.info(f"[gmail-api] users.watch → topicName={topic!r}")
             result = service.users().watch(
                 userId="me",
                 body={"labelIds": ["CATEGORY_PERSONAL"], "topicName": topic},
             ).execute()
+            logger.info(
+                f"[gmail-api] users.watch ok: historyId={result.get('historyId')} "
+                f"expiration={result.get('expiration')}"
+            )
 
             history_id = str(result.get("historyId", ""))
             expiration = result.get("expiration", "")
@@ -568,8 +634,10 @@ class EmailTool:
 
             return f"Gmail watch registered for {gmail_address}. historyId={history_id}"
         except HttpError as e:
+            logger.exception("[gmail-tool] setup_gmail_watch HttpError")
             return f"Error setting up Gmail watch: {e}"
         except Exception as e:
+            logger.exception("[gmail-tool] setup_gmail_watch error")
             return f"Error setting up Gmail watch: {e}"
 
     def add_email_rule(
@@ -637,6 +705,7 @@ class EmailTool:
                 .set(rule)
             )
         except Exception as e:
+            logger.exception("[gmail-tool] add_email_rule error")
             return f"Failed to save rule: {e}"
 
         parts = []
@@ -701,6 +770,7 @@ class EmailTool:
             updates["updated_at"] = datetime.now(timezone.utc)
             doc_ref.update(updates)
         except Exception as e:
+            logger.exception("[gmail-tool] update_email_rule error")
             return f"Failed to update rule: {e}"
 
         return f"Rule {rule_id} updated."
@@ -737,6 +807,7 @@ class EmailTool:
                 return f"No rule found with ID {rule_id}."
             doc_ref.delete()
         except Exception as e:
+            logger.exception("[gmail-tool] remove_email_rule error")
             return f"Failed to remove rule: {e}"
 
         return f"Rule {rule_id} removed."

@@ -36,7 +36,15 @@ async def _resume_agent_after_consent(
     consent_pending before the agent retries the blocked workspace tool, so
     the ADK's consent_pending poll loop runs instead of the immediate-raise path.
     """
+    uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+    credential_key = auth_config_dict.get("credentialKey", "unknown") if auth_config_dict else "unknown"
+    logger.info(
+        f"[oauth] resume_after_consent: sleeping {_CREDENTIAL_PROPAGATION_DELAY_SECONDS}s "
+        f"for IAM propagation — user={uid} session={session_id} "
+        f"fc_id={credential_fc_id!r} credentialKey={credential_key!r}"
+    )
     await asyncio.sleep(_CREDENTIAL_PROPAGATION_DELAY_SECONDS)
+    logger.info(f"[oauth] resume_after_consent: sending credential response for user={uid}")
     try:
         events = await _agent_client.send_credential_response(
             user_id=user_id,
@@ -44,26 +52,42 @@ async def _resume_agent_after_consent(
             credential_function_call_id=credential_fc_id,
             auth_config_dict=auth_config_dict,
         )
+        logger.info(
+            f"[oauth] resume_after_consent: credential response sent, "
+            f"{len(events)} events received for user={uid}"
+        )
     except Exception as e:
-        logger.error(f"IAM connector: failed to resume agent for {user_id[:4]}****: {e}")
+        logger.error(
+            f"[oauth] resume_after_consent: failed to resume agent for user={uid}: {e}",
+            exc_info=True,
+        )
         return
 
+    logger.info(f"[oauth] resume_after_consent: clearing pending credential for user={uid}")
     await _session_manager.clear_pending_credential(user_id)
 
     if _discord_sender and events:
         from ..agent.client import AgentEngineClient
         response_text = AgentEngineClient.extract_text(events)
+        logger.info(
+            f"[oauth] resume_after_consent: agent response {len(response_text)} chars for user={uid}"
+        )
         if response_text:
             try:
                 await _discord_sender.send(user_id, response_text)
-                logger.info(f"Forwarded post-consent agent response to Discord user {user_id[:4]}****")
+                logger.info(f"[oauth] Forwarded post-consent agent response to Discord user={uid}")
             except Exception as e:
-                logger.warning(f"Failed to forward post-consent response to Discord for {user_id[:4]}****: {e}")
+                logger.warning(
+                    f"[oauth] Failed to forward post-consent response to Discord for user={uid}: {e}",
+                    exc_info=True,
+                )
 
+    logger.info(f"[oauth] resume_after_consent: requesting Gmail watch setup for user={uid}")
     try:
         await register_gmail_watch(user_id)
+        logger.info(f"[oauth] Gmail watch setup requested for user={uid}")
     except Exception as e:
-        logger.warning(f"Gmail watch setup request failed for {user_id[:4]}****: {e}")
+        logger.warning(f"[oauth] Gmail watch setup request failed for user={uid}: {e}", exc_info=True)
 
 
 def init_oauth_services(session_manager=None, agent_client=None, discord_sender=None):
@@ -186,8 +210,18 @@ async def oauth_authorize(
         return HTMLResponse(_error_html("Service not initialized."), status_code=503)
 
     user_id = unquote(uid)
+    uid_tag = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+    logger.info(
+        f"[oauth] /authorize: user={uid_tag} nonce={nonce[:8] if nonce else 'n/a'}..."
+    )
+
     pending = await _session_manager.get_pending_credential(user_id)
     if not pending or pending.get("nonce") != nonce:
+        logger.warning(
+            f"[oauth] /authorize: no matching pending credential for user={uid_tag} "
+            f"nonce={nonce[:8] if nonce else 'n/a'}... "
+            f"(found={bool(pending)} nonce_match={pending.get('nonce') == nonce if pending else False})"
+        )
         return HTMLResponse(
             _error_html("Authorization link not found or already used."),
             status_code=404,
@@ -195,8 +229,13 @@ async def oauth_authorize(
 
     auth_uri = pending.get("auth_uri", "")
     if not auth_uri:
+        logger.error(f"[oauth] /authorize: pending credential has no auth_uri for user={uid_tag}")
         return HTMLResponse(_error_html("Authorization URI missing."), status_code=404)
 
+    logger.info(
+        f"[oauth] /authorize: redirecting user={uid_tag} "
+        f"to auth_uri={auth_uri[:100]}..."
+    )
     return RedirectResponse(url=auth_uri)
 
 
@@ -212,26 +251,39 @@ async def connector_callback(
     error_description: str = Query(None),
 ):
     """Finalize IAM connector consent and resume the agent session."""
+    logger.info(
+        f"[oauth] /connector/callback received: uid={uid!r} "
+        f"has_user_id_validation_state={bool(user_id_validation_state)} "
+        f"has_connector_name={bool(connector_name)} connector_name={connector_name!r} "
+        f"has_state={bool(state)} has_error={bool(error)}"
+    )
+
     if error:
-        logger.warning(f"IAM connector callback error: {error} - {error_description}")
+        logger.warning(
+            f"[oauth] /connector/callback OAuth error: error={error!r} "
+            f"description={error_description!r}"
+        )
         return HTMLResponse(_error_html(error_description or error), status_code=400)
 
     if not _session_manager:
-        logger.error("IAM connector callback: session manager not initialized")
+        logger.error("[oauth] /connector/callback: session manager not initialized")
         return HTMLResponse(_error_html("Service not initialized."), status_code=503)
 
     if not _agent_client:
-        logger.error("IAM connector callback: agent client not initialized")
+        logger.error("[oauth] /connector/callback: agent client not initialized")
         return HTMLResponse(_error_html("Service not initialized."), status_code=503)
 
     routing_user_id = unquote(uid) if uid else None
     if not routing_user_id:
-        logger.error("IAM connector callback: missing uid — cannot route to user")
+        logger.error("[oauth] /connector/callback: missing uid — cannot route to user")
         return HTMLResponse(_error_html("Missing user identity in callback."), status_code=400)
 
+    uid_tag = f"{routing_user_id[:4]}****" if len(routing_user_id) > 4 else routing_user_id
     pending = await _session_manager.get_pending_credential(routing_user_id)
     if not pending:
-        logger.warning(f"IAM connector callback: no pending credential for uid={routing_user_id[:4]}****")
+        logger.warning(
+            f"[oauth] /connector/callback: no pending credential for user={uid_tag}"
+        )
         return HTMLResponse(
             _error_html("No pending authorization found. Please try again."),
             status_code=400,
@@ -244,10 +296,13 @@ async def connector_callback(
     session_id = pending.get("session_id", "")
     credential_fc_id = pending.get("credential_function_call_id", "")
     auth_config_dict = pending.get("auth_config_dict") or {}
+    credential_key = auth_config_dict.get("credentialKey", "unknown")
 
     logger.info(
-        f"IAM connector consent complete for user {user_id[:4]}****, "
-        f"session={session_id}, nonce={consent_nonce[:8] if consent_nonce else 'n/a'}..."
+        f"[oauth] /connector/callback: consent complete for user={uid_tag} "
+        f"session={session_id} nonce={consent_nonce[:8] if consent_nonce else 'n/a'}... "
+        f"needs_finalize={needs_finalize} credentialKey={credential_key!r} "
+        f"fc_id={credential_fc_id!r}"
     )
 
     # Call credentials:finalize to store the token in the IAM connector backend.
@@ -257,6 +312,10 @@ async def connector_callback(
         effective_connector = connector_name or pending.get("auth_config_dict", {}).get(
             "authScheme", {}
         ).get("name", "")
+        logger.info(
+            f"[oauth] /connector/callback: calling credentials:finalize "
+            f"connector={effective_connector!r} user={uid_tag}"
+        )
         try:
             await finalize_iam_credentials(
                 connector_name=effective_connector,
@@ -264,10 +323,23 @@ async def connector_callback(
                 consent_nonce=consent_nonce,
                 user_id_validation_state=user_id_validation_state,
             )
+            logger.info(f"[oauth] /connector/callback: credentials:finalize succeeded for user={uid_tag}")
         except Exception as e:
-            logger.error(f"credentials:finalize failed for {user_id[:4]}****: {e}")
+            logger.error(
+                f"[oauth] /connector/callback: credentials:finalize failed for user={uid_tag}: {e}",
+                exc_info=True,
+            )
             return HTMLResponse(_error_html("Failed to finalize authorization. Please try again."), status_code=500)
+    else:
+        logger.info(
+            f"[oauth] /connector/callback: skipping credentials:finalize "
+            f"(no user_id_validation_state) for user={uid_tag}"
+        )
 
+    logger.info(
+        f"[oauth] /connector/callback: scheduling resume_after_consent "
+        f"for user={uid_tag} session={session_id}"
+    )
     background_tasks.add_task(
         _resume_agent_after_consent,
         user_id=user_id,
