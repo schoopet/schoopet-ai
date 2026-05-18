@@ -232,14 +232,14 @@ class SchoopetGateway(discord.Client):
         for chunk in _split_message(response_text):
             await channel.send(chunk)
 
-    async def _send_auth_link(self, channel, auth_uri: str, nonce: str) -> None:
-        from urllib.parse import urlparse
+    async def _send_auth_link(self, channel, auth_uri: str, nonce: str, user_id: str) -> None:
+        from urllib.parse import urlparse, quote
         from ..config import get_settings
         settings = get_settings()
         continue_uri = settings.IAM_CONNECTOR_CONTINUE_URI
         parsed = urlparse(continue_uri)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
-        short_url = f"{base_url}/oauth/authorize?nonce={nonce}"
+        short_url = f"{base_url}/oauth/authorize?nonce={nonce}&uid={quote(user_id, safe='')}"
         view = discord.ui.View()
         view.add_item(discord.ui.Button(
             label="Authorize Google Account",
@@ -361,7 +361,7 @@ class SchoopetGateway(discord.Client):
                     auth_config_dict=credential_req.auth_config_dict,
                     auth_uri=credential_req.auth_uri,
                 )
-                await self._send_auth_link(channel, credential_req.auth_uri, credential_req.nonce)
+                await self._send_auth_link(channel, credential_req.auth_uri, credential_req.nonce, user_id)
                 await self._session_manager.update_last_activity(
                     user_id,
                     channel="discord",

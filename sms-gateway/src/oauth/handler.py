@@ -2,6 +2,7 @@
 import asyncio
 import html
 import logging
+from urllib.parse import unquote
 
 from fastapi import APIRouter, BackgroundTasks, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -28,7 +29,6 @@ async def _resume_agent_after_consent(
     session_id: str,
     credential_fc_id: str,
     auth_config_dict: dict,
-    consent_nonce: str,
 ) -> None:
     """Background task: wait for IAM connector propagation then resume the agent.
 
@@ -48,7 +48,7 @@ async def _resume_agent_after_consent(
         logger.error(f"IAM connector: failed to resume agent for {user_id[:4]}****: {e}")
         return
 
-    await _session_manager.clear_pending_credential(consent_nonce)
+    await _session_manager.clear_pending_credential(user_id)
 
     if _discord_sender and events:
         from ..agent.client import AgentEngineClient
@@ -177,13 +177,17 @@ def _error_html(message: str) -> str:
 
 
 @router.get("/authorize")
-async def oauth_authorize(nonce: str = Query(..., description="Pending credential nonce")):
+async def oauth_authorize(
+    nonce: str = Query(..., description="Pending credential nonce"),
+    uid: str = Query(..., description="URL-encoded user_id"),
+):
     """Redirect to the Google OAuth consent page for a pending credential request."""
     if not _session_manager:
         return HTMLResponse(_error_html("Service not initialized."), status_code=503)
 
-    pending = await _session_manager.get_pending_credential(nonce)
-    if not pending:
+    user_id = unquote(uid)
+    pending = await _session_manager.get_pending_credential(user_id)
+    if not pending or pending.get("nonce") != nonce:
         return HTMLResponse(
             _error_html("Authorization link not found or already used."),
             status_code=404,
@@ -199,10 +203,11 @@ async def oauth_authorize(nonce: str = Query(..., description="Pending credentia
 @router.get("/connector/callback", response_class=HTMLResponse)
 async def connector_callback(
     background_tasks: BackgroundTasks,
-    state: str = Query(None, description="Nonce from IAM connector consent flow"),
-    nonce: str = Query(None, description="Alternate nonce parameter"),
+    uid: str = Query(None, description="URL-encoded user_id embedded in continue_uri"),
     user_id_validation_state: str = Query(None, description="Opaque state from IAM connector (no nonce echoed)"),
     connector_name: str = Query(None, description="Connector resource name from IAM connector"),
+    state: str = Query(None, description="Nonce echoed by IAM connector (Path A, not used for routing)"),
+    nonce: str = Query(None, description="Alternate nonce parameter (not used for routing)"),
     error: str = Query(None),
     error_description: str = Query(None),
 ):
@@ -219,34 +224,21 @@ async def connector_callback(
         logger.error("IAM connector callback: agent client not initialized")
         return HTMLResponse(_error_html("Service not initialized."), status_code=503)
 
-    consent_nonce = state or nonce
-    needs_finalize = False
+    routing_user_id = unquote(uid) if uid else None
+    if not routing_user_id:
+        logger.error("IAM connector callback: missing uid — cannot route to user")
+        return HTMLResponse(_error_html("Missing user identity in callback."), status_code=400)
 
-    if consent_nonce:
-        pending = await _session_manager.get_pending_credential(consent_nonce)
-        if not pending:
-            logger.warning(f"IAM connector callback: no pending credential for nonce {consent_nonce[:8]}...")
-            return HTMLResponse(
-                _error_html("Authorization session not found or already completed."),
-                status_code=400,
-            )
-    elif user_id_validation_state:
-        # IAM connector does not echo the nonce — look up the most recent pending credential.
-        logger.info(
-            f"IAM connector callback via user_id_validation_state "
-            f"(connector={connector_name or 'unknown'})"
+    pending = await _session_manager.get_pending_credential(routing_user_id)
+    if not pending:
+        logger.warning(f"IAM connector callback: no pending credential for uid={routing_user_id[:4]}****")
+        return HTMLResponse(
+            _error_html("No pending authorization found. Please try again."),
+            status_code=400,
         )
-        consent_nonce, pending = await _session_manager.get_latest_pending_credential()
-        if not pending:
-            logger.warning("IAM connector callback: no pending credential found")
-            return HTMLResponse(
-                _error_html("No pending authorization found. Please try again."),
-                status_code=400,
-            )
-        needs_finalize = True
-    else:
-        logger.warning("IAM connector callback: no state, nonce, or user_id_validation_state")
-        return HTMLResponse(_error_html("Missing authorization state."), status_code=400)
+
+    consent_nonce = pending.get("nonce", "")
+    needs_finalize = bool(user_id_validation_state)
 
     user_id = pending.get("user_id", "")
     session_id = pending.get("session_id", "")
@@ -282,6 +274,5 @@ async def connector_callback(
         session_id=session_id,
         credential_fc_id=credential_fc_id,
         auth_config_dict=auth_config_dict,
-        consent_nonce=consent_nonce,
     )
     return HTMLResponse(_success_html("your Google account", "Google Workspace"))

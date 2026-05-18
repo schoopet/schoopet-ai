@@ -506,9 +506,11 @@ class SessionManager:
         auth_config_dict: dict,
         auth_uri: str,
     ) -> None:
-        """Store a pending IAM connector credential request keyed by nonce."""
+        """Store a pending IAM connector credential request keyed by user_id."""
         from datetime import datetime, timezone
-        doc_ref = self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(nonce)
+        doc_ref = self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(
+            normalize_user_id(user_id)
+        )
         await doc_ref.set({
             "nonce": nonce,
             "user_id": user_id,
@@ -519,38 +521,22 @@ class SessionManager:
             "created_at": datetime.now(timezone.utc),
         })
 
-    async def get_pending_credential(self, nonce: str) -> Optional[dict]:
-        """Retrieve a pending credential record by nonce."""
+    async def get_pending_credential(self, user_id: str) -> Optional[dict]:
+        """Retrieve a pending credential record by user_id."""
         try:
-            doc = await self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(nonce).get()
+            doc = await self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(
+                normalize_user_id(user_id)
+            ).get()
             return doc.to_dict() if doc.exists else None
         except Exception as e:
-            logger.error(f"Failed to get pending credential for nonce {nonce[:8]}...: {e}")
+            logger.error(f"Failed to get pending credential for user {user_id[:4]}****: {e}")
             return None
 
-    async def get_latest_pending_credential(self) -> Optional[tuple[str, dict]]:
-        """Return (nonce, data) for the most recently created pending credential.
-
-        Used when the IAM connector callback does not echo the nonce back
-        (it sends user_id_validation_state instead, which is opaque to us).
-        Safe for single-user deployments.
-        """
-        try:
-            query = (
-                self._db.collection(PENDING_CREDENTIALS_COLLECTION)
-                .order_by("created_at", direction=firestore.Query.DESCENDING)
-                .limit(1)
-            )
-            async for doc in query.stream():
-                return doc.id, doc.to_dict()
-            return None, None
-        except Exception as e:
-            logger.error(f"Failed to get latest pending credential: {e}")
-            return None, None
-
-    async def clear_pending_credential(self, nonce: str) -> None:
+    async def clear_pending_credential(self, user_id: str) -> None:
         """Remove a pending credential record."""
         try:
-            await self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(nonce).delete()
+            await self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(
+                normalize_user_id(user_id)
+            ).delete()
         except Exception as e:
-            logger.error(f"Failed to clear pending credential for nonce {nonce[:8]}...: {e}")
+            logger.error(f"Failed to clear pending credential for user {user_id[:4]}****: {e}")
