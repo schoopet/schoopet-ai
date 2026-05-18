@@ -44,6 +44,27 @@ def init_allowed_service_accounts():
     logger.info(f"Initialized {len(ALLOWED_SERVICE_ACCOUNTS)} allowed service accounts")
 
 
+async def _verify_oidc_claims(token: str, audience: str) -> dict:
+    """Verify an OIDC Bearer token and return its claims. Raises HTTPException on failure."""
+    try:
+        from google.auth.transport import requests as google_requests
+        from google.oauth2 import id_token
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            functools.partial(
+                id_token.verify_oauth2_token,
+                token,
+                google_requests.Request(),
+                audience=audience,
+            ),
+        )
+    except Exception as e:
+        logger.error(f"OIDC token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid OIDC token")
+
+
 async def verify_oidc_token(authorization: str) -> str:
     """Verify OIDC token from Authorization header.
 
@@ -61,43 +82,24 @@ async def verify_oidc_token(authorization: str) -> str:
 
     token = authorization[7:]
 
-    try:
-        from google.auth.transport import requests as google_requests
-        from google.oauth2 import id_token
+    audience = os.getenv("SMS_GATEWAY_URL", "")
+    if not audience:
+        logger.error("SMS_GATEWAY_URL not set — cannot validate OIDC audience")
+        raise HTTPException(status_code=503, detail="Server misconfigured: missing audience")
 
-        audience = os.getenv("SMS_GATEWAY_URL", "")
-        if not audience:
-            logger.error("SMS_GATEWAY_URL not set — cannot validate OIDC audience")
-            raise HTTPException(status_code=503, detail="Server misconfigured: missing audience")
+    claims = await _verify_oidc_claims(token, audience)
 
-        loop = asyncio.get_running_loop()
-        claims = await loop.run_in_executor(
-            None,
-            functools.partial(
-                id_token.verify_oauth2_token,
-                token,
-                google_requests.Request(),
-                audience=audience,
-            ),
-        )
+    email = claims.get("email")
+    if not email:
+        logger.warning("OIDC token missing email claim")
+        raise HTTPException(status_code=401, detail="Invalid token: missing email")
 
-        email = claims.get("email")
-        if not email:
-            logger.warning("OIDC token missing email claim")
-            raise HTTPException(status_code=401, detail="Invalid token: missing email")
+    if email not in ALLOWED_SERVICE_ACCOUNTS:
+        logger.warning(f"Unauthorized service account: {email}")
+        raise HTTPException(status_code=403, detail="Unauthorized service account")
 
-        if email not in ALLOWED_SERVICE_ACCOUNTS:
-            logger.warning(f"Unauthorized service account: {email}")
-            raise HTTPException(status_code=403, detail="Unauthorized service account")
-
-        logger.debug(f"OIDC authentication successful: {email}")
-        return email
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"OIDC token verification failed: {e}")
-        raise HTTPException(status_code=401, detail="Invalid OIDC token")
+    logger.debug(f"OIDC authentication successful: {email}")
+    return email
 
 
 async def verify_internal_request(

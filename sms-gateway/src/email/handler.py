@@ -8,9 +8,7 @@ All personal Gmail accounts share the same Pub/Sub topic.
 Each notification carries an emailAddress that maps to an email_state/{doc_id}
 Firestore document containing user_id and token_feature.
 """
-import asyncio
 import base64
-import functools
 import json
 import logging
 import os
@@ -19,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from google.cloud import firestore
 
-from ..internal.auth import verify_internal_request
+from ..internal.auth import verify_internal_request, _verify_oidc_claims
 from .gmail_client import EMAIL_RULES_COLLECTION, normalize_gmail_address
 
 logger = logging.getLogger(__name__)
@@ -104,21 +102,9 @@ async def _verify_pubsub_oidc(request: Request) -> None:
         raise HTTPException(status_code=503, detail="Server misconfigured: missing audience")
 
     try:
-        from google.auth.transport import requests as google_requests
-        from google.oauth2 import id_token
-
-        loop = asyncio.get_running_loop()
-        claims = await loop.run_in_executor(
-            None,
-            functools.partial(
-                id_token.verify_oauth2_token,
-                token,
-                google_requests.Request(),
-                audience=audience,
-            ),
-        )
-    except Exception as e:
-        logger.warning(f"Email webhook: OIDC token verification failed: {e}")
+        claims = await _verify_oidc_claims(token, audience)
+    except HTTPException:
+        logger.warning("Email webhook: OIDC token verification failed")
         raise HTTPException(status_code=401, detail="Invalid Pub/Sub OIDC token")
 
     email = claims.get("email", "")

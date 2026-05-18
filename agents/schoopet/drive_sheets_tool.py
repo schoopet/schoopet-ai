@@ -5,12 +5,10 @@ Uses IAM connector credentials for the calling user's personal Google account.
 import logging
 from typing import Optional, List, Dict, Any
 
-from google.adk.auth.credential_manager import CredentialManager
 from google.adk.tools import ToolContext
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from .gcp_auth import get_credential_manager
 from .utils import require_user_id
 
 logger = logging.getLogger(__name__)
@@ -23,33 +21,9 @@ SHEETS_API_BASE = "https://sheets.googleapis.com/v4/spreadsheets"
 class DriveTool:
     """Tool for saving and listing files in Google Drive using IAM connector credentials."""
 
-    def __init__(self):
-        self._cred_manager: CredentialManager | None = None
-
-    def _get_credential_manager(self) -> CredentialManager:
-        if self._cred_manager is None:
-            self._cred_manager = get_credential_manager()
-        return self._cred_manager
-
     async def _get_service(self, tool_context: ToolContext):
-        """Return Drive service, or None after emitting a credential request."""
-        cred_mgr = self._get_credential_manager()
-        try:
-            credential = await cred_mgr.get_auth_credential(tool_context)
-        except Exception:
-            await cred_mgr.request_credential(tool_context)
-            return None
-        if not credential:
-            await cred_mgr.request_credential(tool_context)
-            return None
-        from google.oauth2.credentials import Credentials
-        from .gcp_auth import extract_and_validate_token
-        token = extract_and_validate_token(credential, "drive")
-        if not token:
-            await cred_mgr.request_credential(tool_context)
-            return None
-        creds = Credentials(token=token)
-        return build("drive", "v3", credentials=creds, cache_discovery=False)
+        from .gcp_auth import get_workspace_service
+        return await get_workspace_service("drive", "v3", "drive", tool_context)
 
     # ── Private token-specific helpers ─────────────────────────────────────────
 
@@ -306,33 +280,9 @@ class DriveTool:
 class SheetsTool:
     """Tool for reading and writing to Google Sheets using IAM connector credentials."""
 
-    def __init__(self):
-        self._cred_manager: CredentialManager | None = None
-
-    def _get_credential_manager(self) -> CredentialManager:
-        if self._cred_manager is None:
-            self._cred_manager = get_credential_manager()
-        return self._cred_manager
-
     async def _get_service(self, tool_context: ToolContext):
-        """Return Sheets service, or None after emitting a credential request."""
-        cred_mgr = self._get_credential_manager()
-        try:
-            credential = await cred_mgr.get_auth_credential(tool_context)
-        except Exception:
-            await cred_mgr.request_credential(tool_context)
-            return None
-        if not credential:
-            await cred_mgr.request_credential(tool_context)
-            return None
-        from google.oauth2.credentials import Credentials
-        from .gcp_auth import extract_and_validate_token
-        token = extract_and_validate_token(credential, "sheets")
-        if not token:
-            await cred_mgr.request_credential(tool_context)
-            return None
-        creds = Credentials(token=token)
-        return build("sheets", "v4", credentials=creds, cache_discovery=False)
+        from .gcp_auth import get_workspace_service
+        return await get_workspace_service("sheets", "v4", "sheets", tool_context)
 
     # ── Private token-specific helpers ─────────────────────────────────────────
 
@@ -1069,34 +1019,13 @@ class SheetsTool:
 class DocsTool:
     """Tool for creating and editing Google Docs using IAM connector credentials."""
 
-    def __init__(self):
-        self._cred_manager: CredentialManager | None = None
-
-    def _get_credential_manager(self) -> CredentialManager:
-        if self._cred_manager is None:
-            self._cred_manager = get_credential_manager()
-        return self._cred_manager
-
     async def _get_services(self, tool_context: ToolContext):
         """Return (docs_service, drive_service) or (None, None) after emitting credential request."""
-        cred_mgr = self._get_credential_manager()
-        try:
-            credential = await cred_mgr.get_auth_credential(tool_context)
-        except Exception:
-            await cred_mgr.request_credential(tool_context)
+        from .gcp_auth import get_workspace_service
+        docs_service = await get_workspace_service("docs", "v1", "docs", tool_context)
+        if docs_service is None:
             return None, None
-        if not credential:
-            await cred_mgr.request_credential(tool_context)
-            return None, None
-        from google.oauth2.credentials import Credentials
-        from .gcp_auth import extract_and_validate_token
-        token = extract_and_validate_token(credential, "docs")
-        if not token:
-            await cred_mgr.request_credential(tool_context)
-            return None, None
-        creds = Credentials(token=token)
-        docs_service = build("docs", "v1", credentials=creds, cache_discovery=False)
-        drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        drive_service = await get_workspace_service("drive", "v3", "docs/drive", tool_context)
         return docs_service, drive_service
 
     def _create_google_doc_with_token(

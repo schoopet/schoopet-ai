@@ -4,45 +4,19 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from zoneinfo import ZoneInfo
 
-from google.adk.auth.credential_manager import CredentialManager
 from google.adk.tools import ToolContext
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from .gcp_auth import get_credential_manager
 from .utils import require_user_id
 
 
 class CalendarTool:
     """Tool for accessing Google Calendar via IAM connector credentials."""
 
-    def __init__(self):
-        self._cred_manager: CredentialManager | None = None
-
-    def _get_credential_manager(self) -> CredentialManager:
-        if self._cred_manager is None:
-            self._cred_manager = get_credential_manager()
-        return self._cred_manager
-
     async def _get_service(self, tool_context: ToolContext):
-        """Return Calendar service, or None after emitting a credential request."""
-        cred_mgr = self._get_credential_manager()
-        try:
-            credential = await cred_mgr.get_auth_credential(tool_context)
-        except Exception:
-            await cred_mgr.request_credential(tool_context)
-            return None
-        if not credential:
-            await cred_mgr.request_credential(tool_context)
-            return None
-        from google.oauth2.credentials import Credentials
-        from .gcp_auth import extract_and_validate_token
-        token = extract_and_validate_token(credential, "calendar")
-        if not token:
-            await cred_mgr.request_credential(tool_context)
-            return None
-        creds = Credentials(token=token)
-        return build("calendar", "v3", credentials=creds, cache_discovery=False)
+        from .gcp_auth import get_workspace_service
+        return await get_workspace_service("calendar", "v3", "calendar", tool_context)
 
     def _format_event(self, event: Dict[str, Any]) -> str:
         """Format a calendar event for display."""

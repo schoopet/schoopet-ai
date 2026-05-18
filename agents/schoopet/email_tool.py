@@ -61,15 +61,7 @@ class EmailTool:
     """Agent tool for email reading and rule management using IAM connector credentials."""
 
     def __init__(self):
-        self._cred_manager = None
         self._firestore_client = None
-
-    def _get_credential_manager(self):
-        if self._cred_manager is None:
-            from .gcp_auth import get_credential_manager
-            from google.adk.auth.credential_manager import CredentialManager
-            self._cred_manager = get_credential_manager()
-        return self._cred_manager
 
     def _get_firestore(self):
         if self._firestore_client is None:
@@ -82,24 +74,8 @@ class EmailTool:
     # ── Credential helpers ─────────────────────────────────────────────────
 
     async def _get_gmail_service(self, tool_context):
-        """Return Gmail service, or None after emitting a credential request."""
-        cred_mgr = self._get_credential_manager()
-        try:
-            credential = await cred_mgr.get_auth_credential(tool_context)
-        except Exception:
-            await cred_mgr.request_credential(tool_context)
-            return None
-        if not credential:
-            await cred_mgr.request_credential(tool_context)
-            return None
-        from google.oauth2.credentials import Credentials
-        from .gcp_auth import extract_and_validate_token
-        token = extract_and_validate_token(credential, "gmail")
-        if not token:
-            await cred_mgr.request_credential(tool_context)
-            return None
-        creds = Credentials(token=token)
-        return build("gmail", "v1", credentials=creds, cache_discovery=False)
+        from .gcp_auth import get_workspace_service
+        return await get_workspace_service("gmail", "v1", "gmail", tool_context)
 
     # ── Firestore rule helpers ─────────────────────────────────────────────
 
