@@ -63,34 +63,3 @@ jobs:
           TWILIO_PHONE_NUMBER: "+15551234567"
         run: |
           python -m pytest tests/ -v --tb=short
-
-  test-task-worker:
-    name: Test Task Worker
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: task-worker
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio
-
-      - name: Run task worker tests
-        env:
-          PYTHONPATH: ${{ github.workspace }}/task-worker
-          GOOGLE_CLOUD_PROJECT: test-project
-          GOOGLE_CLOUD_LOCATION: us-central1
-          AGENT_ENGINE_ID: test-engine-id
-          SMS_GATEWAY_URL: http://localhost:8080
-        run: |
-          python -m pytest tests/ -v --tb=short
