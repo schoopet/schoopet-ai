@@ -371,7 +371,7 @@ class SchoopetGateway(discord.Client):
 
             confirmations = self._agent_client.extract_confirmation_requests(events)
             if confirmations:
-                uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+                uid = user_id if len(user_id) > 4 else user_id
                 tool_names = [c.tool_name for c in confirmations]
                 logger.info(
                     f"[confirm] Agent suspended (online): user={uid} "
@@ -445,7 +445,7 @@ class SchoopetGateway(discord.Client):
             await interaction.followup.send("That approval is no longer pending.")
             return
 
-        uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+        uid = user_id if len(user_id) > 4 else user_id
         tool_name = pending.get("tool_name", "unknown")
         action = "approved" if confirmed else "rejected"
         logger.info(
@@ -524,28 +524,25 @@ class SchoopetGateway(discord.Client):
             )
 
 
-async def _run_gateway_with_retry(client: "SchoopetGateway", bot_token: str) -> None:
+async def _run_gateway_with_retry(session_manager, agent_client, rate_limiter, bot_token: str) -> None:
     """Run the gateway, retrying with backoff if the connection fails."""
     delay = 30
     while True:
+        client = SchoopetGateway(
+            session_manager=session_manager,
+            agent_client=agent_client,
+            rate_limiter=rate_limiter,
+        )
         try:
             await client.start(bot_token)
         except Exception as e:
             logger.warning(f"Discord gateway disconnected ({e}), retrying in {delay}s", exc_info=True)
+            await client.close()
             await asyncio.sleep(delay)
             delay = min(delay * 2, 300)  # cap at 5 minutes
 
 
-async def start_gateway(bot_token: str, session_manager, agent_client, rate_limiter=None) -> SchoopetGateway:
-    """Create and start the gateway client as a background asyncio task.
-
-    Returns the client so the caller can close it on shutdown.
-    """
-    client = SchoopetGateway(
-        session_manager=session_manager,
-        agent_client=agent_client,
-        rate_limiter=rate_limiter,
-    )
-    asyncio.create_task(_run_gateway_with_retry(client, bot_token))
+async def start_gateway(bot_token: str, session_manager, agent_client, rate_limiter=None) -> None:
+    """Create and start the gateway client as a background asyncio task."""
+    asyncio.create_task(_run_gateway_with_retry(session_manager, agent_client, rate_limiter, bot_token))
     logger.info("Discord gateway task started")
-    return client

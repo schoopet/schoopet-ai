@@ -195,8 +195,6 @@ class GatewayTaskExecutor:
                 "Agent did not respond within the configured timeout. "
                 "Check Agent Engine logs for this session."
             ) from exc
-        finally:
-            await self._agent_client.delete_session(user_id=user_id, session_id=session_id)
 
     def _build_initial_state(self, task: dict[str, Any]) -> dict[str, Any]:
         state: dict[str, Any] = build_allowed_resource_state(

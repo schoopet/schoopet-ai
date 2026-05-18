@@ -80,7 +80,7 @@ class AdkConfirmationRequest:
 
 def _log_tool_activity(event: Event, user_id: str) -> None:
     """Log function calls and responses from an ADK event."""
-    uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+    uid = user_id if len(user_id) > 4 else user_id
 
     for fc in event.get_function_calls() or []:
         args = fc.args or {}
@@ -439,7 +439,7 @@ class AgentEngineClient:
         Returns (final_events, credential_request_or_none). If credential_request_or_none
         is not None, the caller must store the pending credential and send an auth link.
         """
-        uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+        uid = user_id if len(user_id) > 4 else user_id
         ctx = f"[{context}] " if context else ""
 
         _AUTO_RESOLVE_CAP = 3
@@ -498,7 +498,7 @@ class AgentEngineClient:
         auth_config_dict: dict,
     ) -> list[Event]:
         """Resume an agent session after IAM connector consent is complete."""
-        uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+        uid = user_id if len(user_id) > 4 else user_id
         credential_key = auth_config_dict.get("credentialKey", "unknown")
         exchanged = auth_config_dict.get("exchangedAuthCredential") or {}
         oauth2 = exchanged.get("oauth2") or {}

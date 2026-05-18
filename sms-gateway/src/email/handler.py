@@ -244,7 +244,7 @@ async def _load_email_rules(user_id: str) -> list[dict]:
         rules_ref = _db.collection(EMAIL_RULES_COLLECTION).document(user_id).collection("rules")
         return [doc.to_dict() async for doc in rules_ref.stream()]
     except Exception as e:
-        logger.exception(f"Failed to load email rules for {user_id[:4]}****")
+        logger.exception(f"Failed to load email rules for {user_id}")
         return []
 
 
@@ -271,6 +271,9 @@ async def process_email_notification(gmail_address: str, history_id: str) -> Non
 
     The agent fetches the actual emails using its own IAM connector credentials.
     """
+    logger.info(f"Offline email path disabled — dropping notification for {gmail_address}")
+    return
+
     watch_state = await _read_watch_state(gmail_address)
     if not watch_state:
         logger.warning(f"No watch state found for {gmail_address} — ignoring notification")
@@ -298,7 +301,7 @@ async def process_email_notification(gmail_address: str, history_id: str) -> Non
     rules = await _load_email_rules(user_id)
     rules_text = _format_rules_for_prompt(rules)
 
-    logger.info(f"Routing email notification for {gmail_address} (user={user_id[:4]}****)")
+    logger.info(f"Routing email notification for {gmail_address} (user={user_id})")
     await _notify_agent_of_emails(gmail_address, start_history_id, user_id, rules_text)
 
 
@@ -339,7 +342,7 @@ async def _notify_agent_of_emails(
         )
         if credential_req:
             logger.error(
-                f"Email path received auth credential request for {user_id[:4]}**** "
+                f"Email path received auth credential request for {user_id} "
                 f"— auth requests are not supported in offline mode; dropping notification"
             )
             return
@@ -348,7 +351,7 @@ async def _notify_agent_of_emails(
         if confirmations:
             tool_names = [confirmation.tool_name for confirmation in confirmations]
             logger.warning(
-                f"Offline ADK confirmations for {user_id[:4]}****: {tool_names} — declining and collecting fallback response"
+                f"Offline ADK confirmations for {user_id}: {tool_names} — declining and collecting fallback response"
             )
             follow_up_events: list = []
             for confirmation in confirmations:
@@ -363,11 +366,11 @@ async def _notify_agent_of_emails(
             response = _agent_client.extract_text(events)
         if response:
             if _should_suppress_response(response):
-                logger.info(f"Email response suppressed for {user_id[:4]}****")
+                logger.info(f"Email response suppressed for {user_id}")
                 return
             await _send_response(user_id, response)
     except Exception as e:
-        logger.exception(f"Failed to route email notification for {user_id[:4]}****")
+        logger.exception(f"Failed to route email notification for {user_id}")
 
 
 async def _send_response(user_id: str, message: str) -> None:
@@ -404,10 +407,10 @@ async def register_gmail_watch(
             session_id=session_info.agent_session_id,
             message="__ADMIN:setup_gmail_watch__",
         )
-        logger.info(f"Gmail watch setup requested for user={user_id[:4]}****")
+        logger.info(f"Gmail watch setup requested for user={user_id}")
         return True
     except Exception as e:
-        logger.exception(f"Failed to request Gmail watch setup for {user_id[:4]}****")
+        logger.exception(f"Failed to request Gmail watch setup for {user_id}")
         return False
 
 

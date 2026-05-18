@@ -8,6 +8,7 @@ from .calendar_tool import CalendarTool
 from .preferences_tool import PreferencesTool
 from .time_tool import TimeTool
 from .task_debug_tool import TaskDebugTool
+from .iam_connector_tool import check_connector_credential
 from .email_tool import EmailTool
 from .drive_sheets_tool import DocsTool, DriveTool, SheetsTool
 from .model_callbacks import before_model_modifier, on_tool_error
@@ -193,7 +194,10 @@ def _personal_prompt() -> str:
         "- list_pending_tasks()\n"
         "- get_cloud_task_status(task_id, cloud_task_name)\n"
         "- list_scheduled_tasks(limit)\n"
-        "- debug_task(task_id)\n\n"
+        "- debug_task(task_id)\n"
+        "- check_connector_credential(target_user_id): Query the IAM connector directly to inspect "
+        "what credential it holds for a user. Returns has_credential, token_prefix, expire_time, "
+        "expired, valid_seconds, and scopes. Use this to diagnose OAuth issues.\n\n"
 
         "**Task types:**\n"
         "- 'research': Multi-step research requiring searches and synthesis\n"
@@ -355,6 +359,9 @@ def create_agent(
     list_scheduled_tasks_tool = FunctionTool(func=task_debug_tool.list_scheduled_tasks)
     debug_task_tool = FunctionTool(func=task_debug_tool.debug_task)
 
+    # IAM connector diagnostic tool
+    check_connector_credential_tool = FunctionTool(func=check_connector_credential)
+
     # Initialize Search Subagent (handles Google Search)
     search_agent = create_search_agent(
         project=project,
@@ -423,6 +430,7 @@ def create_agent(
         get_cloud_task_status_tool,
         list_scheduled_tasks_tool,
         debug_task_tool,
+        check_connector_credential_tool,
     ]
 
     email_tool = EmailTool()

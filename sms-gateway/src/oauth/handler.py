@@ -36,7 +36,7 @@ async def _resume_agent_after_consent(
     consent_pending before the agent retries the blocked workspace tool, so
     the ADK's consent_pending poll loop runs instead of the immediate-raise path.
     """
-    uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+    uid = user_id if len(user_id) > 4 else user_id
     credential_key = auth_config_dict.get("credentialKey", "unknown") if auth_config_dict else "unknown"
     logger.info(
         f"[oauth] resume_after_consent: sleeping {_CREDENTIAL_PROPAGATION_DELAY_SECONDS}s "
@@ -210,7 +210,7 @@ async def oauth_authorize(
         return HTMLResponse(_error_html("Service not initialized."), status_code=503)
 
     user_id = unquote(uid)
-    uid_tag = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+    uid_tag = user_id if len(user_id) > 4 else user_id
     logger.info(
         f"[oauth] /authorize: user={uid_tag} nonce={nonce[:8] if nonce else 'n/a'}..."
     )
@@ -278,7 +278,7 @@ async def connector_callback(
         logger.error("[oauth] /connector/callback: missing uid — cannot route to user")
         return HTMLResponse(_error_html("Missing user identity in callback."), status_code=400)
 
-    uid_tag = f"{routing_user_id[:4]}****" if len(routing_user_id) > 4 else routing_user_id
+    uid_tag = routing_user_id if len(routing_user_id) > 4 else routing_user_id
     pending = await _session_manager.get_pending_credential(routing_user_id)
     if not pending:
         logger.warning(

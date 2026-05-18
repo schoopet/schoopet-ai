@@ -246,10 +246,6 @@ class SessionManager:
                 if existing_session_id:
                     stale_session_id = existing_session_id
 
-        # Retire the stale session before creating the replacement.
-        if stale_session_id:
-            await self._retire_session(phone_number, stale_session_id)
-
         # Create new Agent Engine session
         logger.info(f"Creating new session for {phone_number} scope={session_scope or 'default'}")
         state = self._build_session_state(channel, session_scope, state_extra)
@@ -537,7 +533,7 @@ class SessionManager:
         """Store a pending IAM connector credential request keyed by user_id."""
         from datetime import datetime, timezone
         doc_id = normalize_user_id(user_id)
-        uid_tag = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+        uid_tag = user_id if len(user_id) > 4 else user_id
         credential_key = auth_config_dict.get("credentialKey", "unknown") if auth_config_dict else "unknown"
         logger.info(
             f"[firestore] set {PENDING_CREDENTIALS_COLLECTION}/{doc_id}: "
@@ -566,13 +562,13 @@ class SessionManager:
             ).get()
             return doc.to_dict() if doc.exists else None
         except Exception as e:
-            logger.exception(f"Failed to get pending credential for user {user_id[:4]}****")
+            logger.exception(f"Failed to get pending credential for user {user_id}")
             return None
 
     async def clear_pending_credential(self, user_id: str) -> None:
         """Remove a pending credential record."""
         doc_id = normalize_user_id(user_id)
-        uid_tag = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+        uid_tag = user_id if len(user_id) > 4 else user_id
         logger.info(
             f"[firestore] delete {PENDING_CREDENTIALS_COLLECTION}/{doc_id}: user={uid_tag}"
         )

@@ -86,14 +86,13 @@ async def lifespan(app: FastAPI):
         logger.info("Discord services initialized")
 
         # Start the Gateway for DM and @mention support
-        discord_gateway = await start_gateway(
+        await start_gateway(
             bot_token=settings.DISCORD_BOT_TOKEN,
             session_manager=session_manager,
             agent_client=agent_client,
             rate_limiter=rate_limiter,
         )
     else:
-        discord_gateway = None
         logger.info("Discord not configured (DISCORD_BOT_TOKEN, DISCORD_PUBLIC_KEY, or DISCORD_APPLICATION_ID not set)")
 
     # Initialize internal services
@@ -127,8 +126,6 @@ async def lifespan(app: FastAPI):
 
     # Cleanup
     logger.info("Shutting down SMS Gateway...")
-    if discord_gateway:
-        await discord_gateway.close()
     if discord_sender:
         await discord_sender.close()
 

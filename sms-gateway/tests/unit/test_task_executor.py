@@ -111,7 +111,7 @@ class TestGatewayTaskExecutor:
         discord_sender.send.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_execute_task_creates_and_retires_ephemeral_session(
+    async def test_execute_task_creates_ephemeral_session(
         self, executor, agent_client
     ):
         await executor.execute_task(TASK_ID)
@@ -132,10 +132,7 @@ class TestGatewayTaskExecutor:
         assert "Execute this research task:" in prompt
         assert "Instruction:\nResearch AI" in prompt
         assert "  topic: AI" in prompt
-        agent_client.delete_session.assert_awaited_once_with(
-            user_id=USER_ID,
-            session_id="task-session-1",
-        )
+        agent_client.delete_session.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_ignores_already_processed_task(
@@ -211,7 +208,7 @@ class TestGatewayTaskExecutor:
         channel_id, text = discord_sender.send_channel.await_args.args
         assert channel_id == "c1"
         assert "Agent crashed" in text
-        agent_client.delete_session.assert_awaited_once()
+        agent_client.delete_session.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_empty_agent_response_marks_failed_and_notifies(
@@ -233,7 +230,7 @@ class TestGatewayTaskExecutor:
         channel_id, text = discord_sender.send_channel.await_args.args
         assert channel_id == "c1"
         assert "error" in text.lower()
-        agent_client.delete_session.assert_awaited_once()
+        agent_client.delete_session.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_discord_delivery_failure_preserves_completed_status(

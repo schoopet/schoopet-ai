@@ -169,7 +169,7 @@ async def process_discord_confirmation_component(
     session_scope: str = "",
 ) -> None:
     """Resolve an ADK confirmation from a Discord component webhook."""
-    uid = f"{user_id[:4]}****" if len(user_id) > 4 else user_id
+    uid = user_id if len(user_id) > 4 else user_id
     try:
         pending = await _session_manager.get_pending_approval(
             user_id,
