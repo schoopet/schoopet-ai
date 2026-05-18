@@ -22,6 +22,7 @@ locals {
     "roles/cloudtrace.agent",
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
+    "roles/telemetry.tracesWriter",
   ]
 
   # Map of role → {principal, role} for the personal agent

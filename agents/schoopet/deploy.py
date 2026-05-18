@@ -54,6 +54,7 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
         "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
         "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false",
+        "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
     }
     # Filter out empty values
     env_vars = {k: v for k, v in env_vars_raw.items() if v}
