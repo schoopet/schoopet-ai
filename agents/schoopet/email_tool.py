@@ -137,7 +137,7 @@ class EmailTool:
                     userId="me",
                     startHistoryId=since_history_id,
                     historyTypes=["messageAdded"],
-                    labelId="CATEGORY_PRIMARY",
+                    labelId="CATEGORY_PERSONAL",
                     maxResults=max_results,
                 )
                 .execute()
