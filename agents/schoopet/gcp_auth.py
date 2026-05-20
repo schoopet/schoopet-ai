@@ -42,14 +42,13 @@ def _fresh_iam_client(self):
 GcpAuthProvider._get_client = _fresh_iam_client
 
 
-# ADK hardcodes force_refresh=False in GcpAuthProvider._retrieve_credentials, which
-# means the connector never silently refreshes an expired access token — it returns
-# uri_consent_required instead.  With force_refresh=True the connector will use its
-# stored refresh token to silently obtain a new access token without user interaction.
+# ADK hardcodes force_refresh=False in GcpAuthProvider._retrieve_credentials, but the
+# v1alpha API has removed the force_refresh field entirely — sending it (either True or
+# False) causes a 400 "Unknown name forceRefresh: Cannot find field" error.  This patch
+# replaces the method to omit the field so the request is accepted.
 async def _force_refresh_retrieve(self, user_id: str, auth_scheme) -> object:
     from google.cloud.iamconnectorcredentials_v1alpha import RetrieveCredentialsRequest
     import asyncio as _asyncio
-    # force_refresh was removed from the v1alpha API; the connector now refreshes implicitly.
     request = RetrieveCredentialsRequest(
         connector=auth_scheme.name,
         user_id=user_id,
