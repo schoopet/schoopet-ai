@@ -271,9 +271,6 @@ async def process_email_notification(gmail_address: str, history_id: str) -> Non
 
     The agent fetches the actual emails using its own IAM connector credentials.
     """
-    logger.info(f"Offline email path disabled — dropping notification for {gmail_address}")
-    return
-
     watch_state = await _read_watch_state(gmail_address)
     if not watch_state:
         logger.warning(f"No watch state found for {gmail_address} — ignoring notification")
