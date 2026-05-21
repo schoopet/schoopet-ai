@@ -28,7 +28,6 @@ resource "google_cloud_run_v2_service" "sms_gateway" {
           memory = "512Mi"
           cpu    = "1000m"
         }
-        cpu_idle = true
       }
 
       # ── Plain env vars ────────────────────────────────────────────────────────
