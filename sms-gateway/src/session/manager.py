@@ -576,3 +576,36 @@ class SessionManager:
             await self._db.collection(PENDING_CREDENTIALS_COLLECTION).document(doc_id).delete()
         except Exception as e:
             logger.exception(f"Failed to clear pending credential for user {uid_tag}")
+
+    async def record_discord_channel(
+        self,
+        user_id: str,
+        channel_id: str,
+        channel_name: str,
+        guild_id: str,
+    ) -> None:
+        """Upsert a Discord channel into the per-user channel registry.
+
+        Called fire-and-forget on every incoming Discord message so that
+        list_discord_channels() can return an up-to-date set of known channels.
+        """
+        from datetime import datetime, timezone
+        doc_id = normalize_user_id(user_id)
+        try:
+            await (
+                self._db.collection("discord_channels")
+                .document(doc_id)
+                .collection("channels")
+                .document(channel_id)
+                .set(
+                    {
+                        "channel_id": channel_id,
+                        "channel_name": channel_name,
+                        "guild_id": guild_id,
+                        "last_seen_at": datetime.now(timezone.utc),
+                    },
+                    merge=True,
+                )
+            )
+        except Exception:
+            logger.exception(f"Failed to record Discord channel {channel_id} for user {user_id}")

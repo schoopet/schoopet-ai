@@ -163,3 +163,93 @@ async def test_notify_agent_confirmation_declines_and_forwards_fallback(email_se
         confirmed=False,
     )
     discord_sender.send.assert_awaited_once_with("user-123", "I'll note that for you.")
+
+
+# ── _send_response channel routing tests ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_send_response_routes_channel_tag_to_send_channel(email_services):
+    _, _, discord_sender = email_services
+
+    await handler._send_response(
+        "user-123",
+        "<CHANNEL:111222333>Invoice from Acme received.</CHANNEL>",
+    )
+
+    discord_sender.send_channel.assert_awaited_once_with(
+        "111222333", "Invoice from Acme received."
+    )
+    discord_sender.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_response_routes_multiple_channel_tags(email_services):
+    _, _, discord_sender = email_services
+
+    await handler._send_response(
+        "user-123",
+        "<CHANNEL:111>Summary A.</CHANNEL>\n<CHANNEL:222>Summary B.</CHANNEL>",
+    )
+
+    calls = discord_sender.send_channel.await_args_list
+    assert len(calls) == 2
+    assert calls[0].args == ("111", "Summary A.")
+    assert calls[1].args == ("222", "Summary B.")
+    discord_sender.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_response_untagged_remainder_goes_to_default_dm(email_services):
+    _, _, discord_sender = email_services
+
+    await handler._send_response(
+        "user-123",
+        "<CHANNEL:555>Routed summary.</CHANNEL>\nUntagged fallback message.",
+    )
+
+    discord_sender.send_channel.assert_awaited_once_with("555", "Routed summary.")
+    discord_sender.send.assert_awaited_once_with("user-123", "Untagged fallback message.")
+
+
+@pytest.mark.asyncio
+async def test_send_response_suppressed_remainder_not_sent(email_services):
+    _, _, discord_sender = email_services
+
+    await handler._send_response(
+        "user-123",
+        "<CHANNEL:555>Routed summary.</CHANNEL>\n<SUPPRESS RESPONSE>",
+    )
+
+    discord_sender.send_channel.assert_awaited_once_with("555", "Routed summary.")
+    discord_sender.send.assert_not_awaited()
+
+
+# ── _format_rules_for_prompt channel routing tests ────────────────────────────
+
+
+def test_format_rules_includes_channel_directive():
+    rules = [
+        {
+            "topic": "github",
+            "sender_filter": "@github.com",
+            "prompt": "Summarize in one line.",
+            "target_channel_id": "123456789",
+        }
+    ]
+    result = handler._format_rules_for_prompt(rules)
+    assert "<CHANNEL:123456789>" in result
+    assert "Route to channel" in result
+
+
+def test_format_rules_without_channel_has_no_route_directive():
+    rules = [
+        {
+            "topic": "invoices",
+            "sender_filter": "",
+            "prompt": "Notify me.",
+        }
+    ]
+    result = handler._format_rules_for_prompt(rules)
+    assert "Route to channel" not in result
+    assert "<CHANNEL:" not in result

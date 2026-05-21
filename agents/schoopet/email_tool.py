@@ -645,6 +645,7 @@ class EmailTool:
         prompt: str,
         topic: str = "",
         sender_filter: str = "",
+        target_channel_id: Optional[str] = None,
         tool_context: ToolContext = None,
     ) -> str:
         """
@@ -662,6 +663,10 @@ class EmailTool:
                    (e.g., "job applications", "flight confirmations", "invoices").
             sender_filter: Optional email address or domain to match
                            (e.g., "boss@company.com", "@stripe.com").
+            target_channel_id: Optional Discord channel snowflake ID. When set,
+                                summaries for this rule are routed exclusively to
+                                that channel instead of the user's default DM.
+                                Use list_discord_channels() to look up channel IDs.
 
         Returns:
             Confirmation message with the new rule ID.
@@ -695,6 +700,8 @@ class EmailTool:
             "created_at": now,
             "updated_at": now,
         }
+        if target_channel_id:
+            rule["target_channel_id"] = target_channel_id
 
         try:
             (
@@ -713,9 +720,10 @@ class EmailTool:
             parts.append(f"topic: {topic}")
         if sender_filter:
             parts.append(f"sender: {sender_filter}")
+        channel_note = f", routed to channel {target_channel_id}" if target_channel_id else ""
         return (
             f"Rule added (ID: {rule_id}) — "
-            f"match [{', '.join(parts)}] → \"{prompt}\"."
+            f"match [{', '.join(parts)}] → \"{prompt}\"{channel_note}."
         )
 
     def update_email_rule(
@@ -724,6 +732,7 @@ class EmailTool:
         prompt: str = None,
         topic: str = None,
         sender_filter: str = None,
+        target_channel_id: Optional[str] = None,
         tool_context: ToolContext = None,
     ) -> str:
         """
@@ -734,6 +743,8 @@ class EmailTool:
             prompt: New instruction prompt (optional).
             topic: New topic description (optional).
             sender_filter: New sender filter (optional).
+            target_channel_id: New Discord channel ID for routing (optional).
+                                Pass an empty string "" to clear the channel routing.
         """
         phone, err = require_user_id(tool_context, "email rule")
         if err:
@@ -762,6 +773,12 @@ class EmailTool:
                 updates["topic"] = topic
             if sender_filter is not None:
                 updates["sender_filter"] = sender_filter
+            if target_channel_id is not None:
+                if target_channel_id == "":
+                    from google.cloud.firestore_v1 import DELETE_FIELD
+                    updates["target_channel_id"] = DELETE_FIELD
+                else:
+                    updates["target_channel_id"] = target_channel_id
 
             if not updates:
                 return "Nothing to update — provide at least one field to change."
@@ -842,5 +859,55 @@ class EmailTool:
                 parts.append(f"topic: {r['topic']}")
             if r.get("sender_filter"):
                 parts.append(f"sender: {r['sender_filter']}")
-            lines.append(f"  [{r['rule_id']}] Match [{', '.join(parts)}] → {r.get('prompt', '')}")
+            channel_note = f" → channel {r['target_channel_id']}" if r.get("target_channel_id") else ""
+            lines.append(f"  [{r['rule_id']}] Match [{', '.join(parts)}] → {r.get('prompt', '')}{channel_note}")
+        return "\n".join(lines)
+
+    def list_discord_channels(
+        self,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """
+        List Discord channels the bot has previously been active in for this user.
+
+        Use this to look up a channel ID when the user wants to route email
+        summaries to a specific Discord channel by name.
+
+        Returns:
+            Formatted list of known channels with their IDs, names, and guild info.
+        """
+        phone, err = require_user_id(tool_context, "list discord channels")
+        if err:
+            return err
+
+        db = self._get_firestore()
+        if not db:
+            return "ERROR: Database not available."
+
+        user_id = phone
+        try:
+            channels_ref = (
+                db.collection("discord_channels")
+                .document(user_id)
+                .collection("channels")
+                .order_by("last_seen_at", direction="DESCENDING")
+                .limit(20)
+            )
+            docs = list(channels_ref.stream())
+        except Exception as e:
+            logger.exception("[gmail-tool] list_discord_channels error")
+            return f"Failed to list channels: {e}"
+
+        if not docs:
+            return (
+                "No Discord channels recorded yet. "
+                "The bot learns channels as you interact with it in Discord servers or DMs."
+            )
+
+        lines = [f"Known Discord channels ({len(docs)}):"]
+        for doc in docs:
+            c = doc.to_dict() or {}
+            guild_note = f" (server {c['guild_id']})" if c.get("guild_id") else " (DM)"
+            name_note = f" #{c['channel_name']}" if c.get("channel_name") else ""
+            lines.append(f"  {c.get('channel_id', doc.id)}{name_note}{guild_note}")
         return "\n".join(lines)

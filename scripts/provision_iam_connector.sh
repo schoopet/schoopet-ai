@@ -89,7 +89,7 @@ else
     gcloud alpha agent-identity connectors create "$CONNECTOR_ID" \
         --project="$PROJECT_ID" \
         --location="$REGION" \
-        --three-legged-oauth-authorization-url="https://accounts.google.com/o/oauth2/v2/auth" \
+        --three-legged-oauth-authorization-url="https://accounts.google.com/o/oauth2/v2/auth?access_type=offline&prompt=consent" \
         --three-legged-oauth-token-url="https://oauth2.googleapis.com/token" \
         --three-legged-oauth-client-id="${GOOGLE_OAUTH_CLIENT_ID}" \
         --three-legged-oauth-client-secret="${GOOGLE_OAUTH_CLIENT_SECRET}" \

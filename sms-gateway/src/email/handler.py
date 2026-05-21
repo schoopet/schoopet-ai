@@ -12,6 +12,7 @@ import base64
 import json
 import logging
 import os
+import re
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
@@ -52,6 +53,14 @@ read the full content and any attachments before processing.
 
 Your active email rules:
 {rules}
+
+CHANNEL ROUTING: Some rules include a "Route to channel" directive. When a rule
+with a channel directive matches, wrap your summary for that email in:
+  <CHANNEL:channel_id>Your summary here.</CHANNEL>
+Do NOT include that content anywhere else in your response. Each email that
+matches a routed rule must have its own <CHANNEL:...>...</CHANNEL> block.
+Untagged content (or content not inside a CHANNEL block) is sent to the user's
+default Discord DM. Rules without a channel directive use that default path.
 
 If a rule matches, follow its instructions exactly. If no rule matches, use smart defaults:
 - Calendar invites / flight or hotel confirmations / appointments → create_calendar_event + notify
@@ -259,7 +268,10 @@ def _format_rules_for_prompt(rules: list[dict]) -> str:
             parts.append(f"topic: {r['topic']}")
         if r.get("sender_filter"):
             parts.append(f"sender: {r['sender_filter']}")
-        lines.append(f"- Match [{', '.join(parts)}] → {r.get('prompt', '')}")
+        line = f"- Match [{', '.join(parts)}] → {r.get('prompt', '')}"
+        if r.get("target_channel_id"):
+            line += f"\n  Route to channel: wrap your summary in <CHANNEL:{r['target_channel_id']}>...</CHANNEL>"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -370,14 +382,35 @@ async def _notify_agent_of_emails(
         logger.exception(f"Failed to route email notification for {user_id}")
 
 
+_CHANNEL_TAG_RE = re.compile(
+    r"<CHANNEL:(\d+)>(.*?)</CHANNEL>",
+    re.DOTALL,
+)
+
+
 async def _send_response(user_id: str, message: str) -> None:
-    """Send an agent response to the user via Discord."""
+    """Send an agent response to the user via Discord.
+
+    Parses <CHANNEL:id>...</CHANNEL> blocks and routes each to the specified
+    channel. Any remaining untagged text is sent to the user's default DM.
+    """
+    if not _discord_sender:
+        logger.warning("No Discord sender available for email response")
+        return
+
+    routed_blocks = _CHANNEL_TAG_RE.findall(message)
+    remainder = _CHANNEL_TAG_RE.sub("", message).strip()
+
     try:
-        if _discord_sender:
-            await _discord_sender.send(user_id, message)
-        else:
-            logger.warning("No Discord sender available for email response")
-    except Exception as e:
+        for channel_id, content in routed_blocks:
+            content = content.strip()
+            if content:
+                logger.info(f"Routing email summary to Discord channel {channel_id}")
+                await _discord_sender.send_channel(channel_id, content)
+
+        if remainder and not _should_suppress_response(remainder):
+            await _discord_sender.send(user_id, remainder)
+    except Exception:
         logger.exception(f"Failed to send email response via Discord")
 
 

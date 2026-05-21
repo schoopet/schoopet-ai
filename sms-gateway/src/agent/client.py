@@ -1,6 +1,7 @@
 """Vertex AI Agent Engine client wrapper."""
 import asyncio
 from dataclasses import dataclass, field
+import json
 import logging
 import time
 from typing import Any, Union
@@ -10,6 +11,36 @@ from google.adk.events import Event
 from google.genai import types
 
 logger = logging.getLogger(__name__)
+
+_RAW_RESPONSE_PREFIX = "Failed to parse response as JSON. Raw response: "
+
+
+def _split_json_objects(text: str) -> list[dict]:
+    """Parse one or more concatenated JSON objects from text.
+
+    Agent Engine occasionally sends two ADK events glued together in a single
+    stream chunk (e.g. function_response + final model response).  The genai
+    library's chunk parser calls json.loads() on the whole chunk and raises
+    UnknownApiResponseError / JSONDecodeError("Extra data").  This helper
+    splits the raw string into individual objects so callers can recover.
+    """
+    decoder = json.JSONDecoder()
+    objects: list[dict] = []
+    idx = 0
+    n = len(text)
+    while idx < n:
+        while idx < n and text[idx] in " \t\n\r":
+            idx += 1
+        if idx >= n:
+            break
+        try:
+            obj, end = decoder.raw_decode(text, idx)
+            if isinstance(obj, dict):
+                objects.append(obj)
+            idx = end
+        except json.JSONDecodeError:
+            break
+    return objects
 
 
 class _TokenExpiredError(Exception):
@@ -225,37 +256,66 @@ class AgentEngineClient:
 
         async def stream_response():
             nonlocal ttft_ms
-            async for event in self._adk_app.async_stream_query(
-                user_id=user_id,
-                session_id=session_id,
-                message=message,
-            ):
-                # Reinitialize client on expired token and propagate so caller retries
-                if isinstance(event, dict) and event.get("code") == 401:
-                    logger.warning("Access token expired — reinitializing Vertex AI client")
-                    self._init_client()
-                    raise _TokenExpiredError()
-                logger.debug(f"Event type: {type(event).__name__}, event: {event}")
+            try:
+                async for event in self._adk_app.async_stream_query(
+                    user_id=user_id,
+                    session_id=session_id,
+                    message=message,
+                ):
+                    # Reinitialize client on expired token and propagate so caller retries
+                    if isinstance(event, dict) and event.get("code") == 401:
+                        logger.warning("Access token expired — reinitializing Vertex AI client")
+                        self._init_client()
+                        raise _TokenExpiredError()
+                    logger.debug(f"Event type: {type(event).__name__}, event: {event}")
 
-                if isinstance(event, dict):
-                    if "code" in event and "message" in event:
-                        logger.error(
-                            f"Agent Engine error: code={event['code']}, "
-                            f"message={event['message']}"
-                        )
+                    if isinstance(event, dict):
+                        if "code" in event and "message" in event:
+                            logger.error(
+                                f"Agent Engine error: code={event['code']}, "
+                                f"message={event['message']}"
+                            )
+                            continue
+                        parsed_event = self._coerce_event(event)
+                        events.append(parsed_event)
+                        if ttft_ms is None and self.extract_text([parsed_event]):
+                            ttft_ms = (time.monotonic() - t_start) * 1000
+                        _log_tool_activity(parsed_event, user_id)
                         continue
-                    parsed_event = self._coerce_event(event)
+
+                    parsed_event = event if isinstance(event, Event) else Event.model_validate(event)
                     events.append(parsed_event)
                     if ttft_ms is None and self.extract_text([parsed_event]):
                         ttft_ms = (time.monotonic() - t_start) * 1000
                     _log_tool_activity(parsed_event, user_id)
-                    continue
-
-                parsed_event = event if isinstance(event, Event) else Event.model_validate(event)
-                events.append(parsed_event)
-                if ttft_ms is None and self.extract_text([parsed_event]):
-                    ttft_ms = (time.monotonic() - t_start) * 1000
-                _log_tool_activity(parsed_event, user_id)
+            except _TokenExpiredError:
+                raise
+            except Exception as exc:
+                # Agent Engine occasionally concatenates two JSON objects in one
+                # stream chunk, causing UnknownApiResponseError("Extra data").
+                # Recover by splitting the raw payload into individual objects.
+                exc_str = str(exc)
+                if _RAW_RESPONSE_PREFIX not in exc_str:
+                    raise
+                raw = exc_str[exc_str.index(_RAW_RESPONSE_PREFIX) + len(_RAW_RESPONSE_PREFIX):]
+                recovered = _split_json_objects(raw)
+                if not recovered:
+                    raise
+                logger.warning(
+                    f"Recovered {len(recovered)} events from concatenated JSON stream chunk"
+                )
+                for event_dict in recovered:
+                    if "code" in event_dict and "message" in event_dict:
+                        logger.error(
+                            f"Agent Engine error: code={event_dict['code']}, "
+                            f"message={event_dict['message']}"
+                        )
+                        continue
+                    parsed_event = self._coerce_event(event_dict)
+                    events.append(parsed_event)
+                    if ttft_ms is None and self.extract_text([parsed_event]):
+                        ttft_ms = (time.monotonic() - t_start) * 1000
+                    _log_tool_activity(parsed_event, user_id)
 
         # Apply timeout to the streaming operation; retry once on token expiry
         try:

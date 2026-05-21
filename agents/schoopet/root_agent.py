@@ -248,16 +248,21 @@ def _personal_prompt() -> str:
 
         "**Email rules:**\n"
         "Rules tell the agent what to do when a matching email arrives automatically.\n"
-        "- add_email_rule(prompt, topic, sender_filter): Add a rule. `prompt` is free-form instructions\n"
-        "  for what to do when a matching email arrives.\n"
-        "- list_email_rules(): Show all rules\n"
-        "- update_email_rule(rule_id, ...): Patch a rule\n"
+        "- add_email_rule(prompt, topic, sender_filter, target_channel_id): Add a rule.\n"
+        "  `prompt` is free-form instructions for what to do when a matching email arrives.\n"
+        "  `target_channel_id` optionally routes the summary to a specific Discord channel instead of\n"
+        "  the user's default DM. Use list_discord_channels() to resolve a channel name to its ID.\n"
+        "- list_email_rules(): Show all rules (includes channel routing if set)\n"
+        "- list_discord_channels(): List Discord channels the bot has been active in (for channel ID lookup)\n"
+        "- update_email_rule(rule_id, ...): Patch a rule (pass target_channel_id=\"\" to remove channel routing)\n"
         "- remove_email_rule(rule_id): Delete a rule\n\n"
 
         "**INCOMING_EMAIL_NOTIFICATION (automatic processing):**\n"
         "When this trigger arrives, an email has appeared in the user's inbox. You MUST:\n"
-        "1. Call fetch_email(message_id) to get the full body and attachments\n"
+        "1. Call read_emails(since_history_id=...) then fetch_email(message_id) for each result\n"
         "2. Check the listed rules — if a rule matches, follow its instructions exactly\n"
+        "   - If the rule has a 'Route to channel' directive, wrap your summary in\n"
+        "     <CHANNEL:channel_id>Your summary.</CHANNEL> and do NOT include it elsewhere\n"
         "3. If no rule matches, apply smart defaults:\n"
         "   - Calendar invite / confirmed appointment / flight / hotel → create_calendar_event + notify\n"
         "   - Invoice / deadline / delivery / action required → create_async_task + notify\n"
@@ -268,6 +273,7 @@ def _personal_prompt() -> str:
         "**Examples:**\n"
         "  - 'Monitor my email' → get_gmail_status() then explain rules setup\n"
         "  - 'Notify me about job applications and log to my sheet' → add_email_rule(prompt='Extract applicant name, email, and role. Log to sheet <id>. Send me a one-line summary.', topic='job applications')\n"
+        "  - 'Route github emails to the #dev channel' → list_discord_channels() → find #dev ID → add_email_rule(prompt='Summarize in one line.', sender_filter='@github.com', target_channel_id='<id>')\n"
         "  - 'Ignore all newsletters' → add_email_rule(prompt='Silently ignore — do not notify me.', topic='newsletters and promotions')\n"
         "  - 'What emails do I have about my Amazon order?' → read_emails('Amazon order')\n\n"
 
@@ -446,6 +452,7 @@ def create_agent(
         FunctionTool(func=email_tool.list_email_rules),
         FunctionTool(func=email_tool.update_email_rule, require_confirmation=True),
         FunctionTool(func=email_tool.remove_email_rule, require_confirmation=True),
+        FunctionTool(func=email_tool.list_discord_channels),
     ]
 
     # Structured Notes subagent (BigQuery) for tracking structured data

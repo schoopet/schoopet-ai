@@ -195,6 +195,15 @@ class SchoopetGateway(discord.Client):
             f"attachments={len(message.attachments)}"
         )
 
+        asyncio.create_task(
+            self._session_manager.record_discord_channel(
+                user_id=user_id,
+                channel_id=discord_context.channel_id,
+                channel_name=discord_context.channel_name,
+                guild_id=discord_context.guild_id,
+            )
+        )
+
         # Fix 2: start typing before downloading attachments so the user sees feedback immediately
         async def _keep_typing():
             try:
