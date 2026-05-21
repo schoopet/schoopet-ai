@@ -19,6 +19,10 @@ ASYNC_TASKS_COLLECTION = "async_tasks"
 RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
 
 
+class TaskTimeoutError(Exception):
+    """Raised when the agent times out; signals Cloud Tasks to retry."""
+
+
 def build_allowed_resource_state(allowed_resource_ids: list[str]) -> dict[str, bool]:
     """Build ADK session state for resources approved at scheduling time."""
     return {
@@ -52,6 +56,10 @@ class GatewayTaskExecutor:
             prompt = self._build_task_prompt(task)
             result = await self._execute_task(task, prompt)
             await self._update_task_result(task_id, result)
+        except TaskTimeoutError as exc:
+            logger.warning("Task %s timed out — resetting to pending for Cloud Tasks retry", task_id)
+            await self._reset_task_to_pending(task_id)
+            return {"success": False, "retryable": True, "error": str(exc)}
         except Exception as exc:
             logger.exception("Task %s failed during execution: %s", task_id, exc)
             error = str(exc)
@@ -191,9 +199,9 @@ class GatewayTaskExecutor:
             logger.info("Task execution complete: %s chars", len(result))
             return result
         except TimeoutError as exc:
-            raise RuntimeError(
+            raise TaskTimeoutError(
                 "Agent did not respond within the configured timeout. "
-                "Check Agent Engine logs for this session."
+                "Cloud Tasks will retry."
             ) from exc
 
     def _build_initial_state(self, task: dict[str, Any]) -> dict[str, Any]:
@@ -241,6 +249,16 @@ class GatewayTaskExecutor:
             "status": "failed",
             "error": error,
             "completed_at": datetime.now(timezone.utc),
+        })
+
+    async def _reset_task_to_pending(self, task_id: str) -> None:
+        logger.info(
+            "[firestore] update %s/%s: status=pending (timeout reset for retry)",
+            ASYNC_TASKS_COLLECTION, task_id,
+        )
+        await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update({
+            "status": "pending",
+            "started_at": firestore.DELETE_FIELD,
         })
 
     async def _send_completion(

@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .auth import verify_internal_request
-from .task_executor import GatewayTaskExecutor
+from .task_executor import GatewayTaskExecutor, TaskTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,8 @@ async def execute_task(
     )
 
     result = await _task_executor.execute_task(payload.task_id)
+    if result.get("retryable"):
+        raise HTTPException(status_code=503, detail=result.get("error", "Task timed out"))
     if result.get("success"):
         return InternalResponse(
             status="completed",
