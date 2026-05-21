@@ -32,6 +32,83 @@ logger = logging.getLogger(__name__)
 MAX_INLINE_ATTACHMENT_BYTES = 10 * 1024 * 1024
 FALLBACK_MIME_TYPE = "application/octet-stream"
 
+_TOOL_LABELS: dict[str, str] = {
+    # Memory
+    "load_memory": "Checking memory",
+    "preload_memory": "Checking memory",
+    "save_memory": "Saving to memory",
+    "save_multiple_memories": "Saving to memory",
+    # Calendar
+    "list_calendar_events": "Checking calendar",
+    "create_calendar_event": "Creating calendar event",
+    "update_calendar_event": "Updating calendar event",
+    "delete_calendar_event": "Updating calendar",
+    "get_calendar_status": "Checking calendar",
+    # Drive
+    "save_file_to_drive": "Saving to Drive",
+    "save_attachment_to_drive": "Saving to Drive",
+    "list_drive_files": "Searching Drive",
+    "get_drive_status": "Checking Drive",
+    # Docs
+    "create_google_doc": "Creating document",
+    "read_google_doc": "Reading document",
+    "append_to_google_doc": "Updating document",
+    "replace_text_in_google_doc": "Updating document",
+    "get_docs_status": "Checking Docs",
+    # Sheets
+    "create_spreadsheet": "Creating spreadsheet",
+    "add_sheet_tab": "Updating spreadsheet",
+    "get_sheet_schema": "Reading spreadsheet",
+    "read_sheet_records": "Reading spreadsheet",
+    "ensure_sheet_headers": "Updating spreadsheet",
+    "append_record_to_sheet": "Updating spreadsheet",
+    "find_sheet_rows": "Searching spreadsheet",
+    "update_sheet_row": "Updating spreadsheet",
+    "append_row_to_sheet": "Updating spreadsheet",
+    "read_sheet": "Reading spreadsheet",
+    "add_sheet_column": "Updating spreadsheet",
+    "update_sheet_cell": "Updating spreadsheet",
+    "get_sheets_status": "Checking Sheets",
+    # Gmail
+    "read_emails": "Reading email",
+    "fetch_email": "Reading email",
+    "list_artifacts": "Checking email attachments",
+    "read_artifact": "Reading email attachment",
+    "get_gmail_status": "Checking Gmail",
+    "setup_gmail_watch": "Configuring Gmail",
+    "add_email_rule": "Updating email rules",
+    "list_email_rules": "Checking email rules",
+    "update_email_rule": "Updating email rules",
+    "remove_email_rule": "Updating email rules",
+    # Time & preferences
+    "get_current_time": "Checking time",
+    "convert_time": "Converting time",
+    "parse_natural_datetime": "Parsing date",
+    "next_occurrence": "Calculating schedule",
+    "set_timezone": "Updating timezone",
+    "get_timezone": "Checking timezone",
+    # Async tasks
+    "create_async_task": "Scheduling task",
+    "check_task_status": "Checking task",
+    "get_task_result": "Fetching task result",
+    "cancel_task": "Cancelling task",
+    "list_pending_tasks": "Listing tasks",
+    # Task debug
+    "get_cloud_task_status": "Checking task",
+    "list_scheduled_tasks": "Listing tasks",
+    "debug_task": "Debugging task",
+    # Discord/misc
+    "list_discord_channels": "Checking Discord channels",
+    "check_connector_credential": "Checking credentials",
+    # Subagents
+    "search_agent": "Searching the web",
+    "code_executor": "Running code",
+}
+
+
+def _format_tool_name(name: str) -> str:
+    return _TOOL_LABELS.get(name) or name.replace("_", " ").title()
+
 
 
 async def _build_discord_message_content(
@@ -341,86 +418,103 @@ class SchoopetGateway(discord.Client):
                 f"is_new_session={session_info.is_new_session}"
             )
 
+            status_msg = None
             try:
-                events = await self._agent_client.send_message_events(
-                    user_id=user_id,
-                    session_id=session_info.agent_session_id,
-                    message=wrap_message_with_discord_context(message, discord_context),
-                )
-            except asyncio.TimeoutError:
-                logger.error(f"Agent timeout for Discord gateway user {user_id}", exc_info=True)
-                await self._send_channel_text(
-                    channel,
-                    "I'm taking longer than usual to respond. Please try again in a moment.",
-                )
-                return
+                status_msg = await channel.send("> working...")
 
-            events, credential_req = await self._agent_client.resolve_iam_credential_events(
-                user_id=user_id,
-                session_id=session_info.agent_session_id,
-                events=events,
-                context="discord",
-            )
-            if credential_req:
-                await self._session_manager.set_pending_credential(
-                    nonce=credential_req.nonce,
+                async def _update_status(tool_name: str) -> None:
+                    try:
+                        await status_msg.edit(content=f"> {_format_tool_name(tool_name)}...")
+                    except Exception:
+                        pass
+
+                try:
+                    events = await self._agent_client.send_message_events(
+                        user_id=user_id,
+                        session_id=session_info.agent_session_id,
+                        message=wrap_message_with_discord_context(message, discord_context),
+                        on_tool_call=_update_status,
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"Agent timeout for Discord gateway user {user_id}", exc_info=True)
+                    await self._send_channel_text(
+                        channel,
+                        "I'm taking longer than usual to respond. Please try again in a moment.",
+                    )
+                    return
+
+                events, credential_req = await self._agent_client.resolve_iam_credential_events(
                     user_id=user_id,
                     session_id=session_info.agent_session_id,
-                    credential_function_call_id=credential_req.function_call_id,
-                    auth_config_dict=credential_req.auth_config_dict,
-                    auth_uri=credential_req.auth_uri,
+                    events=events,
+                    context="discord",
                 )
-                await self._send_auth_link(channel, credential_req.auth_uri, credential_req.nonce, user_id)
+                if credential_req:
+                    await self._session_manager.set_pending_credential(
+                        nonce=credential_req.nonce,
+                        user_id=user_id,
+                        session_id=session_info.agent_session_id,
+                        credential_function_call_id=credential_req.function_call_id,
+                        auth_config_dict=credential_req.auth_config_dict,
+                        auth_uri=credential_req.auth_uri,
+                    )
+                    await self._send_auth_link(channel, credential_req.auth_uri, credential_req.nonce, user_id)
+                    await self._session_manager.update_last_activity(
+                        user_id,
+                        channel="discord",
+                        session_scope=discord_context.session_scope,
+                    )
+                    return
+
+                confirmations = self._agent_client.extract_confirmation_requests(events)
+                if confirmations:
+                    uid = user_id if len(user_id) > 4 else user_id
+                    tool_names = [c.tool_name for c in confirmations]
+                    logger.info(
+                        f"[confirm] Agent suspended (online): user={uid} "
+                        f"tools={tool_names} count={len(confirmations)} "
+                        f"session={session_info.agent_session_id}"
+                    )
+                    await self._store_and_send_confirmations(
+                        user_id=user_id,
+                        confirmations=confirmations,
+                        session_id=session_info.agent_session_id,
+                        channel=channel,
+                        session_scope=discord_context.session_scope,
+                    )
+                    await self._session_manager.update_last_activity(
+                        user_id,
+                        channel="discord",
+                        session_scope=discord_context.session_scope,
+                    )
+                    return
+
+                response = self._agent_client.extract_text(events)
+                if not response:
+                    logger.warning(f"Empty response from agent for Discord gateway user {user_id}")
+                    await self._send_channel_text(
+                        channel, "I couldn't generate a response. Please try again."
+                    )
+                    return
+
+                await self._send_channel_text(channel, response)
                 await self._session_manager.update_last_activity(
                     user_id,
                     channel="discord",
                     session_scope=discord_context.session_scope,
                 )
-                return
 
-            confirmations = self._agent_client.extract_confirmation_requests(events)
-            if confirmations:
-                uid = user_id if len(user_id) > 4 else user_id
-                tool_names = [c.tool_name for c in confirmations]
+                processing_time = (time.time() - start_time) * 1000
                 logger.info(
-                    f"[confirm] Agent suspended (online): user={uid} "
-                    f"tools={tool_names} count={len(confirmations)} "
-                    f"session={session_info.agent_session_id}"
+                    f"Processed Discord gateway message in {processing_time:.0f}ms: "
+                    f"response sent to {user_id} ({len(response)} chars)"
                 )
-                await self._store_and_send_confirmations(
-                    user_id=user_id,
-                    confirmations=confirmations,
-                    session_id=session_info.agent_session_id,
-                    channel=channel,
-                    session_scope=discord_context.session_scope,
-                )
-                await self._session_manager.update_last_activity(
-                    user_id,
-                    channel="discord",
-                    session_scope=discord_context.session_scope,
-                )
-                return
-
-            response = self._agent_client.extract_text(events)
-            if not response:
-                logger.warning(f"Empty response from agent for Discord gateway user {user_id}")
-                await self._send_channel_text(
-                    channel, "I couldn't generate a response. Please try again."
-                )
-                return
-
-            await self._send_channel_text(channel, response)
-            await self._session_manager.update_last_activity(
-                user_id,
-                channel="discord",
-                session_scope=discord_context.session_scope,
-            )
-
-            processing_time = (time.time() - start_time) * 1000
-            logger.info(
-                f"Processed Discord gateway message in {processing_time:.0f}ms: "
-                f"response sent to {user_id} ({len(response)} chars)"
-            )
+            finally:
+                if status_msg is not None:
+                    try:
+                        await status_msg.delete()
+                    except Exception:
+                        pass
         except Exception as e:
             logger.exception(f"Error processing Discord gateway message for {user_id}: {e}")
             await self._send_channel_text(channel, "Something went wrong. Please try again.")

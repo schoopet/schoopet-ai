@@ -1,5 +1,6 @@
 """Vertex AI Agent Engine client wrapper."""
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 import json
 import logging
@@ -246,6 +247,7 @@ class AgentEngineClient:
         user_id: str,
         session_id: str,
         message: Union[str, types.Content],
+        on_tool_call: Callable[[str], Awaitable[None]] | None = None,
     ) -> list[Event]:
         """Send a message to the agent and return native ADK events."""
         logger.info(f"Sending message to agent: user={user_id}, session={session_id}")
@@ -254,8 +256,18 @@ class AgentEngineClient:
         t_start = time.monotonic()
         ttft_ms: float | None = None
 
-        async def stream_response():
+        async def _emit(event: Event) -> None:
             nonlocal ttft_ms
+            events.append(event)
+            if ttft_ms is None and self.extract_text([event]):
+                ttft_ms = (time.monotonic() - t_start) * 1000
+            _log_tool_activity(event, user_id)
+            if on_tool_call:
+                for fc in event.get_function_calls() or []:
+                    if fc.name and not fc.name.startswith("adk_"):
+                        await on_tool_call(fc.name)
+
+        async def stream_response():
             try:
                 async for event in self._adk_app.async_stream_query(
                     user_id=user_id,
@@ -276,18 +288,11 @@ class AgentEngineClient:
                                 f"message={event['message']}"
                             )
                             continue
-                        parsed_event = self._coerce_event(event)
-                        events.append(parsed_event)
-                        if ttft_ms is None and self.extract_text([parsed_event]):
-                            ttft_ms = (time.monotonic() - t_start) * 1000
-                        _log_tool_activity(parsed_event, user_id)
+                        await _emit(self._coerce_event(event))
                         continue
 
                     parsed_event = event if isinstance(event, Event) else Event.model_validate(event)
-                    events.append(parsed_event)
-                    if ttft_ms is None and self.extract_text([parsed_event]):
-                        ttft_ms = (time.monotonic() - t_start) * 1000
-                    _log_tool_activity(parsed_event, user_id)
+                    await _emit(parsed_event)
             except _TokenExpiredError:
                 raise
             except Exception as exc:
@@ -311,11 +316,7 @@ class AgentEngineClient:
                             f"message={event_dict['message']}"
                         )
                         continue
-                    parsed_event = self._coerce_event(event_dict)
-                    events.append(parsed_event)
-                    if ttft_ms is None and self.extract_text([parsed_event]):
-                        ttft_ms = (time.monotonic() - t_start) * 1000
-                    _log_tool_activity(parsed_event, user_id)
+                    await _emit(self._coerce_event(event_dict))
 
         # Apply timeout to the streaming operation; retry once on token expiry
         try:
