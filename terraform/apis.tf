@@ -16,6 +16,9 @@ locals {
     "monitoring.googleapis.com",
     "telemetry.googleapis.com",
     "iamconnectorcredentials.googleapis.com",
+    "recommender.googleapis.com",
+    "billingbudgets.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
   ]
 }
 

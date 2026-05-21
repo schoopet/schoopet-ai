@@ -166,7 +166,7 @@ class TestGatewayTaskExecutor:
         agent_client.create_session.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_timeout_stores_descriptive_error_and_notifies(
+    async def test_timeout_resets_to_pending_and_signals_retry(
         self, executor, firestore_client, agent_client, discord_sender
     ):
         agent_client.send_message_events = AsyncMock(side_effect=TimeoutError())
@@ -174,19 +174,15 @@ class TestGatewayTaskExecutor:
         result = await executor.execute_task(TASK_ID)
 
         assert result["success"] is False
-        assert result["error"]  # must be non-empty
+        assert result["retryable"] is True
         assert "timeout" in result["error"].lower()
         doc_ref = firestore_client.collection.return_value.document.return_value
-        error_update = next(
-            call.args[0]
-            for call in doc_ref.update.await_args_list
-            if call.args[0].get("status") == "failed"
-        )
-        assert error_update["error"]  # non-empty in Firestore
-        discord_sender.send_channel.assert_awaited_once()
-        _, text = discord_sender.send_channel.await_args.args
-        assert text  # non-empty Discord message
-        assert "error" in text.lower()
+        # Task must be reset to pending so Cloud Tasks can retry it
+        doc_ref.update.assert_any_await({"status": "pending", "started_at": ANY})
+        # No failed status written, no Discord error notification sent
+        statuses = [c.args[0].get("status") for c in doc_ref.update.await_args_list]
+        assert "failed" not in statuses
+        discord_sender.send_channel.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_failure_stores_error_and_posts_to_channel(
