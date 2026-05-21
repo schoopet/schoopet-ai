@@ -260,7 +260,8 @@ class GatewayTaskExecutor:
             logger.warning("Task %s completed with no result", task.get("task_id"))
             return
 
-        await self._discord_sender.send_channel(task["discord_channel_id"], message)
+        channel_id = task.get("target_channel_id") or task["discord_channel_id"]
+        await self._discord_sender.send_channel(channel_id, message)
 
     def _validate_delivery_target(self, task: dict[str, Any]) -> None:
         if not task.get("discord_channel_id"):

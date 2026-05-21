@@ -63,6 +63,9 @@ class AsyncTaskDocument(BaseModel):
     discord_channel_name: str = Field(
         default="", description="Discord channel name for channel-scoped notifications"
     )
+    target_channel_id: str = Field(
+        default="", description="Override Discord channel for completion delivery"
+    )
 
     allowed_resource_ids: List[str] = Field(
         default_factory=list,
@@ -103,6 +106,7 @@ class AsyncTaskDocument(BaseModel):
             "notification_target_type": self.notification_target_type,
             "discord_channel_id": self.discord_channel_id,
             "discord_channel_name": self.discord_channel_name,
+            "target_channel_id": self.target_channel_id,
             "status": self.status.value,
             "created_at": self.created_at,
         }
@@ -147,6 +151,7 @@ class AsyncTaskDocument(BaseModel):
             notification_target_type=data.get("notification_target_type", ""),
             discord_channel_id=data.get("discord_channel_id", ""),
             discord_channel_name=data.get("discord_channel_name", ""),
+            target_channel_id=data.get("target_channel_id", ""),
             status=TaskStatus(raw_status),
             result=data.get("result"),
             error=data.get("error"),

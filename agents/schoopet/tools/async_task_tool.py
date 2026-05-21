@@ -133,6 +133,7 @@ class AsyncTaskTool:
         schedule_delay_minutes: int = 0,
         schedule_at: Optional[str] = None,
         allowed_resource_ids: Optional[List[str]] = None,
+        target_channel_id: Optional[str] = None,
         tool_context: Optional[ToolContext] = None,
     ) -> str:
         """
@@ -160,6 +161,9 @@ class AsyncTaskTool:
             allowed_resource_ids: Flat list of resource IDs (Sheet IDs, Doc IDs, Drive folder
                 IDs) pre-authorized for offline access. Use when the task needs to read/write
                 known resources without interrupting the user for confirmation.
+            target_channel_id: Optional Discord channel snowflake ID to deliver the
+                completion notification to, overriding the originating channel.
+                Use list_discord_channels() to resolve a channel name to its ID.
 
         Returns:
             Confirmation message with task ID, or error message if creation failed.
@@ -170,6 +174,8 @@ class AsyncTaskTool:
             - Analysis: create_async_task("analysis", "Look at my calendar and find conflicts next week")
             - Deep research with pre-authorized sheet:
                 create_async_task("research", "DEEP_RESEARCH_TASK: ...", allowed_resource_ids=["1BxiM..."])
+            - Route result to a specific channel:
+                create_async_task("research", "...", target_channel_id="123456789012345678")
         """
         user_id = self._get_user_id(tool_context)
         if not user_id:
@@ -236,6 +242,7 @@ class AsyncTaskTool:
             notification_target_type=notification_context.get("notification_target_type", ""),
             discord_channel_id=notification_context.get("discord_channel_id", ""),
             discord_channel_name=notification_context.get("discord_channel_name", ""),
+            target_channel_id=target_channel_id or "",
             status=TaskStatus.SCHEDULED if scheduled_at_dt else TaskStatus.PENDING,
         )
 

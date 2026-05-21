@@ -220,11 +220,17 @@ def _personal_prompt() -> str:
         "the recurrence so you can schedule the next occurrence when each one fires. "
         "Save the recurrence pattern to memory so you can rebuild the schedule if needed.\n\n"
 
+        "**Channel routing:**\n"
+        "`target_channel_id` optionally routes the completion to a specific Discord channel "
+        "instead of the originating channel. Use list_discord_channels() to resolve a channel name to its ID.\n\n"
+
         "**Examples:**\n"
         "- 'Research the best project management tools' -> create_async_task('research', '...')\n"
         "- 'Remind me in 2 hours to review the report' -> create_async_task('reminder', '...', schedule_delay_minutes=120)\n"
         "- 'Check my calendar tomorrow and summarize' -> create_async_task('analysis', '...', schedule_at='...')\n"
-        "- 'Remind me every Monday at 9am to send the weekly update' -> schedule first instance, save recurrence pattern\n\n"
+        "- 'Remind me every Monday at 9am to send the weekly update' -> schedule first instance, save recurrence pattern\n"
+        "- 'Research X and post the result to #reports' -> list_discord_channels() -> find #reports ID -> "
+        "create_async_task('research', '...', target_channel_id='<id>')\n\n"
 
         "**When you receive INTERNAL_TASK_COMPLETE:**\n"
         "Inform the user about the completed task conversationally. "
