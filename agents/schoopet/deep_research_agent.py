@@ -9,6 +9,7 @@ from .global_gemini import GlobalGemini
 from .calendar_tool import CalendarTool
 from .drive_sheets_tool import DocsTool, DriveTool, SheetsTool
 from .memory_tool import save_memory, save_multiple_memories
+from .model_callbacks import on_tool_error
 from .resource_confirmation import sheet_confirmation, doc_confirmation
 
 
@@ -37,6 +38,7 @@ def _make_research_loop() -> LoopAgent:
         tools=[GoogleSearchTool()],
         output_key="iteration_results",
         after_agent_callback=_append_iteration_results,
+        on_tool_error_callback=on_tool_error,
         instruction=(
             "You are a research search assistant. Your job is to find candidates matching "
             "the research task described in the conversation.\n\n"
@@ -59,6 +61,7 @@ def _make_research_loop() -> LoopAgent:
         model=GlobalGemini(model=_PRO_MODEL),
         tools=[FunctionTool(func=exit_loop)],
         output_key="critique_result",
+        on_tool_error_callback=on_tool_error,
         instruction=(
             "You are a research quality critic. Review all search results accumulated so far "
             "(in search_results from prior iterations) and evaluate coverage.\n\n"
@@ -225,5 +228,6 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         tools=tools,
         sub_agents=[_make_research_loop()],
         instruction=prompt,
+        on_tool_error_callback=on_tool_error,
     )
     return agent

@@ -287,7 +287,7 @@ class TestGatewayTaskExecutor:
         agent_client.send_confirmation_response.assert_awaited_once()
         call_kwargs = agent_client.send_confirmation_response.await_args.kwargs
         assert call_kwargs["confirmed"] is False
-        assert "bad-id" in call_kwargs["reason"]
+        assert "reason" not in call_kwargs
         discord_sender.send_channel.assert_awaited_once()
         _, text = discord_sender.send_channel.await_args.args
         assert "29 books" in text

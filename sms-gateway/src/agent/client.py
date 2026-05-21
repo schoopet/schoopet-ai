@@ -344,12 +344,9 @@ class AgentEngineClient:
         session_id: str,
         confirmation_function_call_id: str,
         confirmed: bool,
-        reason: str | None = None,
     ) -> list[Event]:
         """Resolve an ADK confirmation request with a native function response."""
         response_payload: dict = {"confirmed": confirmed}
-        if reason:
-            response_payload["reason"] = reason
         content = types.Content(
             role="user",
             parts=[

@@ -183,7 +183,6 @@ class GatewayTaskExecutor:
                         session_id=session_id,
                         confirmation_function_call_id=confirmation.function_call_id,
                         confirmed=False,
-                        reason=reason,
                     )
                     logger.info(
                         "[confirm] Agent resumed (offline): task_id=%s tool=%s events=%d",

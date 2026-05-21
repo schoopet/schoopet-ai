@@ -2,6 +2,7 @@ import os
 from typing import List, Dict, Any
 from google.adk.agents.llm_agent import LlmAgent
 from .global_gemini import GlobalGemini
+from .model_callbacks import on_tool_error
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.agent_tool import AgentTool
 from .search_agent import create_search_agent
@@ -186,6 +187,7 @@ def create_structured_notes_agent(
         model=model,
         tools=tools,
         instruction=prompt,
+        on_tool_error_callback=on_tool_error,
     )
 
     return agent
