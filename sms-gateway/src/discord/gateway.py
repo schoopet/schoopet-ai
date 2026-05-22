@@ -70,6 +70,7 @@ _TOOL_LABELS: dict[str, str] = {
     "update_sheet_cell": "Updating spreadsheet",
     "get_sheets_status": "Checking Sheets",
     # Gmail
+    "atomic_read_received_emails": "Reading email",
     "read_emails": "Reading email",
     "fetch_email": "Reading email",
     "list_artifacts": "Checking email attachments",
