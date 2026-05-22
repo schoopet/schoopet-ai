@@ -71,6 +71,15 @@ class GatewayTaskExecutor:
             logger.exception("Task %s failed during execution: %s", task_id, exc)
             error = str(exc)
             await self._update_task_error(task_id, error)
+            if gmail_address := task.get("gmail_address"):
+                doc_id = gmail_address.lower().replace("@", "_at_").replace(".", "_")
+                try:
+                    await self._db.collection("email_state").document(doc_id).update(
+                        {"pending_task_id": firestore.DELETE_FIELD}
+                    )
+                    logger.info("Task %s failed: cleared pending_task_id for %s", task_id, gmail_address)
+                except Exception:
+                    logger.exception("Task %s: failed to clear pending_task_id for %s", task_id, gmail_address)
             try:
                 await self._send_completion(task, error=error)
             except Exception:

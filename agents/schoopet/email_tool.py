@@ -174,11 +174,16 @@ class EmailTool:
                 .execute()
             )
         except HttpError as e:
-            logger.error(
-                f"[gmail-api] messages.get failed: id={message_id!r} "
-                f"status={e.resp.status} reason={e.reason!r} body={e.content[:300]!r}"
-            )
-            raise
+            if e.resp.status == 404:
+                logger.warning(
+                    f"[gmail-api] messages.get not found (deleted/moved): id={message_id!r}"
+                )
+            else:
+                logger.error(
+                    f"[gmail-api] messages.get failed: id={message_id!r} "
+                    f"status={e.resp.status} reason={e.reason!r} body={e.content[:300]!r}"
+                )
+            return None
         logger.info(
             f"[gmail-api] messages.get ok: id={message_id!r} "
             f"sizeEstimate={result.get('sizeEstimate')} labels={result.get('labelIds')}"
@@ -201,11 +206,16 @@ class EmailTool:
                 .execute()
             )
         except HttpError as e:
-            logger.error(
-                f"[gmail-api] messages.get(metadata) failed: id={message_id!r} "
-                f"status={e.resp.status} reason={e.reason!r} body={e.content[:300]!r}"
-            )
-            raise
+            if e.resp.status == 404:
+                logger.warning(
+                    f"[gmail-api] messages.get(metadata) not found (deleted/moved): id={message_id!r}"
+                )
+            else:
+                logger.error(
+                    f"[gmail-api] messages.get(metadata) failed: id={message_id!r} "
+                    f"status={e.resp.status} reason={e.reason!r} body={e.content[:300]!r}"
+                )
+            return None
         logger.info(f"[gmail-api] messages.get(metadata) ok: id={message_id!r}")
         return result
 
@@ -373,7 +383,8 @@ class EmailTool:
         for m in messages:
             try:
                 raw = self._gmail_fetch_metadata(service, m["id"])
-                if not raw:
+                if raw is None:
+                    results.append(f"[Message {m['id']}: not found (deleted or moved to trash)]")
                     continue
                 headers_list = raw.get("payload", {}).get("headers", [])
 
@@ -427,14 +438,9 @@ class EmailTool:
         if not service:
             return ""
 
-        try:
-            raw = self._gmail_fetch(service, message_id)
-        except HttpError as e:
-            logger.exception(f"[gmail-tool] fetch_email error id={message_id}")
-            return f"Error fetching email {message_id}: {e}"
-        except Exception as e:
-            logger.exception(f"[gmail-tool] fetch_email error id={message_id}")
-            return f"Error fetching email {message_id}: {e}"
+        raw = self._gmail_fetch(service, message_id)
+        if raw is None:
+            return f"Error fetching email {message_id}: message not found (deleted or moved to trash)"
 
         parsed = self._parse_message(raw)
         payload = raw.get("payload", {})
@@ -633,7 +639,8 @@ class EmailTool:
         for m in messages:
             try:
                 raw = self._gmail_fetch_metadata(service, m["id"])
-                if not raw:
+                if raw is None:
+                    results.append(f"[Message {m['id']}: not found (deleted or moved to trash)]")
                     continue
                 headers_list = raw.get("payload", {}).get("headers", [])
 
