@@ -254,8 +254,11 @@ async def test_gateway_multiple_confirmations_shows_all_buttons(gateway_services
     await gateway._handle_gateway_message("user-123", "do both", channel)
 
     assert session_manager.add_pending_approval.await_count == 2
-    assert channel.send.await_count == 2
-    for call in channel.send.await_args_list:
+    # 1 status message ("> working...") + 2 confirmation button views
+    assert channel.send.await_count == 3
+    confirmation_calls = [c for c in channel.send.await_args_list if "view" in c.kwargs]
+    assert len(confirmation_calls) == 2
+    for call in confirmation_calls:
         assert isinstance(call.kwargs["view"], _ConfirmationView)
     session_manager.update_last_activity.assert_awaited_once()
 
