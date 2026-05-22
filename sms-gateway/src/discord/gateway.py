@@ -13,6 +13,7 @@ in code and do not need manual enabling.
 """
 import asyncio
 import logging
+import random
 import time
 
 import discord
@@ -109,6 +110,10 @@ _TOOL_LABELS: dict[str, str] = {
 
 def _format_tool_name(name: str) -> str:
     return _TOOL_LABELS.get(name) or name.replace("_", " ").title()
+
+
+_CAT_STARTERS = ["> mrrp...", "> *purring*...", "> prrr...", "> mew..."]
+_CAT_SUFFIXES = [" mrrp", " prrr", " *purrs*", " nyaa~", " mew"]
 
 
 
@@ -421,11 +426,14 @@ class SchoopetGateway(discord.Client):
 
             status_msg = None
             try:
-                status_msg = await channel.send("> working...")
+                _starters = ["> working..."] * 4 + _CAT_STARTERS
+                status_msg = await channel.send(random.choice(_starters))
 
                 async def _update_status(tool_name: str) -> None:
                     try:
-                        await status_msg.edit(content=f"> {_format_tool_name(tool_name)}...")
+                        label = _format_tool_name(tool_name)
+                        suffix = random.choice(_CAT_SUFFIXES) if random.random() < 1 / 7 else ""
+                        await status_msg.edit(content=f"> {label}{suffix}...")
                     except Exception:
                         pass
 
