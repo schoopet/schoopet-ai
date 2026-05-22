@@ -264,8 +264,9 @@ def _personal_prompt() -> str:
         "- remove_email_rule(rule_id): Delete a rule\n\n"
 
         "**INCOMING_EMAIL_NOTIFICATION (automatic processing):**\n"
-        "When this trigger arrives, an email has appeared in the user's inbox. You MUST:\n"
-        "1. Call read_emails(since_history_id=...) then fetch_email(message_id) for each result\n"
+        "When this trigger arrives, a batch of emails has been collected for the user. You MUST:\n"
+        "1. Call atomic_read_received_emails() to claim the batch. If it returns 'No new emails.', "
+        "respond with <SUPPRESS RESPONSE> and stop. Otherwise call fetch_email(message_id) for each returned message ID\n"
         "2. Check the listed rules — if a rule matches, follow its instructions exactly\n"
         "   - If the rule has a 'Route to channel' directive, wrap your summary in\n"
         "     <CHANNEL:channel_id>Your summary.</CHANNEL> and do NOT include it elsewhere\n"
@@ -448,6 +449,7 @@ def create_agent(
     email_tool = EmailTool()
 
     tools += [
+        FunctionTool(func=email_tool.atomic_read_received_emails),
         FunctionTool(func=email_tool.read_emails),
         FunctionTool(func=email_tool.fetch_email),
         FunctionTool(func=email_tool.list_artifacts),

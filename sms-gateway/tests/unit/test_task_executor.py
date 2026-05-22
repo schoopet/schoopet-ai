@@ -251,7 +251,7 @@ class TestGatewayTaskExecutor:
         assert "failed" not in statuses_written
 
     @pytest.mark.asyncio
-    async def test_missing_discord_channel_marks_failed_without_dm_fallback(
+    async def test_missing_discord_channel_falls_back_to_dm(
         self, executor, firestore_client, agent_client, discord_sender
     ):
         doc_ref = firestore_client.collection.return_value.document.return_value
@@ -259,11 +259,50 @@ class TestGatewayTaskExecutor:
 
         result = await executor.execute_task(TASK_ID)
 
-        assert result["success"] is False
-        assert "discord_channel_id" in result["error"]
-        agent_client.create_session.assert_not_awaited()
+        assert result["success"] is True
+        discord_sender.send_channel.assert_not_awaited()
+        discord_sender.send.assert_awaited_once_with(USER_ID, "Task result")
+
+    @pytest.mark.asyncio
+    async def test_suppress_response_skips_discord_delivery(
+        self, executor, firestore_client, agent_client, discord_sender
+    ):
+        agent_client.extract_text = MagicMock(return_value="<SUPPRESS RESPONSE>\nquiet.")
+
+        result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is True
         discord_sender.send_channel.assert_not_awaited()
         discord_sender.send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_channel_tag_routes_to_specific_channel(
+        self, executor, firestore_client, agent_client, discord_sender
+    ):
+        agent_client.extract_text = MagicMock(
+            return_value="<CHANNEL:999>Email summary.</CHANNEL>"
+        )
+
+        result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is True
+        discord_sender.send_channel.assert_awaited_once_with("999", "Email summary.")
+        discord_sender.send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_channel_tag_plus_remainder_routes_both(
+        self, executor, firestore_client, agent_client, discord_sender
+    ):
+        agent_client.extract_text = MagicMock(
+            return_value="<CHANNEL:777>Routed bit.</CHANNEL>\nFallback text."
+        )
+
+        result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is True
+        discord_sender.send_channel.assert_any_await("777", "Routed bit.")
+        # remainder goes to the task's discord_channel_id ("c1")
+        discord_sender.send_channel.assert_any_await("c1", "Fallback text.")
 
     @pytest.mark.asyncio
     async def test_offline_confirmation_auto_declined_and_task_succeeds(

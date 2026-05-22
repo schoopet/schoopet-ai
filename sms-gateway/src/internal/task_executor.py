@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -17,6 +18,12 @@ logger = logging.getLogger(__name__)
 
 ASYNC_TASKS_COLLECTION = "async_tasks"
 RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
+
+_CHANNEL_TAG_RE = re.compile(r"<CHANNEL:(\d+)>(.*?)</CHANNEL>", re.DOTALL)
+
+
+def _should_suppress(message: str) -> bool:
+    return bool(message) and message.lstrip().startswith("<SUPPRESS RESPONSE>")
 
 
 class TaskTimeoutError(Exception):
@@ -268,21 +275,37 @@ class GatewayTaskExecutor:
     ) -> None:
         self._validate_delivery_target(task)
 
-        message = (
-            f"Your background task encountered an error: {error}"
-            if error
-            else (result or "")
-        )
+        if error:
+            message = f"Your background task encountered an error: {error}"
+        else:
+            message = result or ""
+
         if not message:
             logger.warning("Task %s completed with no result", task.get("task_id"))
             return
 
-        channel_id = task.get("target_channel_id") or task["discord_channel_id"]
-        await self._discord_sender.send_channel(channel_id, message)
+        if _should_suppress(message):
+            logger.info("Task %s: response suppressed", task.get("task_id"))
+            return
+
+        routed_blocks = _CHANNEL_TAG_RE.findall(message)
+        remainder = _CHANNEL_TAG_RE.sub("", message).strip()
+
+        for channel_id, content in routed_blocks:
+            content = content.strip()
+            if content:
+                await self._discord_sender.send_channel(channel_id, content)
+
+        if remainder and not _should_suppress(remainder):
+            target = task.get("target_channel_id") or task.get("discord_channel_id")
+            if target:
+                await self._discord_sender.send_channel(target, remainder)
+            else:
+                await self._discord_sender.send(task["user_id"], remainder)
 
     def _validate_delivery_target(self, task: dict[str, Any]) -> None:
-        if not task.get("discord_channel_id"):
-            raise ValueError("Discord task is missing discord_channel_id")
+        if not task.get("discord_channel_id") and not task.get("user_id"):
+            raise ValueError("Task is missing both discord_channel_id and user_id")
         if not self._discord_sender:
             raise ValueError("Discord sender is not initialized")
 
@@ -312,6 +335,48 @@ class GatewayTaskExecutor:
         )
 
         return "\n".join(parts)
+
+    async def create_email_batch_task(
+        self,
+        gmail_address: str,
+        user_id: str,
+        prompt: str,
+        discord_channel_id: str,
+        scheduled_at: datetime,
+    ) -> str:
+        """Create a scheduled async task for email batch processing.
+
+        Returns the task_id. The Cloud Task will call /internal/tasks/execute
+        at scheduled_at, which invokes the agent with prompt.
+        """
+        task_id = str(uuid.uuid4())
+        doc = {
+            "task_id": task_id,
+            "user_id": user_id,
+            "task_type": "notification",
+            "instruction": prompt,
+            "status": "scheduled",
+            "scheduled_at": scheduled_at,
+            "created_at": datetime.now(timezone.utc),
+            "gmail_address": gmail_address,
+        }
+        if discord_channel_id:
+            doc["discord_channel_id"] = discord_channel_id
+        await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).set(doc)
+
+        task_name = self._create_cloud_task(
+            task_id=task_id,
+            user_id=user_id,
+            schedule_time=scheduled_at,
+        )
+        if task_name:
+            await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update(
+                {"cloud_task_name": task_name}
+            )
+        else:
+            logger.warning("Email batch task %s: Cloud Task creation failed", task_id)
+
+        return task_id
 
     async def requeue_scheduled_tasks(self) -> dict[str, int]:
         """Create Cloud Tasks for scheduled tasks entering the 30-day window."""

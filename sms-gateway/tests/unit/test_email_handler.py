@@ -1,48 +1,12 @@
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+"""Unit tests for the email webhook handler."""
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from google.adk.events import Event
-from google.genai import types
 
-from src.agent.client import AgentEngineClient
 from src.email import handler
 
 
-def _text_events(text: str) -> list[Event]:
-    return [
-        Event(
-            author="agent",
-            content=types.Content(role="model", parts=[types.Part(text=text)]),
-        )
-    ]
-
-
-def _confirmation_events() -> list[Event]:
-    return [
-        Event(
-            author="agent",
-            content=types.Content(
-                role="model",
-                parts=[
-                    types.Part(
-                        function_call=types.FunctionCall(
-                            name="adk_request_confirmation",
-                            id="confirm-1",
-                            args={
-                                "originalFunctionCall": {
-                                    "id": "tool-1",
-                                    "name": "send_email",
-                                    "args": {"to": "x@example.com"},
-                                },
-                                "toolConfirmation": {"hint": "Send email?"},
-                            },
-                        )
-                    )
-                ],
-            ),
-        )
-    ]
+# ── _should_suppress_response ─────────────────────────────────────────────────
 
 
 def test_should_suppress_response_exact_prefix():
@@ -61,171 +25,7 @@ def test_should_suppress_response_normal_message_does_not_suppress():
     assert not handler._should_suppress_response("Here is the summary.")
 
 
-@pytest.fixture
-def email_services(monkeypatch):
-    agent_client = AsyncMock()
-    session_manager = AsyncMock()
-    session_manager.get_or_create_session = AsyncMock(
-        return_value=SimpleNamespace(agent_session_id="agent-session-123")
-    )
-    discord_sender = AsyncMock()
-    agent_client.extract_text = AgentEngineClient.extract_text
-    agent_client.extract_confirmation_requests = AgentEngineClient.extract_confirmation_requests
-    agent_client.extract_credential_requests = AgentEngineClient.extract_credential_requests
-
-    async def _resolve_passthrough(user_id, session_id, events, context=""):
-        return (events, None)
-
-    agent_client.resolve_iam_credential_events = _resolve_passthrough
-
-    monkeypatch.setattr(handler, "_agent_client", agent_client)
-    monkeypatch.setattr(handler, "_session_manager", session_manager)
-    monkeypatch.setattr(handler, "_discord_sender", discord_sender)
-
-    return agent_client, session_manager, discord_sender
-
-
-@pytest.mark.asyncio
-async def test_notify_agent_suppressed_response_does_not_send(email_services):
-    agent_client, _, discord_sender = email_services
-    agent_client.send_message_events = AsyncMock(
-        return_value=_text_events("<SUPPRESS RESPONSE>\nNo user update needed.")
-    )
-
-    await handler._notify_agent_of_emails(
-        gmail_address="user@gmail.com",
-        start_history_id="12345",
-        user_id="user-123",
-        rules_text="(no rules)",
-    )
-
-    discord_sender.send.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_notify_agent_normal_response_routes_to_discord(email_services):
-    agent_client, _, discord_sender = email_services
-    agent_client.send_message_events = AsyncMock(
-        return_value=_text_events("You have an invoice due tomorrow.")
-    )
-
-    await handler._notify_agent_of_emails(
-        gmail_address="billing@example.com",
-        start_history_id="12345",
-        user_id="user-123",
-        rules_text="(no rules)",
-    )
-
-    discord_sender.send.assert_awaited_once_with(
-        "user-123", "You have an invoice due tomorrow."
-    )
-
-
-@pytest.mark.asyncio
-async def test_notify_agent_prompt_includes_offline_safety_and_history_id(
-    email_services,
-):
-    agent_client, _, _ = email_services
-    agent_client.send_message_events = AsyncMock(return_value=_text_events("<SUPPRESS RESPONSE>"))
-
-    await handler._notify_agent_of_emails(
-        gmail_address="user@gmail.com",
-        start_history_id="99999",
-        user_id="user-123",
-        rules_text="- Match [topic: newsletters] -> ignore",
-    )
-
-    prompt = agent_client.send_message_events.await_args.kwargs["message"]
-    assert "OFFLINE MODE" in prompt
-    assert "will be rejected" in prompt
-    assert "<SUPPRESS RESPONSE>" in prompt
-    assert "since_history_id=\"99999\"" in prompt
-    assert "read_emails" in prompt
-
-
-@pytest.mark.asyncio
-async def test_notify_agent_confirmation_declines_and_forwards_fallback(email_services):
-    agent_client, _, discord_sender = email_services
-    agent_client.send_message_events = AsyncMock(return_value=_confirmation_events())
-    agent_client.send_confirmation_response = AsyncMock(return_value=_text_events("I'll note that for you."))
-
-    await handler._notify_agent_of_emails(
-        gmail_address="user@gmail.com",
-        start_history_id="12345",
-        user_id="user-123",
-        rules_text="(no rules)",
-    )
-
-    agent_client.send_confirmation_response.assert_awaited_once_with(
-        user_id="user-123",
-        session_id="agent-session-123",
-        confirmation_function_call_id="confirm-1",
-        confirmed=False,
-    )
-    discord_sender.send.assert_awaited_once_with("user-123", "I'll note that for you.")
-
-
-# ── _send_response channel routing tests ──────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_send_response_routes_channel_tag_to_send_channel(email_services):
-    _, _, discord_sender = email_services
-
-    await handler._send_response(
-        "user-123",
-        "<CHANNEL:111222333>Invoice from Acme received.</CHANNEL>",
-    )
-
-    discord_sender.send_channel.assert_awaited_once_with(
-        "111222333", "Invoice from Acme received."
-    )
-    discord_sender.send.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_send_response_routes_multiple_channel_tags(email_services):
-    _, _, discord_sender = email_services
-
-    await handler._send_response(
-        "user-123",
-        "<CHANNEL:111>Summary A.</CHANNEL>\n<CHANNEL:222>Summary B.</CHANNEL>",
-    )
-
-    calls = discord_sender.send_channel.await_args_list
-    assert len(calls) == 2
-    assert calls[0].args == ("111", "Summary A.")
-    assert calls[1].args == ("222", "Summary B.")
-    discord_sender.send.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_send_response_untagged_remainder_goes_to_default_dm(email_services):
-    _, _, discord_sender = email_services
-
-    await handler._send_response(
-        "user-123",
-        "<CHANNEL:555>Routed summary.</CHANNEL>\nUntagged fallback message.",
-    )
-
-    discord_sender.send_channel.assert_awaited_once_with("555", "Routed summary.")
-    discord_sender.send.assert_awaited_once_with("user-123", "Untagged fallback message.")
-
-
-@pytest.mark.asyncio
-async def test_send_response_suppressed_remainder_not_sent(email_services):
-    _, _, discord_sender = email_services
-
-    await handler._send_response(
-        "user-123",
-        "<CHANNEL:555>Routed summary.</CHANNEL>\n<SUPPRESS RESPONSE>",
-    )
-
-    discord_sender.send_channel.assert_awaited_once_with("555", "Routed summary.")
-    discord_sender.send.assert_not_awaited()
-
-
-# ── _format_rules_for_prompt channel routing tests ────────────────────────────
+# ── _format_rules_for_prompt ──────────────────────────────────────────────────
 
 
 def test_format_rules_includes_channel_directive():
@@ -253,3 +53,198 @@ def test_format_rules_without_channel_has_no_route_directive():
     result = handler._format_rules_for_prompt(rules)
     assert "Route to channel" not in result
     assert "<CHANNEL:" not in result
+
+
+# ── _atomic_update_last_received ──────────────────────────────────────────────
+
+
+def _async_transactional_passthrough(f):
+    """Stand-in for @firestore.async_transactional that just returns the coroutine."""
+    return f
+
+
+def _make_db_with_doc(doc_data: dict):
+    """Build a minimal mock async Firestore client returning doc_data on get()."""
+    doc = MagicMock()
+    doc.exists = True
+    doc.to_dict.return_value = doc_data
+
+    doc_ref = MagicMock()
+    doc_ref.get = AsyncMock(return_value=doc)
+    doc_ref.set = MagicMock()
+
+    transaction = MagicMock()
+    transaction.set = MagicMock()
+
+    db = MagicMock()
+    db.collection.return_value.document.return_value = doc_ref
+    db.transaction.return_value = transaction
+
+    return db, doc_ref, transaction
+
+
+@pytest.mark.asyncio
+async def test_atomic_update_no_pending_sets_sentinel_returns_true(monkeypatch):
+    from google.cloud import firestore as fs_module
+    monkeypatch.setattr(fs_module, "async_transactional", _async_transactional_passthrough)
+
+    db, doc_ref, transaction = _make_db_with_doc({"user_id": "u1"})
+    monkeypatch.setattr(handler, "_db", db)
+
+    result = await handler._atomic_update_last_received("user@gmail.com", "999")
+
+    assert result is True
+    transaction.set.assert_called_once_with(
+        doc_ref,
+        {"last_received_id": "999", "pending_task_id": "SCHEDULING"},
+        merge=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_atomic_update_skips_duplicate_history_id(monkeypatch):
+    from google.cloud import firestore as fs_module
+    monkeypatch.setattr(fs_module, "async_transactional", _async_transactional_passthrough)
+
+    db, _, transaction = _make_db_with_doc({"last_received_id": "1000"})
+    monkeypatch.setattr(handler, "_db", db)
+
+    result = await handler._atomic_update_last_received("user@gmail.com", "500")
+
+    assert result is False
+    transaction.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_atomic_update_pending_task_advances_id_but_returns_false(monkeypatch):
+    from google.cloud import firestore as fs_module
+    monkeypatch.setattr(fs_module, "async_transactional", _async_transactional_passthrough)
+
+    db, doc_ref, transaction = _make_db_with_doc(
+        {"last_received_id": "100", "pending_task_id": "task-abc"}
+    )
+    monkeypatch.setattr(handler, "_db", db)
+
+    result = await handler._atomic_update_last_received("user@gmail.com", "200")
+
+    assert result is False
+    # last_received_id advanced, but no SCHEDULING sentinel set
+    transaction.set.assert_called_once_with(
+        doc_ref,
+        {"last_received_id": "200"},
+        merge=True,
+    )
+
+
+# ── process_email_notification ────────────────────────────────────────────────
+
+
+def _make_watch_state(user_id="user-123", discord_channel_id="ch-1"):
+    return {
+        "user_id": user_id,
+        "gmail_address": "user@gmail.com",
+        "discord_channel_id": discord_channel_id,
+        "last_history_id": "100",
+    }
+
+
+@pytest.mark.asyncio
+async def test_process_notification_no_watch_state_returns_early(monkeypatch):
+    monkeypatch.setattr(handler, "_db", MagicMock())
+    monkeypatch.setattr(
+        handler,
+        "_read_watch_state",
+        AsyncMock(return_value=None),
+    )
+    task_executor = AsyncMock()
+    monkeypatch.setattr(handler, "_task_executor", task_executor)
+
+    await handler.process_email_notification("user@gmail.com", "999")
+
+    task_executor.create_email_batch_task.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_notification_deduped_creates_no_task(monkeypatch):
+    monkeypatch.setattr(handler, "_db", MagicMock())
+    monkeypatch.setattr(
+        handler,
+        "_read_watch_state",
+        AsyncMock(return_value=_make_watch_state()),
+    )
+    monkeypatch.setattr(
+        handler,
+        "_atomic_update_last_received",
+        AsyncMock(return_value=False),
+    )
+    task_executor = AsyncMock()
+    monkeypatch.setattr(handler, "_task_executor", task_executor)
+
+    await handler.process_email_notification("user@gmail.com", "999")
+
+    task_executor.create_email_batch_task.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_notification_creates_task_and_writes_id(monkeypatch):
+    monkeypatch.setattr(
+        handler,
+        "_read_watch_state",
+        AsyncMock(return_value=_make_watch_state(discord_channel_id="ch-42")),
+    )
+    monkeypatch.setattr(
+        handler,
+        "_atomic_update_last_received",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(handler, "_load_email_rules", AsyncMock(return_value=[]))
+
+    task_executor = AsyncMock()
+    task_executor.create_email_batch_task = AsyncMock(return_value="task-new")
+    monkeypatch.setattr(handler, "_task_executor", task_executor)
+
+    doc_ref = MagicMock()
+    doc_ref.set = AsyncMock()
+    db = MagicMock()
+    db.collection.return_value.document.return_value = doc_ref
+    monkeypatch.setattr(handler, "_db", db)
+
+    await handler.process_email_notification("user@gmail.com", "999")
+
+    task_executor.create_email_batch_task.assert_awaited_once()
+    call_kwargs = task_executor.create_email_batch_task.await_args.kwargs
+    assert call_kwargs["gmail_address"] == "user@gmail.com"
+    assert call_kwargs["user_id"] == "user-123"
+    assert call_kwargs["discord_channel_id"] == "ch-42"
+    assert "INCOMING_EMAIL_NOTIFICATION" in call_kwargs["prompt"]
+
+    doc_ref.set.assert_awaited_with({"pending_task_id": "task-new"}, merge=True)
+
+
+@pytest.mark.asyncio
+async def test_process_notification_clears_sentinel_on_task_creation_failure(monkeypatch):
+    monkeypatch.setattr(
+        handler,
+        "_read_watch_state",
+        AsyncMock(return_value=_make_watch_state()),
+    )
+    monkeypatch.setattr(
+        handler,
+        "_atomic_update_last_received",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(handler, "_load_email_rules", AsyncMock(return_value=[]))
+
+    task_executor = AsyncMock()
+    task_executor.create_email_batch_task = AsyncMock(side_effect=Exception("Cloud Tasks down"))
+    monkeypatch.setattr(handler, "_task_executor", task_executor)
+
+    doc_ref = MagicMock()
+    doc_ref.set = AsyncMock()
+    db = MagicMock()
+    db.collection.return_value.document.return_value = doc_ref
+    monkeypatch.setattr(handler, "_db", db)
+
+    await handler.process_email_notification("user@gmail.com", "999")
+
+    doc_ref.set.assert_awaited_with({"pending_task_id": ""}, merge=True)

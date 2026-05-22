@@ -48,6 +48,7 @@ def init_internal_services(
         else None
     )
     logger.info("Internal handler services initialized")
+    return _task_executor
 
 
 # ========== Request Models ==========

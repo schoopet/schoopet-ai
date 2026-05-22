@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
@@ -30,6 +31,7 @@ _db = None  # AsyncFirestore client
 _agent_client = None
 _session_manager = None
 _discord_sender = None
+_task_executor = None
 
 _NOTIFICATION_WRAPPER = """\
 INCOMING_EMAIL_NOTIFICATION
@@ -47,9 +49,10 @@ If no user-visible reminder or summary is needed, start your response with:
 
 One or more new emails have arrived for {gmail_address}.
 
-IMPORTANT: Call read_emails(since_history_id="{start_history_id}") to get the
-new messages. For each message ID returned, call fetch_email(message_id=...) to
-read the full content and any attachments before processing.
+IMPORTANT: Call atomic_read_received_emails() to get the new messages.
+If it returns "No new emails.", respond with <SUPPRESS RESPONSE> and stop.
+For each message ID returned, call fetch_email(message_id=...) to read the full
+content and any attachments before processing.
 
 Your active email rules:
 {rules}
@@ -78,14 +81,16 @@ def init_email_services(
     agent_client,
     session_manager,
     discord_sender=None,
+    task_executor=None,
 ) -> None:
     """Initialize module-level service references. Called by main.py."""
     global _db, _agent_client
-    global _session_manager, _discord_sender
+    global _session_manager, _discord_sender, _task_executor
     _db = db
     _agent_client = agent_client
     _session_manager = session_manager
     _discord_sender = discord_sender
+    _task_executor = task_executor
     logger.info("Email handler services initialized")
 
 
@@ -205,22 +210,16 @@ async def _write_watch_state(gmail_address: str, updates: dict) -> None:
         logger.exception(f"Failed to write watch state for {gmail_address}")
 
 
-_ALREADY_PROCESSED = object()
+async def _atomic_update_last_received(gmail_address: str, history_id: str) -> bool:
+    """Atomically advance last_received_id and claim the right to schedule a task.
 
-
-async def _atomic_advance_history_id(
-    gmail_address: str,
-    new_history_id: str,
-) -> object:
-    """Atomically advance last_history_id and return the prior value.
-
-    Returns _ALREADY_PROCESSED if new_history_id is not greater than the
-    stored value (concurrent notification already covered this range).
-    Returns None if there was no stored history_id (caller should use fallback).
-    Returns the stored history_id string otherwise.
+    Returns True if a new async task should be created (no task was pending).
+    Returns False if the notification is a duplicate or a task is already scheduled.
+    Sets pending_task_id to "SCHEDULING" as a sentinel when returning True, so
+    concurrent webhook deliveries cannot both schedule a task.
     """
     if not _db:
-        return None
+        return False
     doc_id = normalize_gmail_address(gmail_address)
     doc_ref = _db.collection("email_state").document(doc_id)
 
@@ -228,18 +227,23 @@ async def _atomic_advance_history_id(
     async def _txn(transaction):
         doc = await doc_ref.get(transaction=transaction)
         data = doc.to_dict() if doc.exists else {}
-        stored_id = data.get("last_history_id")
-        if stored_id and int(stored_id) >= int(new_history_id):
-            return _ALREADY_PROCESSED
-        transaction.set(doc_ref, {"last_history_id": new_history_id}, merge=True)
-        return stored_id
+        stored_received = data.get("last_received_id") or data.get("last_history_id")
+        if stored_received and int(stored_received) >= int(history_id):
+            return False
+        updates = {"last_received_id": history_id}
+        if data.get("pending_task_id"):
+            transaction.set(doc_ref, updates, merge=True)
+            return False
+        updates["pending_task_id"] = "SCHEDULING"
+        transaction.set(doc_ref, updates, merge=True)
+        return True
 
     try:
         transaction = _db.transaction()
         return await _txn(transaction)
-    except Exception as e:
-        logger.exception(f"Failed to advance history_id for {gmail_address}")
-        return None
+    except Exception:
+        logger.exception(f"Failed to update last_received_id for {gmail_address}")
+        return False
 
 
 # ──────────────────────────── email rules ────────────────────────────
@@ -279,9 +283,11 @@ def _format_rules_for_prompt(rules: list[dict]) -> str:
 
 
 async def process_email_notification(gmail_address: str, history_id: str) -> None:
-    """Route a Gmail push notification to the agent.
+    """Schedule an async task to process new emails for a Gmail address.
 
-    The agent fetches the actual emails using its own IAM connector credentials.
+    Debounces rapid Pub/Sub bursts: only one task is scheduled per user at a time.
+    Subsequent notifications while a task is pending just advance last_received_id
+    so the task picks up the full batch when it fires 5 minutes later.
     """
     watch_state = await _read_watch_state(gmail_address)
     if not watch_state:
@@ -293,125 +299,40 @@ async def process_email_notification(gmail_address: str, history_id: str) -> Non
         logger.warning(f"Watch state for {gmail_address} is missing user_id")
         return
 
-    # Atomically advance last_history_id so concurrent Pub/Sub notifications
-    # cannot process the same email range twice.
-    prior_history_id = await _atomic_advance_history_id(gmail_address, history_id)
-    if prior_history_id is _ALREADY_PROCESSED:
-        logger.debug(f"Notification history_id={history_id} for {gmail_address} already processed")
-        return
-
-    start_history_id = prior_history_id
-    if not start_history_id:
-        start_history_id = str(int(history_id) - 1)
-        logger.warning(
-            f"No stored history_id for {gmail_address}; using fallback start={start_history_id}"
+    needs_task = await _atomic_update_last_received(gmail_address, history_id)
+    if not needs_task:
+        logger.debug(
+            f"Email notification history_id={history_id} for {gmail_address}: "
+            "deduped or task already pending"
         )
+        return
 
     rules = await _load_email_rules(user_id)
-    rules_text = _format_rules_for_prompt(rules)
+    prompt = _NOTIFICATION_WRAPPER.format(
+        gmail_address=gmail_address,
+        rules=_format_rules_for_prompt(rules),
+    )
+    scheduled_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    discord_channel_id = watch_state.get("discord_channel_id", "")
 
-    logger.info(f"Routing email notification for {gmail_address} (user={user_id})")
-    await _notify_agent_of_emails(gmail_address, start_history_id, user_id, rules_text)
-
-
-async def _notify_agent_of_emails(
-    gmail_address: str,
-    start_history_id: str,
-    user_id: str,
-    rules_text: str,
-) -> None:
-    """Send an email push notification to the agent."""
-    if not _agent_client:
-        logger.error("Agent client not initialized")
-        return
-
+    doc_id = normalize_gmail_address(gmail_address)
+    doc_ref = _db.collection("email_state").document(doc_id)
     try:
-        session_info = await _session_manager.get_or_create_session(
-            user_id, channel="email"
-        )
-
-        prompt = _NOTIFICATION_WRAPPER.format(
+        task_id = await _task_executor.create_email_batch_task(
             gmail_address=gmail_address,
-            start_history_id=start_history_id,
-            rules=rules_text,
-        )
-
-        events = await _agent_client.send_message_events(
             user_id=user_id,
-            session_id=session_info.agent_session_id,
-            message=prompt,
+            prompt=prompt,
+            discord_channel_id=discord_channel_id,
+            scheduled_at=scheduled_at,
         )
-        logger.info(f"Email notification routed to agent session {session_info.agent_session_id}")
-
-        events, credential_req = await _agent_client.resolve_iam_credential_events(
-            user_id=user_id,
-            session_id=session_info.agent_session_id,
-            events=events,
-            context="email",
+        await doc_ref.set({"pending_task_id": task_id}, merge=True)
+        logger.info(
+            f"Email batch task {task_id} scheduled for {gmail_address} at {scheduled_at}"
         )
-        if credential_req:
-            logger.error(
-                f"Email path received auth credential request for {user_id} "
-                f"— auth requests are not supported in offline mode; dropping notification"
-            )
-            return
-
-        confirmations = _agent_client.extract_confirmation_requests(events)
-        if confirmations:
-            tool_names = [confirmation.tool_name for confirmation in confirmations]
-            logger.warning(
-                f"Offline ADK confirmations for {user_id}: {tool_names} — declining and collecting fallback response"
-            )
-            follow_up_events: list = []
-            for confirmation in confirmations:
-                follow_up_events = await _agent_client.send_confirmation_response(
-                    user_id=user_id,
-                    session_id=session_info.agent_session_id,
-                    confirmation_function_call_id=confirmation.function_call_id,
-                    confirmed=False,
-                )
-            response = _agent_client.extract_text(follow_up_events)
-        else:
-            response = _agent_client.extract_text(events)
-        if response:
-            if _should_suppress_response(response):
-                logger.info(f"Email response suppressed for {user_id}")
-                return
-            await _send_response(user_id, response)
-    except Exception as e:
-        logger.exception(f"Failed to route email notification for {user_id}")
-
-
-_CHANNEL_TAG_RE = re.compile(
-    r"<CHANNEL:(\d+)>(.*?)</CHANNEL>",
-    re.DOTALL,
-)
-
-
-async def _send_response(user_id: str, message: str) -> None:
-    """Send an agent response to the user via Discord.
-
-    Parses <CHANNEL:id>...</CHANNEL> blocks and routes each to the specified
-    channel. Any remaining untagged text is sent to the user's default DM.
-    """
-    if not _discord_sender:
-        logger.warning("No Discord sender available for email response")
-        return
-
-    routed_blocks = _CHANNEL_TAG_RE.findall(message)
-    remainder = _CHANNEL_TAG_RE.sub("", message).strip()
-
-    try:
-        for channel_id, content in routed_blocks:
-            content = content.strip()
-            if content:
-                logger.info(f"Routing email summary to Discord channel {channel_id}")
-                await _discord_sender.send_channel(channel_id, content)
-
-        if remainder and not _should_suppress_response(remainder):
-            await _discord_sender.send(user_id, remainder)
     except Exception:
-        logger.exception(f"Failed to send email response via Discord")
+        logger.exception(f"Failed to create email batch task for {gmail_address}")
+        await doc_ref.set({"pending_task_id": ""}, merge=True)
+
 
 
 

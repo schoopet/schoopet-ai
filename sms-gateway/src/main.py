@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI):
         logger.info("Discord not configured (DISCORD_BOT_TOKEN, DISCORD_PUBLIC_KEY, or DISCORD_APPLICATION_ID not set)")
 
     # Initialize internal services
-    init_internal_services(
+    task_executor = init_internal_services(
         agent_client=agent_client,
         firestore_client=firestore_client,
         discord_sender=discord_sender,
@@ -117,6 +117,7 @@ async def lifespan(app: FastAPI):
         agent_client=agent_client,
         session_manager=session_manager,
         discord_sender=discord_sender,
+        task_executor=task_executor,
     )
     logger.info("Email services initialized")
 

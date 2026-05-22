@@ -550,6 +550,120 @@ class EmailTool:
             result["content"] = part.inline_data.data.decode("utf-8", errors="replace")
         return result
 
+    async def atomic_read_received_emails(
+        self,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """
+        Atomically claim the current batch of new emails and return their metadata.
+
+        Called when an INCOMING_EMAIL_NOTIFICATION arrives. Reads the
+        last_processed_id → last_received_id range from Firestore in a transaction,
+        advances last_processed_id, clears pending_task_id, then fetches message
+        metadata from the Gmail History API.
+
+        Returns a formatted list of new emails, or "No new emails." if nothing is new.
+        Call fetch_email(message_id) for full content and attachments.
+        """
+        _, err = require_user_id(tool_context, "email")
+        if err:
+            return err
+
+        user_id = tool_context.user_id
+        db = self._get_firestore()
+        if not db:
+            return "ERROR: Database not available."
+
+        docs = list(
+            db.collection("email_state")
+            .where("user_id", "==", user_id)
+            .limit(1)
+            .stream()
+        )
+        if not docs:
+            return "No email account connected."
+
+        doc_ref = docs[0].reference
+        old_processed_id = None
+
+        from google.cloud import firestore as _fs
+
+        @_fs.transactional
+        def _claim(transaction):
+            nonlocal old_processed_id
+            snap = doc_ref.get(transaction=transaction)
+            d = snap.to_dict() if snap.exists else {}
+            last_processed = d.get("last_processed_id") or d.get("last_history_id")
+            last_received = d.get("last_received_id") or d.get("last_history_id")
+            if not last_received or last_processed == last_received:
+                return False
+            old_processed_id = last_processed
+            transaction.update(doc_ref, {
+                "last_processed_id": last_received,
+                "pending_task_id": _fs.DELETE_FIELD,
+            })
+            return True
+
+        try:
+            claimed = _claim(db.transaction())
+        except Exception as e:
+            logger.exception("[gmail-tool] atomic_read_received_emails transaction error")
+            return f"Error reading emails: {e}"
+
+        if not claimed:
+            return "No new emails."
+
+        service = await self._get_gmail_service(tool_context)
+        if not service:
+            return "ERROR: Gmail not connected."
+
+        try:
+            messages = self._gmail_history(service, old_processed_id, max_results=50)
+        except HttpError as e:
+            logger.exception("[gmail-tool] atomic_read_received_emails history error")
+            return f"Error reading email history: {e}"
+        except Exception as e:
+            logger.exception("[gmail-tool] atomic_read_received_emails history error")
+            return f"Error reading email history: {e}"
+
+        if not messages:
+            return "No new emails found."
+
+        results = []
+        for m in messages:
+            try:
+                raw = self._gmail_fetch_metadata(service, m["id"])
+                if not raw:
+                    continue
+                headers_list = raw.get("payload", {}).get("headers", [])
+
+                def gh(name, _hdrs=headers_list):
+                    for h in _hdrs:
+                        if h.get("name", "").lower() == name.lower():
+                            return h.get("value", "")
+                    return ""
+
+                snippet = raw.get("snippet", "")[:200].replace("\n", " ")
+                results.append(
+                    f"ID: {m['id']}\n"
+                    f"From: {gh('From')}\n"
+                    f"Subject: {gh('Subject')}\n"
+                    f"Date: {gh('Date')}\n"
+                    f"Preview: {snippet}"
+                )
+            except Exception as e:
+                logger.exception(f"[gmail-tool] error fetching message metadata {m['id']}")
+                results.append(f"[Error fetching message {m['id']}: {e}]")
+
+        if not results:
+            return "No new emails found."
+
+        return (
+            f"Found {len(results)} new email(s):\n\n"
+            + "\n\n---\n\n".join(results)
+            + "\n\nCall fetch_email(message_id) for full content and attachments."
+        )
+
     # ── Unified email rule tools ───────────────────────────────────────────
 
     async def get_gmail_status(
