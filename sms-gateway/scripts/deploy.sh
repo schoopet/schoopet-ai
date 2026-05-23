@@ -94,6 +94,17 @@ else
     echo "Image digest: $IMAGE_REF"
 fi
 
+# Fetch OAuth credentials from Secret Manager
+echo ""
+echo "Fetching OAuth secrets from Secret Manager..."
+GOOGLE_OAUTH_CLIENT_ID=$(gcloud secrets versions access latest \
+    --secret=google-oauth-client-id --project="$PROJECT_ID" 2>/dev/null || true)
+GOOGLE_OAUTH_CLIENT_SECRET=$(gcloud secrets versions access latest \
+    --secret=google-oauth-client-secret --project="$PROJECT_ID" 2>/dev/null || true)
+if [ -z "$GOOGLE_OAUTH_CLIENT_ID" ] || [ -z "$GOOGLE_OAUTH_CLIENT_SECRET" ]; then
+    echo "Warning: could not fetch OAuth secrets from Secret Manager"
+fi
+
 # Deploy via Terraform
 echo ""
 echo "Initializing Terraform..."
@@ -103,7 +114,7 @@ echo ""
 echo "Applying Terraform..."
 TFVARS_FILE="$TF_DIR/environments/${ENV_NAME}.tfvars"
 
-# Build optional -var flags for secrets loaded from the secrets env file
+# Build optional -var flags
 OAUTH_VARS=""
 if [ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" ]; then
     OAUTH_VARS="$OAUTH_VARS -var=google_oauth_client_id=${GOOGLE_OAUTH_CLIENT_ID}"

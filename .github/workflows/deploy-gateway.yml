@@ -38,7 +38,4 @@ jobs:
           terraform_wrapper: false
 
       - name: Deploy gateway
-        env:
-          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
-          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
         run: ./sms-gateway/scripts/deploy.sh --env=prod
