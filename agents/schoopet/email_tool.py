@@ -386,6 +386,8 @@ class EmailTool:
                 if raw is None:
                     results.append(f"[Message {m['id']}: not found (deleted or moved to trash)]")
                     continue
+                if "DRAFT" in (raw.get("labelIds") or []):
+                    continue
                 headers_list = raw.get("payload", {}).get("headers", [])
 
                 def gh(name):
