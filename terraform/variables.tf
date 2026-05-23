@@ -63,6 +63,12 @@ variable "discord_public_key" {
 }
 
 
+variable "github_repo" {
+  description = "GitHub repository in owner/repo format — used to scope WIF to this repo only"
+  type        = string
+  default     = "schoopet/schoopet-ai"
+}
+
 variable "iam_connector_google_personal_name" {
   description = "Full IAM connector resource name (projects/{proj}/locations/global/connectors/{id}). Set manually until google_iam_connector is GA in the Terraform provider."
   type        = string
