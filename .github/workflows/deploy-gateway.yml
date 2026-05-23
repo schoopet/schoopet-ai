@@ -17,6 +17,7 @@ jobs:
       id-token: write  # required for Workload Identity Federation
     outputs:
       image-ref: ${{ steps.image.outputs.ref }}
+      has-tf-changes: ${{ steps.plan.outputs.has-changes }}
 
     steps:
       - uses: actions/checkout@v4
@@ -51,15 +52,21 @@ jobs:
         run: terraform init -backend-config="prefix=env/prod"
 
       - name: Terraform plan
+        id: plan
         working-directory: terraform
         run: |
-          terraform plan -no-color -out=tfplan \
+          set +e
+          terraform plan -no-color -detailed-exitcode -out=tfplan \
             -var-file="environments/prod.tfvars" \
             -var="sms_gateway_image=${{ steps.image.outputs.ref }}" \
             | tee /tmp/plan.txt
+          PLAN_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ $PLAN_EXIT -eq 1 ]; then exit 1; fi
           printf '```\n' >> "$GITHUB_STEP_SUMMARY"
           cat /tmp/plan.txt >> "$GITHUB_STEP_SUMMARY"
           printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+          echo "has-changes=$([ $PLAN_EXIT -eq 2 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
@@ -68,14 +75,55 @@ jobs:
           path: terraform/tfplan
           retention-days: 1
 
+  # No Terraform changes — apply immediately without approval gate.
   apply:
-    name: Apply Terraform changes
+    name: Apply (no infra changes)
     needs: build-and-plan
+    if: needs.build-and-plan.outputs.has-tf-changes == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '~> 1.5'
+          terraform_wrapper: false
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: terraform/
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -backend-config="prefix=env/prod"
+
+      - name: Terraform apply
+        working-directory: terraform
+        run: terraform apply tfplan
+
+  # Terraform changes detected — pause for manual approval before applying.
+  apply-with-approval:
+    name: Apply (infra changes — approval required)
+    needs: build-and-plan
+    if: needs.build-and-plan.outputs.has-tf-changes == 'true'
     runs-on: ubuntu-latest
     environment: production  # pauses for manual approval — review the plan summary in build-and-plan before approving
     permissions:
       contents: read
-      id-token: write  # required for Workload Identity Federation
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
