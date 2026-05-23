@@ -120,7 +120,7 @@ jobs:
     needs: build-and-plan
     if: needs.build-and-plan.outputs.has-tf-changes == 'true'
     runs-on: ubuntu-latest
-    environment: production  # pauses for manual approval — review the plan summary in build-and-plan before approving
+    environment: infra-approval  # pauses for manual approval — review the plan summary in build-and-plan before approving
     permissions:
       contents: read
       id-token: write
