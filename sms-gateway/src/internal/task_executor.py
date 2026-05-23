@@ -171,17 +171,12 @@ class GatewayTaskExecutor:
                     task_id,
                     len(confirmations),
                 )
-                follow_up_events: list = []
                 for confirmation in confirmations:
                     resource_id = (
                         confirmation.tool_args.get("sheet_id")
                         or confirmation.tool_args.get("document_id")
                         or confirmation.tool_args.get("folder_id")
                         or "unknown"
-                    )
-                    reason = (
-                        f"Resource '{resource_id}' is not in the pre-authorized resource "
-                        "list for this task. The write was not performed."
                     )
                     logger.info(
                         "[confirm] Agent suspended (offline): task_id=%s tool=%s "
@@ -190,20 +185,18 @@ class GatewayTaskExecutor:
                         confirmation.tool_args, confirmation.function_call_id,
                     )
                     logger.info(
-                        "[confirm] Auto-declining (offline): task_id=%s tool=%s "
-                        "resource=%s reason=%r",
-                        task_id, confirmation.tool_name, resource_id, reason,
+                        "[confirm] Auto-declining (offline): task_id=%s tool=%s resource=%s",
+                        task_id, confirmation.tool_name, resource_id,
                     )
-                    follow_up_events = await self._agent_client.send_confirmation_response(
-                        user_id=user_id,
-                        session_id=session_id,
-                        confirmation_function_call_id=confirmation.function_call_id,
-                        confirmed=False,
-                    )
-                    logger.info(
-                        "[confirm] Agent resumed (offline): task_id=%s tool=%s events=%d",
-                        task_id, confirmation.tool_name, len(follow_up_events),
-                    )
+                follow_up_events = await self._agent_client.send_confirmation_responses_batch(
+                    user_id=user_id,
+                    session_id=session_id,
+                    confirmations=[(c.function_call_id, False) for c in confirmations],
+                )
+                logger.info(
+                    "[confirm] Agent resumed (offline): task_id=%s events=%d",
+                    task_id, len(follow_up_events),
+                )
                 events = follow_up_events
             result = self._agent_client.extract_text(events)
             if not result:

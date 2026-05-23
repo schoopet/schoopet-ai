@@ -347,19 +347,34 @@ class AgentEngineClient:
         confirmed: bool,
     ) -> list[Event]:
         """Resolve an ADK confirmation request with a native function response."""
-        response_payload: dict = {"confirmed": confirmed}
-        content = types.Content(
-            role="user",
-            parts=[
-                types.Part(
-                    function_response=types.FunctionResponse(
-                        name="adk_request_confirmation",
-                        id=confirmation_function_call_id,
-                        response=response_payload,
-                    )
-                )
-            ],
+        return await self.send_confirmation_responses_batch(
+            user_id=user_id,
+            session_id=session_id,
+            confirmations=[(confirmation_function_call_id, confirmed)],
         )
+
+    async def send_confirmation_responses_batch(
+        self,
+        user_id: str,
+        session_id: str,
+        confirmations: list[tuple[str, bool]],
+    ) -> list[Event]:
+        """Resolve multiple ADK confirmations in a single agent turn.
+
+        Sends all responses as one types.Content with multiple FunctionResponse
+        parts so the agent runs exactly once regardless of batch size.
+        """
+        parts = [
+            types.Part(
+                function_response=types.FunctionResponse(
+                    name="adk_request_confirmation",
+                    id=fc_id,
+                    response={"confirmed": confirmed},
+                )
+            )
+            for fc_id, confirmed in confirmations
+        ]
+        content = types.Content(role="user", parts=parts)
         return await self.send_message_events(user_id, session_id, content)
 
     @staticmethod

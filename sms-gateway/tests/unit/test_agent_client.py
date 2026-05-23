@@ -117,6 +117,29 @@ async def test_send_confirmation_response_sends_native_function_response():
     assert function_response.response == {"confirmed": False}
 
 
+@pytest.mark.asyncio
+async def test_send_confirmation_responses_batch_sends_all_in_one_turn():
+    client = AgentEngineClient.__new__(AgentEngineClient)
+    client.send_message_events = AsyncMock(return_value=[])
+
+    await client.send_confirmation_responses_batch(
+        user_id="user-123",
+        session_id="session-123",
+        confirmations=[("confirm-1", True), ("confirm-2", False)],
+    )
+
+    client.send_message_events.assert_awaited_once()
+    message = client.send_message_events.call_args.args[2]
+    assert len(message.parts) == 2
+    fr0 = message.parts[0].function_response
+    assert fr0.name == "adk_request_confirmation"
+    assert fr0.id == "confirm-1"
+    assert fr0.response == {"confirmed": True}
+    fr1 = message.parts[1].function_response
+    assert fr1.id == "confirm-2"
+    assert fr1.response == {"confirmed": False}
+
+
 def test_confirmation_request_serializes_for_firestore():
     confirmation = AdkConfirmationRequest(
         function_call_id="confirm-1",

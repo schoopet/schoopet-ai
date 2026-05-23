@@ -54,7 +54,7 @@ def agent_client():
     client.delete_session = AsyncMock()
     client.extract_text = MagicMock(return_value="Task result")
     client.extract_confirmation_requests = MagicMock(return_value=[])
-    client.send_confirmation_response = AsyncMock(return_value=["follow-up-event"])
+    client.send_confirmation_responses_batch = AsyncMock(return_value=["follow-up-event"])
     return client
 
 
@@ -317,16 +317,15 @@ class TestGatewayTaskExecutor:
             tool_confirmation={},
         )
         agent_client.extract_confirmation_requests = MagicMock(return_value=[confirmation])
-        agent_client.send_confirmation_response = AsyncMock(return_value=["follow-up-event"])
+        agent_client.send_confirmation_responses_batch = AsyncMock(return_value=["follow-up-event"])
         agent_client.extract_text = MagicMock(return_value="29 books transferred; 1 failed: sheet_id 'bad-id,sheet_tab:' not authorized")
 
         result = await executor.execute_task(TASK_ID)
 
         assert result["success"] is True
-        agent_client.send_confirmation_response.assert_awaited_once()
-        call_kwargs = agent_client.send_confirmation_response.await_args.kwargs
-        assert call_kwargs["confirmed"] is False
-        assert "reason" not in call_kwargs
+        agent_client.send_confirmation_responses_batch.assert_awaited_once()
+        call_kwargs = agent_client.send_confirmation_responses_batch.await_args.kwargs
+        assert call_kwargs["confirmations"] == [("fc-123", False)]
         discord_sender.send_channel.assert_awaited_once()
         _, text = discord_sender.send_channel.await_args.args
         assert "29 books" in text
@@ -344,11 +343,11 @@ class TestGatewayTaskExecutor:
             tool_confirmation={},
         )
         agent_client.extract_confirmation_requests = MagicMock(return_value=[confirmation])
-        agent_client.send_confirmation_response = AsyncMock(return_value=["follow-up-event"])
+        agent_client.send_confirmation_responses_batch = AsyncMock(return_value=["follow-up-event"])
         agent_client.extract_text = MagicMock(return_value="")
 
         result = await executor.execute_task(TASK_ID)
 
         assert result["success"] is False
         assert "empty response" in result["error"].lower()
-        agent_client.send_confirmation_response.assert_awaited_once()
+        agent_client.send_confirmation_responses_batch.assert_awaited_once()
