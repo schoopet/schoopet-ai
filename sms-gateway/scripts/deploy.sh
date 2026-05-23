@@ -94,17 +94,6 @@ else
     echo "Image digest: $IMAGE_REF"
 fi
 
-# Fetch OAuth credentials from Secret Manager
-echo ""
-echo "Fetching OAuth secrets from Secret Manager..."
-GOOGLE_OAUTH_CLIENT_ID=$(gcloud secrets versions access latest \
-    --secret=google-oauth-client-id --project="$PROJECT_ID" 2>/dev/null || true)
-GOOGLE_OAUTH_CLIENT_SECRET=$(gcloud secrets versions access latest \
-    --secret=google-oauth-client-secret --project="$PROJECT_ID" 2>/dev/null || true)
-if [ -z "$GOOGLE_OAUTH_CLIENT_ID" ] || [ -z "$GOOGLE_OAUTH_CLIENT_SECRET" ]; then
-    echo "Warning: could not fetch OAuth secrets from Secret Manager"
-fi
-
 # Deploy via Terraform
 echo ""
 echo "Initializing Terraform..."
@@ -116,12 +105,6 @@ TFVARS_FILE="$TF_DIR/environments/${ENV_NAME}.tfvars"
 
 # Build optional -var flags
 OAUTH_VARS=""
-if [ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" ]; then
-    OAUTH_VARS="$OAUTH_VARS -var=google_oauth_client_id=${GOOGLE_OAUTH_CLIENT_ID}"
-fi
-if [ -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]; then
-    OAUTH_VARS="$OAUTH_VARS -var=google_oauth_client_secret=${GOOGLE_OAUTH_CLIENT_SECRET}"
-fi
 if [ -n "${IAM_CONNECTOR_GOOGLE_PERSONAL_NAME:-}" ]; then
     OAUTH_VARS="$OAUTH_VARS -var=iam_connector_google_personal_name=${IAM_CONNECTOR_GOOGLE_PERSONAL_NAME}"
 fi

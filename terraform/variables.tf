@@ -62,18 +62,6 @@ variable "discord_public_key" {
   default     = ""
 }
 
-variable "google_oauth_client_id" {
-  description = "Google OAuth 2.0 client ID for IAM connector"
-  type        = string
-  default     = ""
-}
-
-variable "google_oauth_client_secret" {
-  description = "Google OAuth 2.0 client secret for IAM connector"
-  type        = string
-  sensitive   = true
-  default     = ""
-}
 
 variable "iam_connector_google_personal_name" {
   description = "Full IAM connector resource name (projects/{proj}/locations/global/connectors/{id}). Set manually until google_iam_connector is GA in the Terraform provider."

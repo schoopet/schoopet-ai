@@ -37,7 +37,4 @@ jobs:
           agents/.venv/bin/pip install -r agents/schoopet/requirements.txt
 
       - name: Deploy agent
-        env:
-          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
-          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
         run: ./agents/deploy.sh --env=prod
