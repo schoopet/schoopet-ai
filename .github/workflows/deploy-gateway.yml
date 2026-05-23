@@ -9,13 +9,14 @@ on:
       - '.github/workflows/deploy-gateway.yml'
 
 jobs:
-  deploy:
-    name: Deploy Gateway to Cloud Run via Terraform
+  build-and-plan:
+    name: Build image and plan Terraform changes
     runs-on: ubuntu-latest
-    environment: production
     permissions:
       contents: read
       id-token: write  # required for Workload Identity Federation
+    outputs:
+      image-ref: ${{ steps.image.outputs.ref }}
 
     steps:
       - uses: actions/checkout@v4
@@ -33,9 +34,74 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '~> 1.5'
-          # Disable wrapper so the deploy script can call terraform directly
-          # without the wrapper's exit-code shim interfering.
           terraform_wrapper: false
 
-      - name: Deploy gateway
-        run: ./sms-gateway/scripts/deploy.sh --env=prod
+      - name: Build and push image
+        id: image
+        run: |
+          IMAGE="us-docker.pkg.dev/schoopet-prod/schoopet/shoopet-sms-gateway"
+          gcloud builds submit --tag "$IMAGE" --project schoopet-prod sms-gateway/
+          DIGEST=$(gcloud artifacts docker images describe "$IMAGE" \
+            --project schoopet-prod \
+            --format="value(image_summary.digest)" 2>/dev/null)
+          echo "ref=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -backend-config="prefix=env/prod"
+
+      - name: Terraform plan
+        working-directory: terraform
+        run: |
+          terraform plan -no-color -out=tfplan \
+            -var-file="environments/prod.tfvars" \
+            -var="sms_gateway_image=${{ steps.image.outputs.ref }}" \
+            | tee /tmp/plan.txt
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/plan.txt >> "$GITHUB_STEP_SUMMARY"
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: terraform/tfplan
+          retention-days: 1
+
+  apply:
+    name: Apply Terraform changes
+    needs: build-and-plan
+    runs-on: ubuntu-latest
+    environment: production  # pauses for manual approval — review the plan summary in build-and-plan before approving
+    permissions:
+      contents: read
+      id-token: write  # required for Workload Identity Federation
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '~> 1.5'
+          terraform_wrapper: false
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: terraform/
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -backend-config="prefix=env/prod"
+
+      - name: Terraform apply
+        working-directory: terraform
+        run: terraform apply tfplan
