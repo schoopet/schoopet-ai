@@ -43,7 +43,7 @@ jobs:
           IMAGE="us-docker.pkg.dev/schoopet-prod/schoopet/shoopet-sms-gateway"
           gcloud builds submit --tag "$IMAGE" --project schoopet-prod \
             --gcs-source-staging-dir="gs://schoopet-prod_cloudbuild/source/" \
-            --logsBucket="gs://schoopet-prod_cloudbuild/logs/" \
+            --gcs-log-dir="gs://schoopet-prod_cloudbuild/logs/" \
             sms-gateway/
           DIGEST=$(gcloud artifacts docker images describe "$IMAGE" \
             --project schoopet-prod \
