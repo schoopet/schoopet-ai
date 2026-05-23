@@ -33,3 +33,13 @@ output "personal_agent_effective_identity" {
   description = "effectiveIdentity of the personal agent (use with principal:// prefix for IAM)"
   value       = google_vertex_ai_reasoning_engine.personal_agent.spec[0].effective_identity
 }
+
+output "cicd_workload_identity_provider" {
+  description = "WIF provider resource name — set as GCP_WORKLOAD_IDENTITY_PROVIDER GitHub secret"
+  value       = google_iam_workload_identity_pool_provider.github_actions.name
+}
+
+output "cicd_service_account_email" {
+  description = "Deploy SA email — set as GCP_SERVICE_ACCOUNT GitHub secret"
+  value       = google_service_account.github_deploy.email
+}

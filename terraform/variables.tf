@@ -62,17 +62,11 @@ variable "discord_public_key" {
   default     = ""
 }
 
-variable "google_oauth_client_id" {
-  description = "Google OAuth 2.0 client ID for IAM connector"
-  type        = string
-  default     = ""
-}
 
-variable "google_oauth_client_secret" {
-  description = "Google OAuth 2.0 client secret for IAM connector"
+variable "github_repo" {
+  description = "GitHub repository in owner/repo format — used to scope WIF to this repo only"
   type        = string
-  sensitive   = true
-  default     = ""
+  default     = "schoopet/schoopet-ai"
 }
 
 variable "iam_connector_google_personal_name" {

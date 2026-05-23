@@ -11,7 +11,6 @@
 #
 # Prerequisites:
 #   - gcloud CLI installed and authenticated
-#   - Terraform initialized for the target environment
 #   - Secrets created in Secret Manager (run setup_secrets.sh first)
 #   - environments/<name>.env with GOOGLE_CLOUD_PROJECT set
 
@@ -97,17 +96,15 @@ fi
 
 # Deploy via Terraform
 echo ""
+echo "Initializing Terraform..."
+(cd "$TF_DIR" && terraform init -backend-config="prefix=env/${ENV_NAME}")
+
+echo ""
 echo "Applying Terraform..."
 TFVARS_FILE="$TF_DIR/environments/${ENV_NAME}.tfvars"
 
-# Build optional -var flags for secrets loaded from the secrets env file
+# Build optional -var flags
 OAUTH_VARS=""
-if [ -n "${GOOGLE_OAUTH_CLIENT_ID:-}" ]; then
-    OAUTH_VARS="$OAUTH_VARS -var=google_oauth_client_id=${GOOGLE_OAUTH_CLIENT_ID}"
-fi
-if [ -n "${GOOGLE_OAUTH_CLIENT_SECRET:-}" ]; then
-    OAUTH_VARS="$OAUTH_VARS -var=google_oauth_client_secret=${GOOGLE_OAUTH_CLIENT_SECRET}"
-fi
 if [ -n "${IAM_CONNECTOR_GOOGLE_PERSONAL_NAME:-}" ]; then
     OAUTH_VARS="$OAUTH_VARS -var=iam_connector_google_personal_name=${IAM_CONNECTOR_GOOGLE_PERSONAL_NAME}"
 fi
