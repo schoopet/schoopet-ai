@@ -33,9 +33,15 @@ resource "google_project_iam_member" "github_deploy" {
   member  = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 
-# Scoped to the Terraform state bucket only — not project-wide storage admin.
+# Scoped bucket access — avoids project-wide storage admin.
 resource "google_storage_bucket_iam_member" "github_deploy_tf_state" {
   bucket = "schoopet-terraform-state"
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.github_deploy.email}"
+}
+
+resource "google_storage_bucket_iam_member" "github_deploy_cloudbuild" {
+  bucket = "${var.project_id}_cloudbuild"
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
