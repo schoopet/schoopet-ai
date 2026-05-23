@@ -1,0 +1,43 @@
+name: Deploy Agent
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'agents/**'
+      - '.github/workflows/deploy-agent.yml'
+
+jobs:
+  deploy:
+    name: Deploy to Vertex AI Agent Engine
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write  # required for Workload Identity Federation
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Create agent venv and install dependencies
+        run: |
+          python3.13 -m venv agents/.venv
+          agents/.venv/bin/pip install --upgrade pip
+          agents/.venv/bin/pip install -r agents/schoopet/requirements.txt
+
+      - name: Deploy agent
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+        run: ./agents/deploy.sh --env=prod
