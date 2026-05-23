@@ -10,6 +10,7 @@
 locals {
   github_deploy_roles = [
     "roles/cloudbuild.builds.editor",
+    "roles/serviceusage.serviceUsageConsumer",  # required for gcloud builds submit
     "roles/artifactregistry.writer",
     "roles/run.admin",
     "roles/secretmanager.secretAccessor",
