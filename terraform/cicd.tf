@@ -46,7 +46,10 @@ resource "google_project_iam_member" "github_deploy" {
 # Scoped bucket access — avoids project-wide storage admin.
 resource "google_storage_bucket_iam_member" "github_deploy_tf_state" {
   bucket = "schoopet-terraform-state"
-  role   = "roles/storage.objectAdmin"
+  # storage.admin needed (not just objectAdmin) — getIamPolicy is required so
+  # Terraform can plan changes to this resource; the bucket lives in schoopet-dev
+  # so project-level storage.admin in schoopet-prod does not cover it.
+  role   = "roles/storage.admin"
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 
