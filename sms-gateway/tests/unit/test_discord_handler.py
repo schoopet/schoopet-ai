@@ -114,7 +114,7 @@ async def test_process_component_confirmation_sends_adk_response_and_followup(
     )
     session_manager.clear_pending_approval_group = AsyncMock()
     session_manager.update_last_activity = AsyncMock()
-    agent_client.send_confirmation_response = AsyncMock(return_value=["event"])
+    agent_client.send_confirmation_responses_batch = AsyncMock(return_value=["event"])
     agent_client.extract_text = lambda events: "Done."
     discord_sender.send_followup = AsyncMock()
 
@@ -126,11 +126,10 @@ async def test_process_component_confirmation_sends_adk_response_and_followup(
         session_scope="discord:dm:99999",
     )
 
-    agent_client.send_confirmation_response.assert_awaited_once_with(
+    agent_client.send_confirmation_responses_batch.assert_awaited_once_with(
         user_id="user-123",
         session_id="agent-session-123",
-        confirmation_function_call_id="confirm-1",
-        confirmed=True,
+        confirmations=[("confirm-1", True)],
     )
     session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-123", session_scope="discord:dm:99999")
     discord_sender.send_followup.assert_awaited_once_with("interaction-token", "Done.")

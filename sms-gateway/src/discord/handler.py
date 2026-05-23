@@ -198,7 +198,6 @@ async def process_discord_confirmation_component(
         if not pending_group:
             pending_group = [pending]
 
-        all_events = []
         for grouped_pending in pending_group:
             logger.info(
                 f"[confirm] Agent resuming (online/webhook): user={uid} "
@@ -206,13 +205,14 @@ async def process_discord_confirmation_component(
                 f"fc_id={grouped_pending.get('adk_confirmation_function_call_id')!r} "
                 f"confirmed={confirmed}"
             )
-            events = await _agent_client.send_confirmation_response(
-                user_id=user_id,
-                session_id=grouped_pending["agent_session_id"],
-                confirmation_function_call_id=grouped_pending["adk_confirmation_function_call_id"],
-                confirmed=confirmed,
-            )
-            all_events.extend(events)
+        all_events = await _agent_client.send_confirmation_responses_batch(
+            user_id=user_id,
+            session_id=pending_group[0]["agent_session_id"],
+            confirmations=[
+                (p["adk_confirmation_function_call_id"], confirmed)
+                for p in pending_group
+            ],
+        )
 
         await _session_manager.clear_pending_approval_group(
             user_id,
