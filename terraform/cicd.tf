@@ -9,14 +9,19 @@
 
 locals {
   github_deploy_roles = [
-    "roles/viewer",                             # terraform plan needs read on all managed resources
-    "roles/cloudbuild.builds.editor",
-    "roles/serviceusage.serviceUsageConsumer",  # required for gcloud builds submit
-    "roles/artifactregistry.writer",
-    "roles/run.admin",
-    "roles/secretmanager.secretAccessor",
-    "roles/iam.serviceAccountUser",
-    "roles/aiplatform.user",
+    # Broad write access for terraform apply across all managed services
+    "roles/editor",
+    # IAM management — not included in roles/editor
+    "roles/iam.serviceAccountAdmin",           # create/delete service accounts
+    "roles/iam.serviceAccountUser",            # act as / impersonate service accounts
+    "roles/resourcemanager.projectIamAdmin",   # set project-level IAM bindings
+    "roles/iam.roleAdmin",                     # manage custom IAM roles
+    "roles/iam.workloadIdentityPoolAdmin",     # manage WIF pools and providers
+    # Service-specific extras not fully covered by editor
+    "roles/cloudbuild.builds.editor",          # submit Cloud Build jobs
+    "roles/serviceusage.serviceUsageConsumer", # required for gcloud builds submit
+    "roles/artifactregistry.writer",           # push container images
+    "roles/secretmanager.secretAccessor",      # read secret values during deploy
   ]
 }
 
