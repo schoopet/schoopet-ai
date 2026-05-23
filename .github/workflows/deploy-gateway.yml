@@ -41,7 +41,9 @@ jobs:
         id: image
         run: |
           IMAGE="us-docker.pkg.dev/schoopet-prod/schoopet/shoopet-sms-gateway"
-          gcloud builds submit --tag "$IMAGE" --project schoopet-prod sms-gateway/
+          gcloud builds submit --tag "$IMAGE" --project schoopet-prod \
+            --gcs-source-staging-dir="gs://schoopet-prod_cloudbuild/source/" \
+            sms-gateway/
           DIGEST=$(gcloud artifacts docker images describe "$IMAGE" \
             --project schoopet-prod \
             --format="value(image_summary.digest)" 2>/dev/null)

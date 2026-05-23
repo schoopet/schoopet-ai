@@ -40,9 +40,17 @@ resource "google_storage_bucket_iam_member" "github_deploy_tf_state" {
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 
-resource "google_storage_bucket_iam_member" "github_deploy_cloudbuild" {
+resource "google_storage_bucket_iam_member" "github_deploy_cloudbuild_object_admin" {
   bucket = "${var.project_id}_cloudbuild"
   role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.github_deploy.email}"
+}
+
+# legacyBucketWriter adds storage.buckets.get which gcloud builds submit
+# checks before uploading source — objectAdmin alone does not include it.
+resource "google_storage_bucket_iam_member" "github_deploy_cloudbuild_bucket_writer" {
+  bucket = "${var.project_id}_cloudbuild"
+  role   = "roles/storage.legacyBucketWriter"
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 
