@@ -41,29 +41,10 @@ jobs:
         id: image
         run: |
           IMAGE="us-docker.pkg.dev/schoopet-prod/schoopet/shoopet-sms-gateway"
-
-          BUILD_ID=$(gcloud builds submit \
-            --tag "$IMAGE" \
-            --project schoopet-prod \
+          gcloud builds submit --tag "$IMAGE" --project schoopet-prod \
             --gcs-source-staging-dir="gs://schoopet-prod_cloudbuild/source/" \
-            --async \
-            --format="value(id)" \
-            sms-gateway/)
-          echo "Build submitted: $BUILD_ID"
-
-          # Poll for completion (log streaming requires project Viewer which we don't grant)
-          for i in $(seq 1 120); do
-            STATUS=$(gcloud builds describe "$BUILD_ID" --project schoopet-prod --format="value(status)" 2>/dev/null)
-            echo "[$i] status: $STATUS"
-            if [[ "$STATUS" == "SUCCESS" ]]; then break; fi
-            if [[ "$STATUS" == "FAILURE" || "$STATUS" == "CANCELLED" || "$STATUS" == "TIMEOUT" || "$STATUS" == "INTERNAL_ERROR" || "$STATUS" == "EXPIRED" ]]; then
-              echo "Build failed: $STATUS"
-              exit 1
-            fi
-            sleep 10
-          done
-          if [[ "$STATUS" != "SUCCESS" ]]; then echo "Build timed out"; exit 1; fi
-
+            --logsBucket="gs://schoopet-prod_cloudbuild/logs/" \
+            sms-gateway/
           DIGEST=$(gcloud artifacts docker images describe "$IMAGE" \
             --project schoopet-prod \
             --format="value(image_summary.digest)" 2>/dev/null)

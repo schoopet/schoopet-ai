@@ -54,6 +54,7 @@ resource "google_storage_bucket_iam_member" "github_deploy_cloudbuild_bucket_wri
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 
+
 resource "google_iam_workload_identity_pool" "github" {
   project                   = var.project_id
   workload_identity_pool_id = "github"
