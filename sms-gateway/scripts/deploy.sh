@@ -11,7 +11,6 @@
 #
 # Prerequisites:
 #   - gcloud CLI installed and authenticated
-#   - Terraform initialized for the target environment
 #   - Secrets created in Secret Manager (run setup_secrets.sh first)
 #   - environments/<name>.env with GOOGLE_CLOUD_PROJECT set
 
@@ -96,6 +95,10 @@ else
 fi
 
 # Deploy via Terraform
+echo ""
+echo "Initializing Terraform..."
+(cd "$TF_DIR" && terraform init -backend-config="prefix=env/${ENV_NAME}")
+
 echo ""
 echo "Applying Terraform..."
 TFVARS_FILE="$TF_DIR/environments/${ENV_NAME}.tfvars"

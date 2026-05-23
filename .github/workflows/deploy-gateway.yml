@@ -37,10 +37,6 @@ jobs:
           # without the wrapper's exit-code shim interfering.
           terraform_wrapper: false
 
-      - name: Initialize Terraform
-        working-directory: terraform
-        run: terraform init -backend-config="prefix=env/prod"
-
       - name: Deploy gateway
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
