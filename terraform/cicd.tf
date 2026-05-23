@@ -9,6 +9,7 @@
 
 locals {
   github_deploy_roles = [
+    "roles/viewer",                             # terraform plan needs read on all managed resources
     "roles/cloudbuild.builds.editor",
     "roles/serviceusage.serviceUsageConsumer",  # required for gcloud builds submit
     "roles/artifactregistry.writer",
