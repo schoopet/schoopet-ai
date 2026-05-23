@@ -593,12 +593,13 @@ class EmailTool:
 
         doc_ref = docs[0].reference
         old_processed_id = None
+        claimed_received_id = None
 
         from google.cloud import firestore as _fs
 
         @_fs.transactional
         def _claim(transaction):
-            nonlocal old_processed_id
+            nonlocal old_processed_id, claimed_received_id
             snap = doc_ref.get(transaction=transaction)
             d = snap.to_dict() if snap.exists else {}
             last_processed = d.get("last_processed_id") or d.get("last_history_id")
@@ -606,6 +607,7 @@ class EmailTool:
             if not last_received or last_processed == last_received:
                 return False
             old_processed_id = last_processed
+            claimed_received_id = last_received
             transaction.update(doc_ref, {
                 "last_processed_id": last_received,
                 "pending_task_id": _fs.DELETE_FIELD,
@@ -621,58 +623,15 @@ class EmailTool:
         if not claimed:
             return "No new emails."
 
-        service = await self._get_gmail_service(tool_context)
-        if not service:
-            return "ERROR: Gmail not connected."
+        logger.info(
+            "[gmail-tool] atomic_read user=%s first_id=%s last_id=%s",
+            user_id, old_processed_id, claimed_received_id,
+        )
 
-        try:
-            messages = self._gmail_history(service, old_processed_id, max_results=50)
-        except HttpError as e:
-            logger.exception("[gmail-tool] atomic_read_received_emails history error")
-            return f"Error reading email history: {e}"
-        except Exception as e:
-            logger.exception("[gmail-tool] atomic_read_received_emails history error")
-            return f"Error reading email history: {e}"
-
-        if not messages:
-            return "No new emails found."
-
-        results = []
-        for m in messages:
-            try:
-                raw = self._gmail_fetch_metadata(service, m["id"])
-                if raw is None:
-                    results.append(f"[Message {m['id']}: not found (deleted or moved to trash)]")
-                    continue
-                if "DRAFT" in (raw.get("labelIds") or []):
-                    continue
-                headers_list = raw.get("payload", {}).get("headers", [])
-
-                def gh(name, _hdrs=headers_list):
-                    for h in _hdrs:
-                        if h.get("name", "").lower() == name.lower():
-                            return h.get("value", "")
-                    return ""
-
-                snippet = raw.get("snippet", "")[:200].replace("\n", " ")
-                results.append(
-                    f"ID: {m['id']}\n"
-                    f"From: {gh('From')}\n"
-                    f"Subject: {gh('Subject')}\n"
-                    f"Date: {gh('Date')}\n"
-                    f"Preview: {snippet}"
-                )
-            except Exception as e:
-                logger.exception(f"[gmail-tool] error fetching message metadata {m['id']}")
-                results.append(f"[Error fetching message {m['id']}: {e}]")
-
-        if not results:
-            return "No new emails found."
-
-        return (
-            f"Found {len(results)} new email(s):\n\n"
-            + "\n\n---\n\n".join(results)
-            + "\n\nCall fetch_email(message_id) for full content and attachments."
+        return await self.read_emails(
+            since_history_id=old_processed_id,
+            max_results=50,
+            tool_context=tool_context,
         )
 
     # ── Unified email rule tools ───────────────────────────────────────────
@@ -809,11 +768,11 @@ class EmailTool:
         if not prompt:
             return "ERROR: prompt is required — describe what to do when a matching email arrives."
 
-        db = self._get_firestore()
-        if not db:
+        user_id = phone
+        rules_ref = self._rules_ref(user_id)
+        if not rules_ref:
             return "ERROR: Database not available."
 
-        user_id = phone
         rule_id = str(uuid.uuid4())[:8]
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
@@ -829,13 +788,7 @@ class EmailTool:
             rule["target_channel_id"] = target_channel_id
 
         try:
-            (
-                db.collection(EMAIL_RULES_COLLECTION)
-                .document(user_id)
-                .collection("rules")
-                .document(rule_id)
-                .set(rule)
-            )
+            rules_ref.document(rule_id).set(rule)
         except Exception as e:
             logger.exception("[gmail-tool] add_email_rule error")
             return f"Failed to save rule: {e}"
@@ -875,18 +828,13 @@ class EmailTool:
         if err:
             return err
 
-        db = self._get_firestore()
-        if not db:
+        user_id = phone
+        rules_ref = self._rules_ref(user_id)
+        if not rules_ref:
             return "ERROR: Database not available."
 
-        user_id = phone
         try:
-            doc_ref = (
-                db.collection(EMAIL_RULES_COLLECTION)
-                .document(user_id)
-                .collection("rules")
-                .document(rule_id)
-            )
+            doc_ref = rules_ref.document(rule_id)
             doc = doc_ref.get()
             if not doc.exists:
                 return f"No rule found with ID {rule_id}. Use list_email_rules() to see your rules."
@@ -932,18 +880,13 @@ class EmailTool:
         if err:
             return err
 
-        db = self._get_firestore()
-        if not db:
+        user_id = phone
+        rules_ref = self._rules_ref(user_id)
+        if not rules_ref:
             return "ERROR: Database not available."
 
-        user_id = phone
         try:
-            doc_ref = (
-                db.collection(EMAIL_RULES_COLLECTION)
-                .document(user_id)
-                .collection("rules")
-                .document(rule_id)
-            )
+            doc_ref = rules_ref.document(rule_id)
             doc = doc_ref.get()
             if not doc.exists:
                 return f"No rule found with ID {rule_id}."

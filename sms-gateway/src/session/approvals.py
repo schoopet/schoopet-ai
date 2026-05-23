@@ -5,8 +5,10 @@ Discord button prompts. Offline/background tasks use allowed_resource_ids and
 seeded ADK session state instead; they do not create pending approvals here.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+NOTIFICATION_EXPIRY_SECONDS = 180
 
 
 MAX_APPROVAL_ARG_CHARS = 700
@@ -152,9 +154,22 @@ class PendingApprovalCoordinator:
         pending_approvals: list[dict[str, Any]],
         group_id: str,
     ) -> str:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=NOTIFICATION_EXPIRY_SECONDS)
         for pending in pending_approvals:
-            if pending.get("approval_group_id") == group_id:
-                return pending.get("approval_notification_id") or pending.get("id") or ""
+            if pending.get("approval_group_id") != group_id:
+                continue
+            created_at = pending.get("created_at")
+            if created_at is not None:
+                if isinstance(created_at, datetime):
+                    ts = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+                else:
+                    try:
+                        ts = datetime.fromisoformat(str(created_at)).replace(tzinfo=timezone.utc)
+                    except (ValueError, TypeError):
+                        ts = None
+                if ts is not None and ts < cutoff:
+                    continue
+            return pending.get("approval_notification_id") or pending.get("id") or ""
         return ""
 
     @staticmethod

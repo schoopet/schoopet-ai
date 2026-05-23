@@ -326,8 +326,10 @@ async def process_email_notification(gmail_address: str, history_id: str) -> Non
             scheduled_at=scheduled_at,
         )
         await doc_ref.set({"pending_task_id": task_id}, merge=True)
+        first_id = watch_state.get("last_processed_id") or watch_state.get("last_history_id")
         logger.info(
-            f"Email batch task {task_id} scheduled for {gmail_address} at {scheduled_at}"
+            "EMAIL_TASK_SCHEDULED time=%s user=%s first_id=%s last_id=%s task_id=%s",
+            scheduled_at, user_id, first_id, history_id, task_id,
         )
     except Exception:
         logger.exception(f"Failed to create email batch task for {gmail_address}")

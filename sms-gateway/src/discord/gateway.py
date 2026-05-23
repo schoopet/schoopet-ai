@@ -426,13 +426,13 @@ class SchoopetGateway(discord.Client):
 
             status_msg = None
             try:
-                _starters = ["> working..."] * 4 + _CAT_STARTERS
+                _starters = ["> working..."] + _CAT_STARTERS * 3
                 status_msg = await channel.send(random.choice(_starters))
 
                 async def _update_status(tool_name: str) -> None:
                     try:
                         label = _format_tool_name(tool_name)
-                        suffix = random.choice(_CAT_SUFFIXES) if random.random() < 1 / 7 else ""
+                        suffix = random.choice(_CAT_SUFFIXES) if random.random() < 2 / 3 else ""
                         await status_msg.edit(content=f"> {label}{suffix}...")
                     except Exception:
                         pass
