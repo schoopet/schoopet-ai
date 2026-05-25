@@ -19,6 +19,22 @@ resource "google_firestore_index" "async_tasks_user_status_created" {
   }
 }
 
+resource "google_firestore_index" "async_tasks_status_scheduled_at" {
+  project    = var.project_id
+  collection = "async_tasks"
+  database   = "(default)"
+
+  fields {
+    field_path = "status"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "scheduled_at"
+    order      = "ASCENDING"
+  }
+}
+
 resource "google_firestore_index" "async_tasks_user_status_scheduled" {
   project    = var.project_id
   collection = "async_tasks"
