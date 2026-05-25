@@ -113,23 +113,30 @@ class PendingApprovalCoordinator:
             for pending in pending_group
         )
 
+    MAX_LISTED_ACTIONS = 5
+
     def format_notification(self, pending_group: list[dict[str, Any]]) -> str:
         first = pending_group[0]
         resource_id = first.get("approval_resource_id") or ""
         resource_label = first.get("approval_resource_label") or "resource"
+        count = len(pending_group)
 
         if resource_id:
-            header = f"Approve {len(pending_group)} action(s) for this {resource_label}?\n{resource_id}"
+            header = f"Approve {count} action(s) for this {resource_label}?\n{resource_id}"
         else:
             header = "Approve this action?"
 
-        if len(pending_group) == 1:
+        if count == 1:
             return f"{header}\n{self._format_action(first)}"
 
-        actions = "\n".join(
-            f"- {self._format_action(pending)}"
-            for pending in pending_group
-        )
+        tool_names = [p.get("tool_name", "unknown") for p in pending_group]
+        if len(set(tool_names)) == 1 and count > self.MAX_LISTED_ACTIONS:
+            return f"{header}\n- {count} × {tool_names[0]}"
+
+        visible = pending_group[:self.MAX_LISTED_ACTIONS]
+        actions = "\n".join(f"- {self._format_action(p)}" for p in visible)
+        if count > self.MAX_LISTED_ACTIONS:
+            actions += f"\n- … and {count - self.MAX_LISTED_ACTIONS} more"
         return f"{header}\n{actions}"
 
     def _group_for_confirmation(

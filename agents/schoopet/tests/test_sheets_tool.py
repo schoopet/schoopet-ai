@@ -22,6 +22,7 @@ def _make_sheets_service(value_responses: list[dict] | None = None) -> MagicMock
         "updates": {"updatedCells": 3}
     }
     values_api.update.return_value.execute.return_value = {}
+    values_api.batchUpdate.return_value.execute.return_value = {"totalUpdatedCells": 4}
     service.spreadsheets.return_value.create.return_value.execute.return_value = {
         "spreadsheetId": "sheet123",
         "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/sheet123/edit",
@@ -176,7 +177,6 @@ def test_find_rows_with_token_unknown_column_raises(sheets_tool):
 
 def test_update_row_with_token_updates_by_header(sheets_tool):
     service = _make_sheets_service([{"values": [["Name", "Email", "Role"]]}])
-    sheets_tool._update_cell_with_token = MagicMock()
 
     result = sheets_tool._update_row_with_token(
         service,
@@ -187,22 +187,10 @@ def test_update_row_with_token_updates_by_header(sheets_tool):
     )
 
     assert result["row"] == 4
-    sheets_tool._update_cell_with_token.assert_any_call(
-        service,
-        "sheet123",
-        4,
-        2,
-        "ada@example.com",
-        "Leads",
-    )
-    sheets_tool._update_cell_with_token.assert_any_call(
-        service,
-        "sheet123",
-        4,
-        3,
-        "Engineer",
-        "Leads",
-    )
+    call_kwargs = service.spreadsheets.return_value.values.return_value.batchUpdate.call_args.kwargs
+    ranges = [d["range"] for d in call_kwargs["body"]["data"]]
+    assert "Leads!B4" in ranges  # Email is column 2
+    assert "Leads!C4" in ranges  # Role is column 3
 
 
 @pytest.mark.asyncio
@@ -280,6 +268,74 @@ def test_add_sheet_tab_with_headers(sheets_tool):
         "sheet_tab": "Archive",
         "headers": ["Name"],
     }
+
+
+def test_batch_update_rows_sends_one_batchupdate_call(sheets_tool):
+    service = _make_sheets_service([{"values": [["Name", "Email", "Role"]]}])
+
+    result = sheets_tool._batch_update_rows_with_token(
+        service,
+        "sheet123",
+        [
+            {"row": 2, "updates": {"Email": "ada@example.com", "Role": "Engineer"}},
+            {"row": 3, "updates": {"Name": "Linus"}},
+        ],
+        "Leads",
+    )
+
+    assert result["rows_affected"] == 2
+    assert result["updated_cells"] == 4
+
+    call_kwargs = service.spreadsheets.return_value.values.return_value.batchUpdate.call_args.kwargs
+    assert call_kwargs["spreadsheetId"] == "sheet123"
+    body = call_kwargs["body"]
+    assert body["valueInputOption"] == "USER_ENTERED"
+    ranges = [d["range"] for d in body["data"]]
+    assert "Leads!B2" in ranges  # Email is column 2
+    assert "Leads!C2" in ranges  # Role is column 3
+    assert "Leads!A3" in ranges  # Name is column 1
+
+
+def test_batch_update_rows_unknown_column_raises(sheets_tool):
+    service = _make_sheets_service([{"values": [["Name", "Email"]]}])
+
+    with pytest.raises(ValueError, match="Unknown columns in row 2"):
+        sheets_tool._batch_update_rows_with_token(
+            service,
+            "sheet123",
+            [{"row": 2, "updates": {"Nonexistent": "value"}}],
+            "Leads",
+        )
+
+
+def test_batch_update_rows_empty_list_returns_zero_counts(sheets_tool):
+    service = _make_sheets_service([{"values": [["Name", "Email"]]}])
+
+    result = sheets_tool._batch_update_rows_with_token(service, "sheet123", [], "Leads")
+
+    assert result == {"sheet_id": "sheet123", "sheet_tab": "Leads", "updated_cells": 0, "rows_affected": 0}
+    service.spreadsheets.return_value.values.return_value.batchUpdate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_public_batch_update_sheet_rows_returns_json(sheets_tool):
+    sheets_tool._get_service = AsyncMock(return_value=MagicMock())
+    sheets_tool._batch_update_rows_with_token = MagicMock(
+        return_value={"sheet_id": "sheet123", "sheet_tab": "Leads", "updated_cells": 6, "rows_affected": 3}
+    )
+    tool_context = MagicMock()
+    tool_context.user_id = "+15555550123"
+
+    result = await sheets_tool.batch_update_sheet_rows(
+        "sheet123",
+        [{"row": 2, "updates": {"Name": "Ada"}}],
+        "Leads",
+        tool_context,
+    )
+
+    parsed = json.loads(result)
+    assert parsed["rows_affected"] == 3
+    assert parsed["updated_cells"] == 6
 
 
 @pytest.mark.asyncio

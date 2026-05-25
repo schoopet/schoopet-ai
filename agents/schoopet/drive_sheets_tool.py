@@ -453,32 +453,6 @@ class SheetsTool:
         )
         return f"Column '{column_header}' added at {cell_range}."
 
-    def _update_cell_with_token(
-        self,
-        service,
-        sheet_id: str,
-        row: int,
-        column: int,
-        value: str,
-        sheet_tab: str,
-    ) -> str:
-        """Update a cell using the Google Sheets service client."""
-        col_letter = _col_to_letter(column)
-        cell_range = f"{sheet_tab}!{col_letter}{row}"
-
-        (
-            service.spreadsheets()
-            .values()
-            .update(
-                spreadsheetId=sheet_id,
-                range=cell_range,
-                valueInputOption="RAW",
-                body={"values": [[value]]},
-            )
-            .execute()
-        )
-        return f"Cell {cell_range} updated to '{value}'."
-
     def _sheet_metadata_with_token(
         self,
         service,
@@ -611,6 +585,51 @@ class SheetsTool:
             "remaining_matches": max(0, len(matches) - len(truncated)),
         }
 
+    def _batch_update_rows_with_token(
+        self,
+        service,
+        sheet_id: str,
+        rows: List[Dict[str, Any]],
+        sheet_tab: str,
+    ) -> Dict[str, Any]:
+        headers = self._get_header_row(service, sheet_id, sheet_tab)
+        if not headers:
+            raise ValueError("Sheet has no header row.")
+
+        for entry in rows:
+            missing = [h for h in entry.get("updates", {}) if h not in headers]
+            if missing:
+                raise ValueError(f"Unknown columns in row {entry.get('row')}: {', '.join(missing)}")
+
+        data = []
+        for entry in rows:
+            row_num = entry["row"]
+            for header, value in entry.get("updates", {}).items():
+                col_letter = _col_to_letter(headers.index(header) + 1)
+                data.append({
+                    "range": f"{sheet_tab}!{col_letter}{row_num}",
+                    "values": [[_stringify_cell(value)]],
+                })
+
+        if not data:
+            return {"sheet_id": sheet_id, "sheet_tab": sheet_tab, "updated_cells": 0, "rows_affected": 0}
+
+        result = (
+            service.spreadsheets()
+            .values()
+            .batchUpdate(
+                spreadsheetId=sheet_id,
+                body={"valueInputOption": "USER_ENTERED", "data": data},
+            )
+            .execute()
+        )
+        return {
+            "sheet_id": sheet_id,
+            "sheet_tab": sheet_tab,
+            "updated_cells": result.get("totalUpdatedCells", len(data)),
+            "rows_affected": len(rows),
+        }
+
     def _update_row_with_token(
         self,
         service,
@@ -619,33 +638,11 @@ class SheetsTool:
         updates: Dict[str, Any],
         sheet_tab: str,
     ) -> Dict[str, Any]:
-        headers = self._get_header_row(service, sheet_id, sheet_tab)
-        if not headers:
-            raise ValueError("Sheet has no header row.")
-
-        missing_headers = [header for header in updates if header not in headers]
-        if missing_headers:
-            raise ValueError(f"Unknown columns: {', '.join(missing_headers)}")
-
-        updated_cells = []
-        for header, value in updates.items():
-            col_number = headers.index(header) + 1
-            self._update_cell_with_token(
-                service,
-                sheet_id,
-                row,
-                col_number,
-                _stringify_cell(value),
-                sheet_tab,
-            )
-            updated_cells.append(f"{header}={_stringify_cell(value)}")
-
-        return {
-            "sheet_id": sheet_id,
-            "sheet_tab": sheet_tab,
-            "row": row,
-            "updated_cells": updated_cells,
-        }
+        result = self._batch_update_rows_with_token(
+            service, sheet_id, [{"row": row, "updates": updates}], sheet_tab
+        )
+        result["row"] = row
+        return result
 
     # ── Public methods ──────────────────────────────────────────────────────────
 
@@ -791,9 +788,19 @@ class SheetsTool:
             return ""
 
         try:
-            return self._update_cell_with_token(
-                service, sheet_id, row, column, value, sheet_tab
+            cell_range = f"{sheet_tab}!{_col_to_letter(column)}{row}"
+            (
+                service.spreadsheets()
+                .values()
+                .update(
+                    spreadsheetId=sheet_id,
+                    range=cell_range,
+                    valueInputOption="RAW",
+                    body={"values": [[value]]},
+                )
+                .execute()
             )
+            return f"Cell {cell_range} updated to '{value}'."
         except HttpError as e:
             return f"Error updating cell: {e}"
 
@@ -1014,6 +1021,47 @@ class SheetsTool:
             )
         except (HttpError, ValueError) as e:
             return f"Error updating sheet row: {e}"
+
+    async def batch_update_sheet_rows(
+        self,
+        sheet_id: str,
+        rows: List[Dict[str, Any]],
+        sheet_tab: str = "Sheet1",
+        tool_context: ToolContext = None,
+    ) -> str:
+        """
+        Update multiple rows in a single API call with one confirmation.
+
+        Use this instead of calling update_sheet_row repeatedly when updating
+        many rows at once (e.g. bulk edits, rewrites, imports).
+
+        Args:
+            sheet_id: The Google Sheets document ID (from the URL).
+            rows: List of row updates. Each entry must have:
+                  - "row": 1-indexed row number (row 1 = header; data starts at 2)
+                  - "updates": dict mapping column header names to new values
+            sheet_tab: Name of the sheet tab (default: "Sheet1").
+
+        Returns:
+            JSON with updated_cells and rows_affected counts, or error message.
+
+        Note:
+            Requires user_id from tool_context.
+        """
+        _, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
+
+        service = await self._get_service(tool_context)
+        if service is None:
+            return ""
+
+        try:
+            return _json_dumps(
+                self._batch_update_rows_with_token(service, sheet_id, rows, sheet_tab)
+            )
+        except (HttpError, ValueError) as e:
+            return f"Error batch updating sheet rows: {e}"
 
 
 class DocsTool:

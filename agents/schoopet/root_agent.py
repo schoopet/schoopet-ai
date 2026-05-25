@@ -172,6 +172,9 @@ def _personal_prompt() -> str:
         "- append_record_to_sheet(record, sheet_id, sheet_tab)\n"
         "- find_sheet_rows(sheet_id, match_column, match_value, sheet_tab, max_rows)\n"
         "- update_sheet_row(sheet_id, row, updates, sheet_tab)\n"
+        "- batch_update_sheet_rows(sheet_id, rows, sheet_tab): update many rows at once — "
+        "rows is a list of {row: int, updates: {header: value}}. "
+        "Prefer this over calling update_sheet_row in a loop whenever you need to update 3 or more rows.\n"
         "- append_row_to_sheet(values, sheet_id, sheet_tab)\n"
         "- add_sheet_column(sheet_id, column_header, sheet_tab)\n"
         "- update_sheet_cell(sheet_id, row, column, value, sheet_tab)\n"
@@ -353,6 +356,7 @@ def create_agent(
     append_record_to_sheet_tool = FunctionTool(func=sheets_tool.append_record_to_sheet, require_confirmation=sheet_confirmation)
     find_sheet_rows_tool = FunctionTool(func=sheets_tool.find_sheet_rows)
     update_sheet_row_tool = FunctionTool(func=sheets_tool.update_sheet_row, require_confirmation=sheet_confirmation)
+    batch_update_sheet_rows_tool = FunctionTool(func=sheets_tool.batch_update_sheet_rows, require_confirmation=sheet_confirmation)
     append_to_sheet_tool = FunctionTool(func=sheets_tool.append_row_to_sheet, require_confirmation=sheet_confirmation)
     read_sheet_tool = FunctionTool(func=sheets_tool.read_sheet)
     add_column_tool = FunctionTool(func=sheets_tool.add_sheet_column, require_confirmation=sheet_confirmation)
@@ -423,6 +427,7 @@ def create_agent(
         append_record_to_sheet_tool,
         find_sheet_rows_tool,
         update_sheet_row_tool,
+        batch_update_sheet_rows_tool,
         append_to_sheet_tool,
         read_sheet_tool,
         add_column_tool,
