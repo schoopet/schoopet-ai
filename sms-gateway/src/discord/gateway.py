@@ -25,6 +25,7 @@ from .context import (
     context_from_discord_channel,
     wrap_message_with_discord_context,
 )
+from .routing import parse_channel_tags
 from .sender import _split_message
 from ..messages import RATE_LIMIT_MSG
 
@@ -226,7 +227,7 @@ class SchoopetGateway(discord.Client):
     # Fix 3: bounded set of recently processed message IDs to drop Discord duplicates
     _SEEN_IDS_MAX = 500
 
-    def __init__(self, session_manager, agent_client, rate_limiter=None):
+    def __init__(self, session_manager, agent_client, rate_limiter=None, discord_sender=None):
         intents = discord.Intents.none()
         intents.dm_messages = True       # receive DMs (not privileged)
         intents.guild_messages = True    # receive server messages (not privileged)
@@ -235,6 +236,7 @@ class SchoopetGateway(discord.Client):
         self._session_manager = session_manager
         self._agent_client = agent_client
         self._rate_limiter = rate_limiter
+        self._discord_sender = discord_sender
         self._seen_message_ids: set[int] = set()
 
     async def on_ready(self):
@@ -506,7 +508,12 @@ class SchoopetGateway(discord.Client):
                     )
                     return
 
-                await self._send_channel_text(channel, response)
+                routed_blocks, remainder = parse_channel_tags(response)
+                for ch_id, content in routed_blocks:
+                    if content and self._discord_sender:
+                        await self._discord_sender.send_channel(ch_id, content)
+                if remainder:
+                    await self._send_channel_text(channel, remainder)
                 await self._session_manager.update_last_activity(
                     user_id,
                     channel="discord",
@@ -636,7 +643,7 @@ class SchoopetGateway(discord.Client):
             )
 
 
-async def _run_gateway_with_retry(session_manager, agent_client, rate_limiter, bot_token: str) -> None:
+async def _run_gateway_with_retry(session_manager, agent_client, rate_limiter, bot_token: str, discord_sender=None) -> None:
     """Run the gateway, retrying with backoff if the connection fails."""
     delay = 30
     while True:
@@ -644,6 +651,7 @@ async def _run_gateway_with_retry(session_manager, agent_client, rate_limiter, b
             session_manager=session_manager,
             agent_client=agent_client,
             rate_limiter=rate_limiter,
+            discord_sender=discord_sender,
         )
         try:
             await client.start(bot_token)
@@ -654,7 +662,7 @@ async def _run_gateway_with_retry(session_manager, agent_client, rate_limiter, b
             delay = min(delay * 2, 300)  # cap at 5 minutes
 
 
-async def start_gateway(bot_token: str, session_manager, agent_client, rate_limiter=None) -> None:
+async def start_gateway(bot_token: str, session_manager, agent_client, rate_limiter=None, discord_sender=None) -> None:
     """Create and start the gateway client as a background asyncio task."""
-    asyncio.create_task(_run_gateway_with_retry(session_manager, agent_client, rate_limiter, bot_token))
+    asyncio.create_task(_run_gateway_with_retry(session_manager, agent_client, rate_limiter, bot_token, discord_sender))
     logger.info("Discord gateway task started")

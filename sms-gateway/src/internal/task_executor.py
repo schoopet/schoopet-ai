@@ -7,19 +7,18 @@ completion to the originating Discord channel.
 import json
 import logging
 import os
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from google.cloud import firestore
 
+from ..discord.routing import parse_channel_tags
+
 logger = logging.getLogger(__name__)
 
 ASYNC_TASKS_COLLECTION = "async_tasks"
 RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
-
-_CHANNEL_TAG_RE = re.compile(r"<CHANNEL:(\d+)>(.*?)</CHANNEL>", re.DOTALL)
 
 
 def _should_suppress(message: str) -> bool:
@@ -290,11 +289,9 @@ class GatewayTaskExecutor:
             logger.info("Task %s: response suppressed", task.get("task_id"))
             return
 
-        routed_blocks = _CHANNEL_TAG_RE.findall(message)
-        remainder = _CHANNEL_TAG_RE.sub("", message).strip()
+        routed_blocks, remainder = parse_channel_tags(message)
 
         for channel_id, content in routed_blocks:
-            content = content.strip()
             if content:
                 await self._discord_sender.send_channel(channel_id, content)
 

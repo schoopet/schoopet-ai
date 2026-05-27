@@ -91,6 +91,7 @@ async def lifespan(app: FastAPI):
             session_manager=session_manager,
             agent_client=agent_client,
             rate_limiter=rate_limiter,
+            discord_sender=discord_sender,
         )
     else:
         logger.info("Discord not configured (DISCORD_BOT_TOKEN, DISCORD_PUBLIC_KEY, or DISCORD_APPLICATION_ID not set)")
