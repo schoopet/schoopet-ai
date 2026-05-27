@@ -48,6 +48,8 @@ def _build_config(project_id: str, location: str, staging_bucket: str, requireme
         # IAM Connector for 3-legged OAuth
         "IAM_CONNECTOR_GOOGLE_PERSONAL_NAME": os.getenv("IAM_CONNECTOR_GOOGLE_PERSONAL_NAME", ""),
         "IAM_CONNECTOR_CONTINUE_URI": os.getenv("IAM_CONNECTOR_CONTINUE_URI", ""),
+        # Gmail push notifications
+        "EMAIL_PUBSUB_TOPIC": os.getenv("EMAIL_PUBSUB_TOPIC", ""),
         # OpenTelemetry
         "OTEL_SERVICE_NAME": "schoopet-agent",
         "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true",
