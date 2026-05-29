@@ -90,9 +90,14 @@ class CalendarTool:
                 "Use IANA format (e.g., 'America/Los_Angeles')."
             )
 
+        def _parse_date(s: str) -> datetime:
+            # Accept YYYY-MM-DD, YYYY-MM-DDTHH:MM:SSZ, and similar ISO variants
+            # by truncating to the date portion before parsing.
+            return datetime.strptime(s[:10], "%Y-%m-%d")
+
         try:
             if start_date:
-                start_local = datetime.strptime(start_date, "%Y-%m-%d").replace(
+                start_local = _parse_date(start_date).replace(
                     hour=0, minute=0, second=0, microsecond=0, tzinfo=user_tz
                 )
                 start_dt = start_local.astimezone(timezone.utc)
@@ -104,7 +109,7 @@ class CalendarTool:
                 start_dt = start_local.astimezone(timezone.utc)
 
             if end_date:
-                end_local = datetime.strptime(end_date, "%Y-%m-%d").replace(
+                end_local = _parse_date(end_date).replace(
                     hour=23, minute=59, second=59, microsecond=0, tzinfo=user_tz
                 )
                 end_dt = end_local.astimezone(timezone.utc)

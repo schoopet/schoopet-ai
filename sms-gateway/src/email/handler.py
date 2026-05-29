@@ -19,7 +19,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from google.cloud import firestore
 
-from ..internal.auth import verify_internal_request, _verify_oidc_claims
+from ..internal.auth import verify_internal_request, _verify_oidc_claims_for_audience
 from .gmail_client import EMAIL_RULES_COLLECTION, normalize_gmail_address
 
 logger = logging.getLogger(__name__)
@@ -115,10 +115,9 @@ async def _verify_pubsub_oidc(request: Request) -> None:
         logger.error("SMS_GATEWAY_URL not set — cannot validate Pub/Sub OIDC audience")
         raise HTTPException(status_code=503, detail="Server misconfigured: missing audience")
 
-    try:
-        claims = await _verify_oidc_claims(token, audience)
-    except HTTPException:
-        logger.warning("Email webhook: OIDC token verification failed", exc_info=True)
+    claims = await _verify_oidc_claims_for_audience(token, audience)
+    if claims is None:
+        logger.warning("Email webhook: OIDC token verification failed")
         raise HTTPException(status_code=401, detail="Invalid Pub/Sub OIDC token")
 
     email = claims.get("email", "")

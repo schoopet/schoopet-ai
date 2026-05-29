@@ -316,7 +316,8 @@ class TestGatewayTaskExecutor:
             },
             tool_confirmation={},
         )
-        agent_client.extract_confirmation_requests = MagicMock(return_value=[confirmation])
+        # Model accepts the rejection on the first try and produces a text response.
+        agent_client.extract_confirmation_requests = MagicMock(side_effect=[[confirmation], []])
         agent_client.send_confirmation_responses_batch = AsyncMock(return_value=["follow-up-event"])
         agent_client.extract_text = MagicMock(return_value="29 books transferred; 1 failed: sheet_id 'bad-id,sheet_tab:' not authorized")
 
@@ -342,6 +343,7 @@ class TestGatewayTaskExecutor:
             },
             tool_confirmation={},
         )
+        # Model keeps retrying the same tool — exhaust all 5 rounds, then fail.
         agent_client.extract_confirmation_requests = MagicMock(return_value=[confirmation])
         agent_client.send_confirmation_responses_batch = AsyncMock(return_value=["follow-up-event"])
         agent_client.extract_text = MagicMock(return_value="")
@@ -350,4 +352,29 @@ class TestGatewayTaskExecutor:
 
         assert result["success"] is False
         assert "empty response" in result["error"].lower()
-        agent_client.send_confirmation_responses_batch.assert_awaited_once()
+        assert agent_client.send_confirmation_responses_batch.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_offline_confirmation_model_retries_once_then_succeeds(
+        self, executor, firestore_client, agent_client, discord_sender
+    ):
+        confirmation = AdkConfirmationRequest(
+            function_call_id="fc-789",
+            original_function_call={
+                "name": "delete_calendar_event",
+                "args": {"event_id": "evt-1"},
+            },
+            tool_confirmation={},
+        )
+        # First decline: model retries; second decline: model gives up and explains.
+        agent_client.extract_confirmation_requests = MagicMock(
+            side_effect=[[confirmation], [confirmation], []]
+        )
+        agent_client.send_confirmation_responses_batch = AsyncMock(return_value=["follow-up-event"])
+        agent_client.extract_text = MagicMock(return_value="Could not delete the event — confirmation required.")
+
+        result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is True
+        assert agent_client.send_confirmation_responses_batch.await_count == 2
+        discord_sender.send_channel.assert_awaited_once()

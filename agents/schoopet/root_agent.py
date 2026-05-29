@@ -341,14 +341,14 @@ def create_agent(
     drive_status_tool = FunctionTool(func=drive_tool.get_drive_status)
 
     # Docs tools
-    create_google_doc_tool = FunctionTool(func=docs_tool.create_google_doc, require_confirmation=True)
+    create_google_doc_tool = FunctionTool(func=docs_tool.create_google_doc)
     read_google_doc_tool = FunctionTool(func=docs_tool.read_google_doc)
     append_to_google_doc_tool = FunctionTool(func=docs_tool.append_to_google_doc, require_confirmation=doc_confirmation)
     replace_text_in_google_doc_tool = FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=doc_confirmation)
     docs_status_tool = FunctionTool(func=docs_tool.get_docs_status)
 
     # Sheets tools
-    create_spreadsheet_tool = FunctionTool(func=sheets_tool.create_spreadsheet, require_confirmation=True)
+    create_spreadsheet_tool = FunctionTool(func=sheets_tool.create_spreadsheet)
     add_sheet_tab_tool = FunctionTool(func=sheets_tool.add_sheet_tab, require_confirmation=sheet_confirmation)
     sheet_schema_tool = FunctionTool(func=sheets_tool.get_sheet_schema)
     read_sheet_records_tool = FunctionTool(func=sheets_tool.read_sheet_records)

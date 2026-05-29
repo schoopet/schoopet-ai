@@ -9,6 +9,7 @@ from google.adk.tools import ToolContext
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from .resource_confirmation import _RESOURCE_CONFIRMED_PREFIX
 from .utils import require_user_id
 
 logger = logging.getLogger(__name__)
@@ -843,14 +844,16 @@ class SheetsTool:
             return ""
 
         try:
-            return _json_dumps(
-                self._create_spreadsheet_with_token(
-                    service,
-                    title,
-                    sheet_tab,
-                    headers or [],
-                )
+            result = self._create_spreadsheet_with_token(
+                service,
+                title,
+                sheet_tab,
+                headers or [],
             )
+            sheet_id = result.get("spreadsheet_id", "")
+            if sheet_id and tool_context is not None:
+                tool_context.state[f"{_RESOURCE_CONFIRMED_PREFIX}{sheet_id}"] = True
+            return _json_dumps(result)
         except HttpError as e:
             return f"Error creating spreadsheet: {e}"
 
@@ -1219,15 +1222,17 @@ class DocsTool:
             return ""
 
         try:
-            return _json_dumps(
-                self._create_google_doc_with_token(
-                    docs_service,
-                    drive_service,
-                    title,
-                    content,
-                    folder_id,
-                )
+            result = self._create_google_doc_with_token(
+                docs_service,
+                drive_service,
+                title,
+                content,
+                folder_id,
             )
+            document_id = result.get("document_id", "")
+            if document_id and tool_context is not None:
+                tool_context.state[f"{_RESOURCE_CONFIRMED_PREFIX}{document_id}"] = True
+            return _json_dumps(result)
         except HttpError as e:
             return f"Error creating Google Doc: {e}"
 

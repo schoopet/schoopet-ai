@@ -44,8 +44,8 @@ def init_allowed_service_accounts():
     logger.info(f"Initialized {len(ALLOWED_SERVICE_ACCOUNTS)} allowed service accounts")
 
 
-async def _verify_oidc_claims(token: str, audience: str) -> dict:
-    """Verify an OIDC Bearer token and return its claims. Raises HTTPException on failure."""
+async def _verify_oidc_claims_for_audience(token: str, audience: str) -> dict | None:
+    """Try to verify an OIDC token against a single audience. Returns claims or None."""
     try:
         from google.auth.transport import requests as google_requests
         from google.oauth2 import id_token
@@ -60,9 +60,8 @@ async def _verify_oidc_claims(token: str, audience: str) -> dict:
                 audience=audience,
             ),
         )
-    except Exception as e:
-        logger.error(f"OIDC token verification failed: {e}")
-        raise HTTPException(status_code=401, detail="Invalid OIDC token")
+    except Exception:
+        return None
 
 
 async def verify_oidc_token(authorization: str) -> str:
@@ -82,12 +81,26 @@ async def verify_oidc_token(authorization: str) -> str:
 
     token = authorization[7:]
 
-    audience = os.getenv("SMS_GATEWAY_URL", "")
-    if not audience:
+    primary_audience = os.getenv("SMS_GATEWAY_URL", "")
+    if not primary_audience:
         logger.error("SMS_GATEWAY_URL not set — cannot validate OIDC audience")
         raise HTTPException(status_code=503, detail="Server misconfigured: missing audience")
 
-    claims = await _verify_oidc_claims(token, audience)
+    # Accept tokens minted for the legacy api.schoopet.com URL as well.
+    audiences = [primary_audience]
+    alt_audience = os.getenv("OAUTH_BASE_URL", "")
+    if alt_audience and alt_audience != primary_audience:
+        audiences.append(alt_audience)
+
+    claims = None
+    for audience in audiences:
+        claims = await _verify_oidc_claims_for_audience(token, audience)
+        if claims is not None:
+            break
+
+    if claims is None:
+        logger.error(f"OIDC token verification failed for all audiences: {audiences}")
+        raise HTTPException(status_code=401, detail="Invalid OIDC token")
 
     email = claims.get("email")
     if not email:

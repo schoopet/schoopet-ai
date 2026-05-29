@@ -160,15 +160,18 @@ class GatewayTaskExecutor:
                 message=prompt,
             )
             # In the offline path there is no human to approve confirmations.
-            # Auto-decline so the model receives a real API error (e.g. 404 for
-            # an invalid resource ID) and can recover on its own.
-            confirmations = self._agent_client.extract_confirmation_requests(events)
-            if confirmations:
-                task_id = task.get("task_id")
+            # Auto-decline so the model receives a rejection and can recover.
+            # Loop because the model may retry the same tool after a rejection.
+            task_id = task.get("task_id")
+            _MAX_CONFIRMATION_ROUNDS = 5
+            for _round in range(_MAX_CONFIRMATION_ROUNDS):
+                confirmations = self._agent_client.extract_confirmation_requests(events)
+                if not confirmations:
+                    break
                 logger.warning(
-                    "Task %s: %d confirmation request(s) in offline mode — auto-declining",
-                    task_id,
-                    len(confirmations),
+                    "Task %s: %d confirmation request(s) in offline mode — auto-declining "
+                    "(round %d/%d)",
+                    task_id, len(confirmations), _round + 1, _MAX_CONFIRMATION_ROUNDS,
                 )
                 for confirmation in confirmations:
                     resource_id = (
@@ -187,16 +190,15 @@ class GatewayTaskExecutor:
                         "[confirm] Auto-declining (offline): task_id=%s tool=%s resource=%s",
                         task_id, confirmation.tool_name, resource_id,
                     )
-                follow_up_events = await self._agent_client.send_confirmation_responses_batch(
+                events = await self._agent_client.send_confirmation_responses_batch(
                     user_id=user_id,
                     session_id=session_id,
                     confirmations=[(c.function_call_id, False) for c in confirmations],
                 )
                 logger.info(
                     "[confirm] Agent resumed (offline): task_id=%s events=%d",
-                    task_id, len(follow_up_events),
+                    task_id, len(events),
                 )
-                events = follow_up_events
             result = self._agent_client.extract_text(events)
             if not result:
                 raise RuntimeError(
