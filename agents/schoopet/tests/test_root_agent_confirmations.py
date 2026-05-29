@@ -10,8 +10,6 @@ REQUIRE_CONFIRMATION_BOOL = {
     "update_calendar_event",
     "delete_calendar_event",
     "save_file_to_drive",
-    "create_google_doc",
-    "create_spreadsheet",
     "set_timezone",
     "add_email_rule",
     "update_email_rule",
@@ -67,6 +65,8 @@ NO_CONFIRMATION = {
     "read_artifact",
     "get_gmail_status",
     "list_email_rules",
+    "create_google_doc",
+    "create_spreadsheet",
 }
 
 # "bool" | "callable" | False
