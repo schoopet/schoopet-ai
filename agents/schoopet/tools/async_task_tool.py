@@ -317,6 +317,13 @@ class AsyncTaskTool:
 
             if task.status == TaskStatus.SCHEDULED and task.scheduled_at:
                 status_msg += f"\nScheduled for: {task.scheduled_at.strftime('%Y-%m-%d %H:%M UTC')}"
+            elif task.status == TaskStatus.RUNNING:
+                if task.attempts:
+                    status_msg += f"\nAttempt: {task.attempts}"
+                if task.last_tool_call:
+                    status_msg += f"\nLast tool call: {task.last_tool_call}"
+                if task.last_event_at:
+                    status_msg += f"\nLast activity: {task.last_event_at.isoformat()}"
             elif task.status in [TaskStatus.COMPLETED, TaskStatus.NOTIFIED] and task.result:
                 # Truncate long results
                 result_preview = task.result[:200] + "..." if len(task.result) > 200 else task.result

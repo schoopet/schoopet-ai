@@ -50,6 +50,9 @@ Known review items for these invariants are tracked in [oauth-flow-issues.md](/U
 8. Task results should be stored before user notification is attempted.
 9. A delivered task should be marked `notified`.
 10. Current gateway-owned task execution only supports Discord notifications; non-Discord task delivery must fail clearly until implemented.
+11. Task `attempts` increments when the gateway claims a task for execution.
+12. Timeout retries reset tasks to `pending` only before the configured Cloud Tasks max attempt count; the final timeout must mark the task `failed` and notify the user.
+13. Long-running tasks update progress with `last_event_at` and `last_tool_call` when tools run.
 
 ## Internal Security
 

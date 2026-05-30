@@ -5,6 +5,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 import pytest
 
 from src.internal.task_executor import (
+    ASYNC_TASK_MAX_ATTEMPTS,
     GatewayTaskExecutor,
     build_allowed_resource_state,
 )
@@ -96,7 +97,11 @@ class TestGatewayTaskExecutor:
         assert result["success"] is True
         doc_ref = firestore_client.collection.return_value.document.return_value
         running_update = doc_ref.update.await_args_list[0]
-        assert running_update.args[0] == {"status": "running", "started_at": ANY}
+        assert running_update.args[0] == {
+            "status": "running",
+            "started_at": ANY,
+            "attempts": 1,
+        }
         assert "option" in running_update.kwargs
         doc_ref.update.assert_any_await({
             "status": "completed",
@@ -133,6 +138,7 @@ class TestGatewayTaskExecutor:
         assert "Execute this research task:" in prompt
         assert "Instruction:\nResearch AI" in prompt
         assert "  topic: AI" in prompt
+        assert callable(agent_client.send_message_events.await_args.kwargs["on_tool_call"])
         agent_client.delete_session.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -184,6 +190,48 @@ class TestGatewayTaskExecutor:
         statuses = [c.args[0].get("status") for c in doc_ref.update.await_args_list]
         assert "failed" not in statuses
         discord_sender.send_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_timeout_exhaustion_marks_failed_and_notifies(
+        self, executor, firestore_client, agent_client, discord_sender
+    ):
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        doc_ref.get = AsyncMock(
+            return_value=_task_doc(attempts=ASYNC_TASK_MAX_ATTEMPTS - 1)
+        )
+        agent_client.send_message_events = AsyncMock(side_effect=TimeoutError())
+
+        result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is False
+        assert "timeout_exhausted" in result["error"]
+        assert "retryable" not in result
+        doc_ref.update.assert_any_await({
+            "status": "failed",
+            "error": ANY,
+            "completed_at": ANY,
+        })
+        statuses = [c.args[0].get("status") for c in doc_ref.update.await_args_list]
+        assert "pending" not in statuses
+        discord_sender.send_channel.assert_awaited_once()
+        channel_id, text = discord_sender.send_channel.await_args.args
+        assert channel_id == "c1"
+        assert "timeout_exhausted" in text
+
+    @pytest.mark.asyncio
+    async def test_tool_call_updates_task_progress(
+        self, executor, firestore_client, agent_client
+    ):
+        await executor.execute_task(TASK_ID)
+
+        on_tool_call = agent_client.send_message_events.await_args.kwargs["on_tool_call"]
+        await on_tool_call("read_sheet_records")
+
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        doc_ref.update.assert_any_await({
+            "last_event_at": ANY,
+            "last_tool_call": "read_sheet_records",
+        })
 
     @pytest.mark.asyncio
     async def test_failure_stores_error_and_posts_to_channel(

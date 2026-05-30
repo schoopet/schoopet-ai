@@ -78,6 +78,10 @@ class AsyncTaskDocument(BaseModel):
         default=None, description="Task result to deliver to user"
     )
     error: Optional[str] = Field(default=None, description="Error message if failed")
+    attempts: int = Field(default=0, description="Number of execution attempts")
+    last_tool_call: Optional[str] = Field(
+        default=None, description="Most recent tool called during execution"
+    )
 
     # Timestamps
     created_at: datetime = Field(
@@ -92,6 +96,9 @@ class AsyncTaskDocument(BaseModel):
     )
     notified_at: Optional[datetime] = Field(
         default=None, description="When user was notified"
+    )
+    last_event_at: Optional[datetime] = Field(
+        default=None, description="Most recent progress event during execution"
     )
 
     def to_firestore(self) -> dict:
@@ -122,12 +129,18 @@ class AsyncTaskDocument(BaseModel):
             data["result"] = self.result
         if self.error:
             data["error"] = self.error
+        if self.attempts:
+            data["attempts"] = self.attempts
+        if self.last_tool_call:
+            data["last_tool_call"] = self.last_tool_call
         if self.started_at:
             data["started_at"] = self.started_at
         if self.completed_at:
             data["completed_at"] = self.completed_at
         if self.notified_at:
             data["notified_at"] = self.notified_at
+        if self.last_event_at:
+            data["last_event_at"] = self.last_event_at
 
         return data
 
@@ -155,10 +168,13 @@ class AsyncTaskDocument(BaseModel):
             status=TaskStatus(raw_status),
             result=data.get("result"),
             error=data.get("error"),
+            attempts=data.get("attempts", 0),
+            last_tool_call=data.get("last_tool_call"),
             created_at=data["created_at"],
             started_at=data.get("started_at"),
             completed_at=data.get("completed_at"),
             notified_at=data.get("notified_at"),
+            last_event_at=data.get("last_event_at"),
         )
 
     def can_cancel(self) -> bool:

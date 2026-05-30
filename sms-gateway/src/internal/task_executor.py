@@ -19,6 +19,7 @@ from ..discord.routing import parse_channel_tags
 logger = logging.getLogger(__name__)
 
 ASYNC_TASKS_COLLECTION = "async_tasks"
+ASYNC_TASK_MAX_ATTEMPTS = 5
 RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
 OFFLINE_MODE_KEY = "_offline_mode"
 SCHEDULE_NEXT_RE = re.compile(
@@ -69,7 +70,24 @@ class GatewayTaskExecutor:
             await self._schedule_followup_if_requested(task, result)
             await self._update_task_result(task_id, result)
         except TaskTimeoutError as exc:
-            logger.warning("Task %s timed out — resetting to pending for Cloud Tasks retry", task_id)
+            attempts = int(task.get("attempts") or 1)
+            if attempts >= ASYNC_TASK_MAX_ATTEMPTS:
+                error = f"timeout_exhausted after {attempts} attempts: {exc}"
+                logger.warning("Task %s exhausted retries after timeout", task_id)
+                await self._update_task_error(task_id, error)
+                try:
+                    await self._send_completion(task, error=error)
+                except Exception:
+                    logger.exception("Failed to send task timeout exhaustion notification for %s", task_id)
+                return {"success": False, "error": error}
+
+            logger.warning(
+                "Task %s timed out — resetting to pending for Cloud Tasks retry "
+                "(attempt %d/%d)",
+                task_id,
+                attempts,
+                ASYNC_TASK_MAX_ATTEMPTS,
+            )
             await self._reset_task_to_pending(task_id)
             return {"success": False, "retryable": True, "error": str(exc)}
         except Exception as exc:
@@ -114,15 +132,17 @@ class GatewayTaskExecutor:
             return {"claimed": False, "prior_status": status, "task": task}
 
         started_at = datetime.now(timezone.utc)
+        attempts = int(task.get("attempts") or 0) + 1
         logger.info(
-            "[firestore] update %s/%s: status=running (was %s)",
-            ASYNC_TASKS_COLLECTION, task_id, status,
+            "[firestore] update %s/%s: status=running (was %s) attempts=%d",
+            ASYNC_TASKS_COLLECTION, task_id, status, attempts,
         )
         try:
             await doc_ref.update(
                 {
                     "status": "running",
                     "started_at": started_at,
+                    "attempts": attempts,
                 },
                 option=firestore.LastUpdateOption(doc.update_time),
             )
@@ -139,6 +159,7 @@ class GatewayTaskExecutor:
 
         task["status"] = "running"
         task["started_at"] = started_at
+        task["attempts"] = attempts
         return {"claimed": True, "prior_status": status, "task": task}
 
     async def _execute_task(self, task: dict[str, Any], prompt: str) -> str:
@@ -164,6 +185,10 @@ class GatewayTaskExecutor:
                 user_id=user_id,
                 session_id=session_id,
                 message=prompt,
+                on_tool_call=lambda tool_name: self._record_task_tool_call(
+                    task["task_id"],
+                    tool_name,
+                ),
             )
             result = self._agent_client.extract_text(events)
             if not result:
@@ -205,6 +230,24 @@ class GatewayTaskExecutor:
             "result": result,
             "completed_at": datetime.now(timezone.utc),
         })
+
+    async def _record_task_tool_call(self, task_id: str, tool_name: str) -> None:
+        try:
+            logger.info(
+                "[firestore] update %s/%s: last_tool_call=%s",
+                ASYNC_TASKS_COLLECTION, task_id, tool_name,
+            )
+            await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update({
+                "last_event_at": datetime.now(timezone.utc),
+                "last_tool_call": tool_name,
+            })
+        except Exception:
+            logger.warning(
+                "Task %s: failed to record progress for tool call %s",
+                task_id,
+                tool_name,
+                exc_info=True,
+            )
 
     async def _mark_task_notified(self, task_id: str) -> None:
         logger.info(

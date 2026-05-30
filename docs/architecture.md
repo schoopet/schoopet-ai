@@ -156,10 +156,12 @@ Immediate flow:
 3. Tool creates a Cloud Task targeting `/internal/tasks/execute`.
 4. Gateway authenticates the internal request.
 5. Gateway atomically claims the task by moving `pending` or `scheduled` to `running`.
-6. Gateway creates a fresh Agent Engine session with channel, offline-mode, and allowed-resource state.
-7. Gateway sends the task prompt to the agent.
-8. Gateway records `completed` or `failed`.
-9. Gateway sends the result to the configured Discord channel.
+6. Gateway increments the task `attempts` counter.
+7. Gateway creates a fresh Agent Engine session with channel, offline-mode, and allowed-resource state.
+8. Gateway sends the task prompt to the agent and updates `last_event_at` / `last_tool_call` as tools run.
+9. Gateway records `completed` or `failed`.
+10. Timeout retries reset the task to `pending` until the Cloud Tasks max attempt count is reached; the final timeout marks the task `failed` and notifies the user.
+11. Gateway sends the result to the configured Discord channel.
 
 Scheduled flow:
 

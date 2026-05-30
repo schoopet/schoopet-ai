@@ -283,6 +283,33 @@ class TestAsyncTaskTool:
 
         assert result == f"Task {TASK_ID} not found."
 
+    def test_check_task_status_running_includes_progress(
+        self, async_task_tool, tool_context, mock_firestore
+    ):
+        """Should include progress heartbeat fields for running tasks."""
+        last_event_at = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": USER_ID,
+            "task_type": "research",
+            "instruction": "Research AI",
+            "status": "running",
+            "attempts": 2,
+            "last_tool_call": "read_sheet_records",
+            "last_event_at": last_event_at,
+            "created_at": datetime.now(timezone.utc),
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        result = async_task_tool.check_task_status(TASK_ID, tool_context=tool_context)
+
+        assert "Status: running" in result
+        assert "Attempt: 2" in result
+        assert "Last tool call: read_sheet_records" in result
+        assert f"Last activity: {last_event_at.isoformat()}" in result
+
     def test_get_task_result_completed_for_owner(self, async_task_tool, tool_context, mock_firestore):
         """Should return the stored task result for the owning user."""
         completed_at = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
