@@ -189,6 +189,21 @@ def test_callback_oauth_error_param_returns_400(client, services):
     assert "User denied" in resp.text
 
 
+def test_callback_oauth_error_escapes_html_in_description(client, services):
+    """error_description is interpolated into HTML — must be escaped to prevent XSS.
+
+    Invariant: OAuth/Tokens #5 — rendered OAuth callback HTML must escape interpolated values.
+    """
+    resp = client.get(
+        "/oauth/connector/callback?error=access_denied"
+        "&error_description=%3Cscript%3Ealert(1)%3C%2Fscript%3E",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+    assert "<script>" not in resp.text
+    assert "&lt;script&gt;" in resp.text
+
+
 # ── import smoke test ─────────────────────────────────────────────────────────
 
 def test_finalize_iam_credentials_importable():

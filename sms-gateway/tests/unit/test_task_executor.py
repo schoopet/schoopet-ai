@@ -478,6 +478,97 @@ class TestCreateCloudTask:
         tasks_client.create_task.assert_called_once()
 
 
+class TestRequeueScheduledTasks:
+    def _make_scheduled_doc(self, task_id: str = "task-sched-1", **overrides) -> MagicMock:
+        data = {
+            "task_id": task_id,
+            "user_id": USER_ID,
+            "status": "scheduled",
+            "scheduled_at": datetime(2026, 5, 30, 12, 0, tzinfo=timezone.utc),
+        }
+        data.update(overrides)
+        doc = MagicMock()
+        doc.to_dict.return_value = data
+        return doc
+
+    def _set_query_stream(self, firestore_client, docs):
+        async def _stream():
+            for doc in docs:
+                yield doc
+
+        query = MagicMock()
+        query.stream.return_value = _stream()
+        firestore_client.collection.return_value.where.return_value.where.return_value = query
+        return query
+
+    @pytest.mark.asyncio
+    async def test_requeue_queues_tasks_in_window(self, executor, firestore_client):
+        doc = self._make_scheduled_doc()
+        self._set_query_stream(firestore_client, [doc])
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        expected_name = "projects/p/queues/q/tasks/execute-task-sched-1-initial"
+
+        with patch.object(executor, "_compute_cloud_task_name", return_value=expected_name), \
+             patch.object(executor, "_create_cloud_task", return_value=expected_name):
+            result = await executor.requeue_scheduled_tasks()
+
+        assert result == {"queued": 1, "errors": 0}
+        doc_ref.update.assert_any_await({"cloud_task_name": expected_name})
+
+    @pytest.mark.asyncio
+    async def test_requeue_skips_tasks_already_queued(self, executor, firestore_client):
+        doc = self._make_scheduled_doc(cloud_task_name="projects/p/queues/q/tasks/existing")
+        self._set_query_stream(firestore_client, [doc])
+
+        with patch.object(executor, "_create_cloud_task") as mock_create:
+            result = await executor.requeue_scheduled_tasks()
+
+        assert result == {"queued": 0, "errors": 0}
+        mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_requeue_skips_tasks_outside_window(self, executor, firestore_client):
+        # Firestore query filters outside-window tasks; simulate empty result set.
+        self._set_query_stream(firestore_client, [])
+
+        with patch.object(executor, "_create_cloud_task") as mock_create:
+            result = await executor.requeue_scheduled_tasks()
+
+        assert result == {"queued": 0, "errors": 0}
+        mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_requeue_skips_task_with_no_scheduled_at(self, executor, firestore_client):
+        doc = self._make_scheduled_doc(scheduled_at=None)
+        self._set_query_stream(firestore_client, [doc])
+
+        with patch.object(executor, "_create_cloud_task") as mock_create:
+            result = await executor.requeue_scheduled_tasks()
+
+        assert result == {"queued": 0, "errors": 1}
+        mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_requeue_rolls_back_name_on_cloud_task_failure(self, executor, firestore_client):
+        doc = self._make_scheduled_doc()
+        self._set_query_stream(firestore_client, [doc])
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        expected_name = "projects/p/queues/q/tasks/execute-task-sched-1-initial"
+
+        with patch.object(executor, "_compute_cloud_task_name", return_value=expected_name), \
+             patch.object(executor, "_create_cloud_task", return_value=None):
+            result = await executor.requeue_scheduled_tasks()
+
+        assert result == {"queued": 0, "errors": 1}
+        # Name written first, then rolled back with DELETE_FIELD on failure.
+        update_calls = [c.args[0] for c in doc_ref.update.await_args_list]
+        assert {"cloud_task_name": expected_name} in update_calls
+        from google.cloud import firestore as fs_module
+        rollback_call = [c for c in update_calls if "cloud_task_name" in c and c["cloud_task_name"] != expected_name]
+        assert len(rollback_call) == 1
+        assert rollback_call[0]["cloud_task_name"] is fs_module.DELETE_FIELD
+
+
 class TestCreateEmailBatchTask:
     @pytest.mark.asyncio
     async def test_creates_firestore_doc_and_cloud_task(self, executor, firestore_client):

@@ -1,9 +1,9 @@
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 
 from src.discord import handler
 
@@ -133,3 +133,47 @@ async def test_process_component_confirmation_sends_adk_response_and_followup(
     )
     session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-123", session_scope="discord:dm:99999")
     discord_sender.send_followup.assert_awaited_once_with("interaction-token", "Done.")
+
+
+# ── Signature validation (ENABLE_SIGNATURE_VALIDATION=True) ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_invalid_signature_returns_401(monkeypatch):
+    """Requests with a bad Ed25519 signature must be rejected when validation is on.
+
+    Invariant: Internal Security #4 — platform webhooks validate signatures when
+    ENABLE_SIGNATURE_VALIDATION is true.
+    """
+    validator = MagicMock()
+    validator.validate.return_value = False
+    monkeypatch.setattr(handler, "_validator", validator)
+    monkeypatch.setattr(
+        handler,
+        "get_settings",
+        lambda: SimpleNamespace(ENABLE_SIGNATURE_VALIDATION=True),
+    )
+
+    request = _FakeRequest({"type": 1})
+    request.headers = {"X-Signature-Ed25519": "badsig", "X-Signature-Timestamp": "12345"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.handle_discord_webhook(request, BackgroundTasks())
+
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_missing_validator_returns_401(monkeypatch):
+    """No configured validator with validation enabled must also reject the request."""
+    monkeypatch.setattr(handler, "_validator", None)
+    monkeypatch.setattr(
+        handler,
+        "get_settings",
+        lambda: SimpleNamespace(ENABLE_SIGNATURE_VALIDATION=True),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.handle_discord_webhook(_FakeRequest({"type": 1}), BackgroundTasks())
+
+    assert exc_info.value.status_code == 401

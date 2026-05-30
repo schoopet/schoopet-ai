@@ -264,6 +264,25 @@ class TestAsyncTaskTool:
         assert "Status: completed" in result
         assert "Result preview: AI is cool" in result
 
+    def test_check_task_status_wrong_user_not_found(self, async_task_tool, tool_context, mock_firestore):
+        """Should not expose task status across users (invariant: Identity/Scope #3)."""
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": "other-user",
+            "task_type": "research",
+            "instruction": "Secret research",
+            "status": "completed",
+            "result": "Secret result",
+            "created_at": datetime.now(timezone.utc),
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        result = async_task_tool.check_task_status(TASK_ID, tool_context=tool_context)
+
+        assert result == f"Task {TASK_ID} not found."
+
     def test_get_task_result_completed_for_owner(self, async_task_tool, tool_context, mock_firestore):
         """Should return the stored task result for the owning user."""
         completed_at = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -400,3 +419,24 @@ class TestAsyncTaskTool:
             "status": "cancelled",
             "completed_at": ANY
         })
+
+    def test_cancel_task_wrong_user_rejected(self, async_task_tool, tool_context, mock_firestore, mock_cloud_tasks):
+        """Should refuse to cancel another user's task (invariant: Identity/Scope #3)."""
+        mock_doc = MagicMock()
+        mock_doc.exists = True
+        mock_doc.to_dict.return_value = {
+            "task_id": TASK_ID,
+            "user_id": "other-user",
+            "status": "pending",
+            "cloud_task_name": "task-name",
+            "created_at": datetime.now(timezone.utc),
+            "instruction": "Secret task",
+            "task_type": "research",
+        }
+        mock_firestore.collection.return_value.document.return_value.get.return_value = mock_doc
+
+        result = async_task_tool.cancel_task(TASK_ID, tool_context=tool_context)
+
+        assert result == f"Task {TASK_ID} not found."
+        mock_cloud_tasks.cancel_task.assert_not_called()
+        mock_firestore.collection.return_value.document.return_value.update.assert_not_called()

@@ -15,6 +15,7 @@ from src.discord.gateway import (
     _build_discord_message_content,
 )
 from src.discord.context import build_discord_context
+from src.session.approvals import PendingApprovalCoordinator
 
 
 class _FakeAttachment:
@@ -123,17 +124,10 @@ def gateway_services():
     session_manager.update_last_activity = AsyncMock()
     session_manager.get_pending_approval_group = AsyncMock()
     session_manager.clear_pending_approval_group = AsyncMock()
-    session_manager.should_send_pending_approval_notification = lambda group: any(
-        pending.get("is_group_notification_owner", True) for pending in group
-    )
-    session_manager.pending_approval_notification_id = lambda group: (
-        group[0].get("approval_notification_id") or group[0]["id"]
-    )
-    session_manager.format_pending_approval_notification = lambda group: (
-        f"Approve this action?\n{group[0].get('tool_name', 'unknown_tool')}()"
-        if len(group) == 1
-        else f"Approve {len(group)} action(s)"
-    )
+    _coord = PendingApprovalCoordinator()
+    session_manager.should_send_pending_approval_notification = _coord.should_send_notification
+    session_manager.pending_approval_notification_id = _coord.notification_id
+    session_manager.format_pending_approval_notification = _coord.format_notification
     agent_client = AsyncMock()
     agent_client.extract_text = AgentEngineClient.extract_text
     agent_client.extract_confirmation_requests = AgentEngineClient.extract_confirmation_requests
