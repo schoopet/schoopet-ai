@@ -4,7 +4,6 @@ Cloud Tasks calls the gateway directly. The gateway loads the task, claims it,
 runs it in an isolated Agent Engine session, records the result, and posts the
 completion to the originating Discord channel.
 """
-import json
 import logging
 import os
 import re
@@ -15,6 +14,7 @@ from typing import Any, Optional
 from google.cloud import firestore
 
 from ..discord.routing import parse_channel_tags
+from .cloud_tasks import build_execute_task_payload, compute_execute_task_name
 
 logger = logging.getLogger(__name__)
 
@@ -443,6 +443,7 @@ class GatewayTaskExecutor:
         at scheduled_at, which invokes the agent with prompt.
         """
         task_id = str(uuid.uuid4())
+        cloud_task_name = self._compute_cloud_task_name(task_id)
         doc = {
             "task_id": task_id,
             "user_id": user_id,
@@ -451,23 +452,32 @@ class GatewayTaskExecutor:
             "status": "scheduled",
             "scheduled_at": scheduled_at,
             "created_at": datetime.now(timezone.utc),
+            "cloud_task_name": cloud_task_name,
             "gmail_address": gmail_address,
         }
+        if not cloud_task_name:
+            doc.pop("cloud_task_name")
         if discord_channel_id:
             doc["discord_channel_id"] = discord_channel_id
-        await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).set(doc)
+        doc_ref = self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id)
+        await doc_ref.set(doc)
 
         task_name = self._create_cloud_task(
             task_id=task_id,
             user_id=user_id,
             schedule_time=scheduled_at,
         )
-        if task_name:
-            await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update(
-                {"cloud_task_name": task_name}
-            )
-        else:
+        if not task_name:
             logger.warning("Email batch task %s: Cloud Task creation failed", task_id)
+            if cloud_task_name:
+                try:
+                    await doc_ref.update({"cloud_task_name": firestore.DELETE_FIELD})
+                except Exception:
+                    logger.warning(
+                        "Email batch task %s: failed to roll back cloud_task_name",
+                        task_id,
+                        exc_info=True,
+                    )
 
         return task_id
 
@@ -534,11 +544,7 @@ class GatewayTaskExecutor:
             return None
         location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
         queue = os.getenv("ASYNC_TASKS_QUEUE", "async-agent-tasks")
-        normalized = re.sub(r"[^a-zA-Z0-9-]", "-", task_id).strip("-").lower()
-        return (
-            f"projects/{project_id}/locations/{location}"
-            f"/queues/{queue}/tasks/execute-{normalized}-initial"
-        )
+        return compute_execute_task_name(project_id, location, queue, task_id)
 
     def _create_cloud_task(
         self,
@@ -548,7 +554,6 @@ class GatewayTaskExecutor:
     ) -> Optional[str]:
         from google.api_core.exceptions import AlreadyExists
         from google.cloud import tasks_v2
-        from google.protobuf import duration_pb2, timestamp_pb2
 
         project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
         location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
@@ -566,29 +571,15 @@ class GatewayTaskExecutor:
 
         client = tasks_v2.CloudTasksClient()
         parent = client.queue_path(project_id, location, queue)
-        normalized = re.sub(r"[^a-zA-Z0-9-]", "-", task_id).strip("-").lower()
-        task_name = client.task_path(project_id, location, queue, f"execute-{normalized}-initial")
-
-        if schedule_time.tzinfo is None:
-            schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-        ts = timestamp_pb2.Timestamp()
-        ts.FromDatetime(schedule_time)
-
-        task = {
-            "name": task_name,
-            "http_request": {
-                "http_method": tasks_v2.HttpMethod.POST,
-                "url": f"{gateway_url}/internal/tasks/execute",
-                "headers": {"Content-Type": "application/json"},
-                "body": json.dumps({"task_id": task_id, "user_id": user_id}).encode(),
-                "oidc_token": {
-                    "service_account_email": service_account,
-                    "audience": gateway_url,
-                },
-            },
-            "schedule_time": ts,
-            "dispatch_deadline": duration_pb2.Duration(seconds=900),
-        }
+        task_name = compute_execute_task_name(project_id, location, queue, task_id)
+        task = build_execute_task_payload(
+            task_name=task_name,
+            gateway_url=gateway_url,
+            service_account=service_account,
+            task_id=task_id,
+            user_id=user_id,
+            schedule_time=schedule_time,
+        )
 
         try:
             return client.create_task(parent=parent, task=task).name

@@ -4,6 +4,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
 import pytest
 
+from src.internal.cloud_tasks import build_execute_task_payload
 from src.internal.task_executor import (
     ASYNC_TASK_MAX_ATTEMPTS,
     GatewayTaskExecutor,
@@ -512,6 +513,31 @@ class TestCreateCloudTask:
         tasks_client.create_task.assert_called_once()
 
 
+class TestCloudTasksPayload:
+    def test_build_execute_task_payload_matches_agent_side_wire_contract(self):
+        scheduled = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+        task = build_execute_task_payload(
+            task_name="projects/test-project/locations/us-central1/queues/async-agent-tasks/tasks/execute-task-123-initial",
+            gateway_url="https://gateway.example.com",
+            service_account="svc@test-project.iam.gserviceaccount.com",
+            task_id="task-123",
+            user_id="user-123",
+            schedule_time=scheduled,
+        )
+
+        assert task["name"].endswith("/tasks/execute-task-123-initial")
+        assert task["http_request"]["url"] == "https://gateway.example.com/internal/tasks/execute"
+        assert task["http_request"]["headers"] == {"Content-Type": "application/json"}
+        assert task["http_request"]["body"] == b'{"task_id": "task-123", "user_id": "user-123"}'
+        assert task["http_request"]["oidc_token"] == {
+            "service_account_email": "svc@test-project.iam.gserviceaccount.com",
+            "audience": "https://gateway.example.com",
+        }
+        assert task["dispatch_deadline"].seconds == 900
+        assert task["schedule_time"].ToDatetime().replace(tzinfo=timezone.utc) == scheduled
+
+
 class TestRequeueScheduledTasks:
     def _make_scheduled_doc(self, task_id: str = "task-sched-1", **overrides) -> MagicMock:
         data = {
@@ -630,9 +656,10 @@ class TestCreateEmailBatchTask:
         assert set_doc["status"] == "scheduled"
         assert set_doc["gmail_address"] == "mirko@example.com"
         assert set_doc["discord_channel_id"] == "ch-1"
-        doc_ref.update.assert_awaited_once_with(
-            {"cloud_task_name": tasks_client.create_task.return_value.name}
-        )
+        created_task = tasks_client.create_task.call_args.kwargs["task"]
+        assert set_doc["cloud_task_name"] == created_task["name"]
+        assert set_doc["cloud_task_name"].endswith(f"execute-{task_id}-initial")
+        doc_ref.update.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_logs_warning_when_cloud_task_creation_fails(self, executor, firestore_client):
@@ -650,3 +677,29 @@ class TestCreateEmailBatchTask:
         doc_ref = firestore_client.collection.return_value.document.return_value
         doc_ref.set.assert_awaited_once()
         doc_ref.update.assert_not_awaited()  # no cloud_task_name update when creation failed
+
+    @pytest.mark.asyncio
+    async def test_rolls_back_prewritten_name_when_cloud_task_creation_fails(
+        self,
+        executor,
+        firestore_client,
+    ):
+        scheduled = datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
+        expected_name = "projects/p/queues/q/tasks/execute-email-task-initial"
+
+        with patch.object(executor, "_compute_cloud_task_name", return_value=expected_name), \
+             patch.object(executor, "_create_cloud_task", return_value=None):
+            task_id = await executor.create_email_batch_task(
+                gmail_address="mirko@example.com",
+                user_id="user-1",
+                prompt="Process emails",
+                discord_channel_id="ch-1",
+                scheduled_at=scheduled,
+            )
+
+        assert task_id
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        set_doc = doc_ref.set.await_args.args[0]
+        assert set_doc["cloud_task_name"] == expected_name
+        from google.cloud import firestore as fs_module
+        doc_ref.update.assert_awaited_once_with({"cloud_task_name": fs_module.DELETE_FIELD})
