@@ -572,6 +572,8 @@ class SchoopetGateway(discord.Client):
             f"tool={tool_name} action={action}"
         )
 
+        await interaction.response.defer()
+
         try:
             pending_group = await self._session_manager.get_pending_approval_group(
                 user_id,
@@ -603,7 +605,7 @@ class SchoopetGateway(discord.Client):
                 session_scope=session_scope or None,
             )
             view.disable_buttons()
-            await interaction.response.edit_message(view=view)
+            await interaction.edit_original_response(view=view)
 
             new_confirmations = self._agent_client.extract_confirmation_requests(all_events)
             response = self._agent_client.extract_text(all_events)
@@ -637,7 +639,7 @@ class SchoopetGateway(discord.Client):
             )
         except Exception as e:
             logger.exception(f"Failed to resolve Discord confirmation for {user_id}: {e}")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "I couldn't resolve that approval. Please try again.",
                 ephemeral=True,
             )

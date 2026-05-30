@@ -275,8 +275,9 @@ async def test_approve_callback_sends_confirmation_clears_pending_and_sends_resu
     )
     interaction = SimpleNamespace(
         user=SimpleNamespace(id="user-123"),
-        response=SimpleNamespace(send_message=AsyncMock(), edit_message=AsyncMock()),
+        response=SimpleNamespace(send_message=AsyncMock(), edit_message=AsyncMock(), defer=AsyncMock()),
         followup=SimpleNamespace(send=AsyncMock()),
+        edit_original_response=AsyncMock(),
     )
     view = _ConfirmationView(gateway, "user-123", "pending-123")
 
@@ -295,7 +296,8 @@ async def test_approve_callback_sends_confirmation_clears_pending_and_sends_resu
         confirmations=[("confirm-1", True)],
     )
     session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-123", session_scope="discord:dm:99999")
-    interaction.response.edit_message.assert_awaited_once_with(view=view)
+    interaction.response.defer.assert_awaited_once()
+    interaction.edit_original_response.assert_awaited_once_with(view=view)
     interaction.followup.send.assert_awaited_once_with("Done.")
     assert all(item.disabled for item in view.children)
 
@@ -323,8 +325,9 @@ async def test_reject_callback_sends_false_confirmation(gateway_services):
     agent_client.send_confirmation_responses_batch = AsyncMock(return_value=[])
     interaction = SimpleNamespace(
         user=SimpleNamespace(id="user-123"),
-        response=SimpleNamespace(send_message=AsyncMock(), edit_message=AsyncMock()),
+        response=SimpleNamespace(send_message=AsyncMock(), edit_message=AsyncMock(), defer=AsyncMock()),
         followup=SimpleNamespace(send=AsyncMock()),
+        edit_original_response=AsyncMock(),
     )
     view = _ConfirmationView(gateway, "user-123", "pending-123")
 
@@ -340,6 +343,7 @@ async def test_reject_callback_sends_false_confirmation(gateway_services):
     confirmations_arg = agent_client.send_confirmation_responses_batch.await_args.kwargs["confirmations"]
     assert all(confirmed is False for _, confirmed in confirmations_arg)
     session_manager.clear_pending_approval_group.assert_awaited_once_with("user-123", "pending-123", session_scope="discord:dm:99999")
+    interaction.response.defer.assert_awaited_once()
     interaction.followup.send.assert_not_awaited()
 
 
@@ -366,8 +370,9 @@ async def test_approve_callback_resolves_entire_pending_group(gateway_services):
     )
     interaction = SimpleNamespace(
         user=SimpleNamespace(id="user-123"),
-        response=SimpleNamespace(send_message=AsyncMock(), edit_message=AsyncMock()),
+        response=SimpleNamespace(send_message=AsyncMock(), edit_message=AsyncMock(), defer=AsyncMock()),
         followup=SimpleNamespace(send=AsyncMock()),
+        edit_original_response=AsyncMock(),
     )
     view = _ConfirmationView(gateway, "user-123", "pending-a")
 
