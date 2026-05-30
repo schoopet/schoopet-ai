@@ -510,6 +510,7 @@ def create_adk_agent() -> AdkApp:
     """Factory for the Schoopet agent. Used by Vertex AI Agent Engine deployment."""
     return AdkApp(
         agent=create_agent(),
+        app_name="schoopet",
         artifact_service_builder=_artifact_service,
         plugins=[AdminCommandPlugin()],
     )
