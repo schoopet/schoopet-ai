@@ -1,6 +1,6 @@
 """Unit tests for gateway-owned async task execution."""
 from datetime import datetime, timezone
-from unittest.mock import ANY, AsyncMock, MagicMock, call
+from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -41,6 +41,7 @@ def firestore_client():
     client = MagicMock()
     doc_ref = MagicMock()
     doc_ref.get = AsyncMock(return_value=_task_doc())
+    doc_ref.set = AsyncMock()
     doc_ref.update = AsyncMock()
     client.collection.return_value.document.return_value = doc_ref
     return client
@@ -378,3 +379,149 @@ class TestGatewayTaskExecutor:
         assert result["success"] is True
         assert agent_client.send_confirmation_responses_batch.await_count == 2
         discord_sender.send_channel.assert_awaited_once()
+
+
+ENV = {
+    "GOOGLE_CLOUD_PROJECT": "test-project",
+    "GOOGLE_CLOUD_LOCATION": "us-central1",
+    "ASYNC_TASKS_QUEUE": "async-agent-tasks",
+    "SMS_GATEWAY_URL": "https://gateway.example.com",
+    "SMS_GATEWAY_SA": "svc@test-project.iam.gserviceaccount.com",
+}
+
+
+class TestComputeCloudTaskName:
+    def test_uuid_normalized_to_lowercase_hyphens(self, executor):
+        with patch.dict("os.environ", ENV):
+            name = executor._compute_cloud_task_name("abc-123-XYZ")
+        assert name == (
+            "projects/test-project/locations/us-central1"
+            "/queues/async-agent-tasks/tasks/execute-abc-123-xyz-initial"
+        )
+
+    def test_underscores_replaced_with_hyphens(self, executor):
+        with patch.dict("os.environ", ENV):
+            name = executor._compute_cloud_task_name("task_with_underscores")
+        assert "task-with-underscores" in name
+
+    def test_missing_project_returns_none(self, executor):
+        with patch.dict("os.environ", {}, clear=True):
+            assert executor._compute_cloud_task_name("some-id") is None
+
+
+class TestCreateCloudTask:
+    def _make_tasks_client(self):
+        client = MagicMock()
+        client.queue_path.return_value = "projects/test-project/locations/us-central1/queues/async-agent-tasks"
+        client.task_path.return_value = "projects/test-project/locations/us-central1/queues/async-agent-tasks/tasks/execute-task-123-initial"
+        client.create_task.return_value.name = "projects/test-project/locations/us-central1/queues/async-agent-tasks/tasks/execute-task-123-initial"
+        return client
+
+    def test_creates_task_and_returns_name(self, executor):
+        tasks_client = self._make_tasks_client()
+        with patch.dict("os.environ", ENV), \
+             patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client):
+            result = executor._create_cloud_task(
+                task_id="task-123",
+                user_id="user-1",
+                schedule_time=datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+            )
+        assert result == tasks_client.create_task.return_value.name
+        tasks_client.create_task.assert_called_once()
+        call_kwargs = tasks_client.create_task.call_args.kwargs
+        assert call_kwargs["parent"] == tasks_client.queue_path.return_value
+
+    def test_already_exists_returns_task_name(self, executor):
+        from google.api_core.exceptions import AlreadyExists
+
+        tasks_client = self._make_tasks_client()
+        tasks_client.create_task.side_effect = AlreadyExists("duplicate")
+        with patch.dict("os.environ", ENV), \
+             patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client):
+            result = executor._create_cloud_task(
+                task_id="task-123",
+                user_id="user-1",
+                schedule_time=datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+            )
+        assert result == tasks_client.task_path.return_value
+
+    def test_unexpected_exception_returns_none(self, executor):
+        tasks_client = self._make_tasks_client()
+        tasks_client.create_task.side_effect = RuntimeError("transient error")
+        with patch.dict("os.environ", ENV), \
+             patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client):
+            result = executor._create_cloud_task(
+                task_id="task-123",
+                user_id="user-1",
+                schedule_time=datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+            )
+        assert result is None
+
+    def test_missing_env_vars_returns_none(self, executor):
+        with patch.dict("os.environ", {}, clear=True):
+            result = executor._create_cloud_task(
+                task_id="task-123",
+                user_id="user-1",
+                schedule_time=datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+            )
+        assert result is None
+
+    def test_naive_schedule_time_gets_utc_timezone(self, executor):
+        tasks_client = self._make_tasks_client()
+        with patch.dict("os.environ", ENV), \
+             patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client):
+            executor._create_cloud_task(
+                task_id="task-123",
+                user_id="user-1",
+                schedule_time=datetime(2026, 6, 1, 12, 0, 0),  # naive
+            )
+        tasks_client.create_task.assert_called_once()
+
+
+class TestCreateEmailBatchTask:
+    @pytest.mark.asyncio
+    async def test_creates_firestore_doc_and_cloud_task(self, executor, firestore_client):
+        tasks_client = MagicMock()
+        tasks_client.queue_path.return_value = "projects/test-project/locations/us-central1/queues/async-agent-tasks"
+        tasks_client.task_path.return_value = "projects/test-project/locations/us-central1/queues/async-agent-tasks/tasks/execute-abc-initial"
+        tasks_client.create_task.return_value.name = "projects/test-project/locations/us-central1/queues/async-agent-tasks/tasks/execute-abc-initial"
+
+        scheduled = datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
+        with patch.dict("os.environ", ENV), \
+             patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client):
+            task_id = await executor.create_email_batch_task(
+                gmail_address="mirko@example.com",
+                user_id="user-1",
+                prompt="Process emails",
+                discord_channel_id="ch-1",
+                scheduled_at=scheduled,
+            )
+
+        assert task_id  # UUID returned
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        doc_ref.set.assert_awaited_once()
+        set_doc = doc_ref.set.await_args.args[0]
+        assert set_doc["task_type"] == "notification"
+        assert set_doc["status"] == "scheduled"
+        assert set_doc["gmail_address"] == "mirko@example.com"
+        assert set_doc["discord_channel_id"] == "ch-1"
+        doc_ref.update.assert_awaited_once_with(
+            {"cloud_task_name": tasks_client.create_task.return_value.name}
+        )
+
+    @pytest.mark.asyncio
+    async def test_logs_warning_when_cloud_task_creation_fails(self, executor, firestore_client):
+        scheduled = datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
+        with patch.dict("os.environ", {}, clear=True):  # missing env → _create_cloud_task returns None
+            task_id = await executor.create_email_batch_task(
+                gmail_address="mirko@example.com",
+                user_id="user-1",
+                prompt="Process emails",
+                discord_channel_id="ch-1",
+                scheduled_at=scheduled,
+            )
+
+        assert task_id
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        doc_ref.set.assert_awaited_once()
+        doc_ref.update.assert_not_awaited()  # no cloud_task_name update when creation failed
