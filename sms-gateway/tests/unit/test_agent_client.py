@@ -8,26 +8,36 @@ from google.genai import types
 from src.agent.client import AgentEngineClient, AdkConfirmationRequest
 
 
-class _FakeAdkApp:
+class _FakeAgentEngines:
     def __init__(self, events):
         self._events = events
 
-    async def async_stream_query(self, **kwargs):
+    async def _async_stream_query(self, *, name, config=None):
         for event in self._events:
             yield event
 
 
-@pytest.mark.asyncio
-async def test_send_message_collects_text_from_dict_events():
+def _make_client(events):
     client = AgentEngineClient.__new__(AgentEngineClient)
     client._timeout = 1
-    client._adk_app = _FakeAdkApp(
+    client._resource_name = "projects/test/locations/us-central1/reasoningEngines/123"
+    client._engine_short_name = "reasoningEngines/123"
+    fake_vertexai_client = MagicMock()
+    fake_vertexai_client.agent_engines = _FakeAgentEngines(events)
+    client._client = fake_vertexai_client
+    client._adk_app = MagicMock()
+    client._init_client = MagicMock()
+    return client
+
+
+@pytest.mark.asyncio
+async def test_send_message_collects_text_from_dict_events():
+    client = _make_client(
         [
             {"content": {"parts": [{"text": "Hello "}, {"text": "world"}]}},
             {"content": {"parts": [{"text": "!"}]}},
         ]
     )
-    client._init_client = MagicMock()
 
     response = await client.send_message(
         user_id="user-123",
@@ -45,10 +55,7 @@ async def test_send_message_events_validates_dict_events():
         "author": "agent",
         "content": {"role": "model", "parts": [{"text": "Hello"}]},
     }
-    client = AgentEngineClient.__new__(AgentEngineClient)
-    client._timeout = 1
-    client._adk_app = _FakeAdkApp([event_dict])
-    client._init_client = MagicMock()
+    client = _make_client([event_dict])
 
     events = await client.send_message_events(
         user_id="user-123",
