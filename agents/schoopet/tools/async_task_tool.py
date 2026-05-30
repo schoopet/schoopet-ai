@@ -143,6 +143,10 @@ class AsyncTaskTool:
         The task runs on the deployed Agent Engine with full tool access (calendar, search,
         drive, sheets, memory). You will be notified when the task completes.
 
+        IMPORTANT: This tool requires an active Discord channel session (discord_channel_id in
+        session state). It will always fail when called from INCOMING_EMAIL_NOTIFICATION sessions
+        or other non-channel contexts. Do not attempt it in email notification processing.
+
         Args:
             task_type: Type of task - one of:
                 - "research": In-depth research requiring multiple searches

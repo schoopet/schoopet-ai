@@ -232,7 +232,8 @@ class DriveTool:
         Use this to check whether a file already exists before saving a duplicate.
 
         Args:
-            folder_id: Drive folder ID to list files from.
+            folder_id: (Required) Drive folder ID. Use 'root' to list the Drive root folder.
+                       Do not omit — the parameter is mandatory.
             query: Optional extra filter clause (e.g., "name contains 'invoice'").
             max_results: Maximum number of files to return (default: 20).
 

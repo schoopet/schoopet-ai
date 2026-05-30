@@ -87,7 +87,12 @@ class TimeTool:
         user_timezone: str = None,
         tool_context: ToolContext = None,
     ) -> str:
-        """Parse reminder-oriented natural datetime strings into exact ISO timestamps."""
+        """Parse reminder-oriented natural datetime strings into exact ISO timestamps.
+
+        Accepts both '[date] at [time]' and '[time] [date]' forms, e.g.:
+        'today at 5pm', '7am today', 'tomorrow at 7am', '9pm tomorrow',
+        'next Monday at 9am', '9am next Monday', 'in 3 hours'.
+        """
         resolved_timezone, error = self._resolve_timezone(user_timezone, tool_context)
         if error:
             return error
@@ -190,6 +195,16 @@ class TimeTool:
             target_date = base_now.date() if day_word == "today" else (base_now + timedelta(days=1)).date()
             return self._combine_date_and_time(target_date, time_part, base_now.tzinfo)
 
+        # Also accept time-first form: "7am today", "9pm tomorrow"
+        time_first_today_tomorrow = re.fullmatch(r"(.+?) (today|tomorrow)", lowered)
+        if time_first_today_tomorrow:
+            time_part = time_first_today_tomorrow.group(1)
+            day_word = time_first_today_tomorrow.group(2)
+            target_date = base_now.date() if day_word == "today" else (base_now + timedelta(days=1)).date()
+            result = self._combine_date_and_time(target_date, time_part, base_now.tzinfo)
+            if not isinstance(result, str):
+                return result
+
         next_weekday = re.fullmatch(r"next (monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?: at (.+))?", lowered)
         if next_weekday:
             target_weekday = self._weekday_index(next_weekday.group(1))
@@ -200,9 +215,25 @@ class TimeTool:
             target_date = (base_now + timedelta(days=days_ahead)).date()
             return self._combine_date_and_time(target_date, time_part, base_now.tzinfo)
 
+        # Also accept time-first form: "9am next monday"
+        time_first_weekday = re.fullmatch(
+            r"(.+?) next (monday|tuesday|wednesday|thursday|friday|saturday|sunday)", lowered
+        )
+        if time_first_weekday:
+            time_part = time_first_weekday.group(1)
+            target_weekday = self._weekday_index(time_first_weekday.group(2))
+            days_ahead = (target_weekday - base_now.weekday()) % 7
+            if days_ahead == 0:
+                days_ahead = 7
+            target_date = (base_now + timedelta(days=days_ahead)).date()
+            result = self._combine_date_and_time(target_date, time_part, base_now.tzinfo)
+            if not isinstance(result, str):
+                return result
+
         return (
             "Could not parse datetime. Supported forms include ISO datetimes, "
-            "'today at 5pm', 'tomorrow at 9am', 'next monday at 8:30pm', and 'in 3 hours'."
+            "'today at 5pm', '7am today', 'tomorrow at 9am', '9pm tomorrow', "
+            "'next monday at 8:30pm', '8:30pm next monday', and 'in 3 hours'."
         )
 
     def _parse_recurrence_rule(self, rule: str, base_now: datetime):

@@ -91,9 +91,11 @@ class CalendarTool:
             )
 
         def _parse_date(s: str) -> datetime:
-            # Accept YYYY-MM-DD, YYYY-MM-DDTHH:MM:SSZ, and similar ISO variants
-            # by truncating to the date portion before parsing.
-            return datetime.strptime(s[:10], "%Y-%m-%d")
+            # Accept YYYY-MM-DD, full ISO 8601 datetimes, and Z-suffix variants.
+            try:
+                return datetime.fromisoformat(s.replace("Z", "+00:00"))
+            except ValueError:
+                return datetime.strptime(s, "%Y-%m-%d")
 
         try:
             if start_date:
