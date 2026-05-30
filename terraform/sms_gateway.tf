@@ -98,4 +98,8 @@ env {
   }
 
   depends_on = [google_project_service.apis["run.googleapis.com"]]
+
+  lifecycle {
+    ignore_changes = [scaling]
+  }
 }
