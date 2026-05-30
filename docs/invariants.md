@@ -35,8 +35,8 @@ Known review items for these invariants are tracked in [oauth-flow-issues.md](/U
 2. New Drive/Docs/Sheets creations require confirmation.
 3. Writes to existing Sheet, Doc, or Drive folder resources require resource-scoped confirmation unless the resource ID is already approved in session state.
 4. The resource confirmation state key prefix is `_resource_confirmed_` and must stay identical between the agent and gateway task executor.
-5. Offline background tasks may only bypass confirmation for resource IDs present in `allowed_resource_ids`.
-6. `allowed_resource_ids` must be a flat list of concrete resource IDs, not a broad permission class.
+5. Offline background tasks seed `_offline_mode=True` so resource-scoped write tools do not suspend for human confirmation. Tools still execute normally and must surface real API authorization/not-found errors to the model.
+6. `allowed_resource_ids` must be a flat list of concrete resource IDs, not a broad permission class. It is retained for auditability and live/non-offline pre-authorization.
 
 ## Async Tasks
 

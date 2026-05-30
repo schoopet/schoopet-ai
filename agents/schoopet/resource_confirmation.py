@@ -22,8 +22,9 @@ from google.adk.tools import ToolContext
 
 logger = logging.getLogger(__name__)
 
-# Session-state key prefix shared with gateway async task execution.
+# Session-state keys shared with gateway async task execution.
 _RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
+_OFFLINE_MODE_KEY = "_offline_mode"
 
 
 def _approved_resource_ids(state_keys: list[str]) -> list[str]:
@@ -57,6 +58,16 @@ def make_resource_confirmation(id_arg: str):
 
         state_keys = list(tool_context.state.to_dict().keys())
         approved_resource_ids = _approved_resource_ids(state_keys)
+        if tool_context.state.get(_OFFLINE_MODE_KEY):
+            logger.info(
+                "resource_confirmation: decision=approved source=offline_mode "
+                "id_arg=%s actual_resource_id=%s approved_resource_ids=%s",
+                id_arg,
+                resource_id,
+                approved_resource_ids,
+            )
+            return False
+
         found = bool(tool_context.state.get(state_key))
         logger.info(
             "resource_confirmation: check id_arg=%s actual_resource_id=%s "

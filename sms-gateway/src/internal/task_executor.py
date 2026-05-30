@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 ASYNC_TASKS_COLLECTION = "async_tasks"
 RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
+OFFLINE_MODE_KEY = "_offline_mode"
+SCHEDULE_NEXT_RE = re.compile(
+    r"(?im)^\s*SCHEDULE_NEXT:\s*(?P<rule>[^|\n]+?)\s*\|\s*(?P<when>\S+)\s*$"
+)
 
 
 def _should_suppress(message: str) -> bool:
@@ -62,6 +66,7 @@ class GatewayTaskExecutor:
             self._validate_delivery_target(task)
             prompt = self._build_task_prompt(task)
             result = await self._execute_task(task, prompt)
+            await self._schedule_followup_if_requested(task, result)
             await self._update_task_result(task_id, result)
         except TaskTimeoutError as exc:
             logger.warning("Task %s timed out — resetting to pending for Cloud Tasks retry", task_id)
@@ -160,46 +165,6 @@ class GatewayTaskExecutor:
                 session_id=session_id,
                 message=prompt,
             )
-            # In the offline path there is no human to approve confirmations.
-            # Auto-decline so the model receives a rejection and can recover.
-            # Loop because the model may retry the same tool after a rejection.
-            task_id = task.get("task_id")
-            _MAX_CONFIRMATION_ROUNDS = 5
-            for _round in range(_MAX_CONFIRMATION_ROUNDS):
-                confirmations = self._agent_client.extract_confirmation_requests(events)
-                if not confirmations:
-                    break
-                logger.warning(
-                    "Task %s: %d confirmation request(s) in offline mode — auto-declining "
-                    "(round %d/%d)",
-                    task_id, len(confirmations), _round + 1, _MAX_CONFIRMATION_ROUNDS,
-                )
-                for confirmation in confirmations:
-                    resource_id = (
-                        confirmation.tool_args.get("sheet_id")
-                        or confirmation.tool_args.get("document_id")
-                        or confirmation.tool_args.get("folder_id")
-                        or "unknown"
-                    )
-                    logger.info(
-                        "[confirm] Agent suspended (offline): task_id=%s tool=%s "
-                        "args=%s fc_id=%s",
-                        task_id, confirmation.tool_name,
-                        confirmation.tool_args, confirmation.function_call_id,
-                    )
-                    logger.info(
-                        "[confirm] Auto-declining (offline): task_id=%s tool=%s resource=%s",
-                        task_id, confirmation.tool_name, resource_id,
-                    )
-                events = await self._agent_client.send_confirmation_responses_batch(
-                    user_id=user_id,
-                    session_id=session_id,
-                    confirmations=[(c.function_call_id, False) for c in confirmations],
-                )
-                logger.info(
-                    "[confirm] Agent resumed (offline): task_id=%s events=%d",
-                    task_id, len(events),
-                )
             result = self._agent_client.extract_text(events)
             if not result:
                 raise RuntimeError(
@@ -218,6 +183,7 @@ class GatewayTaskExecutor:
         state: dict[str, Any] = build_allowed_resource_state(
             task.get("allowed_resource_ids", [])
         )
+        state[OFFLINE_MODE_KEY] = True
         state["channel"] = "discord"
         for key in (
             "notification_session_scope",
@@ -337,6 +303,88 @@ class GatewayTaskExecutor:
         )
 
         return "\n".join(parts)
+
+    async def _schedule_followup_if_requested(
+        self,
+        task: dict[str, Any],
+        result: str,
+    ) -> None:
+        parsed = self._parse_schedule_next(result)
+        if not parsed:
+            return
+
+        recurrence_rule, scheduled_at = parsed
+        followup_id = str(uuid.uuid4())
+        doc = {
+            "task_id": followup_id,
+            "user_id": task["user_id"],
+            "task_type": task.get("task_type", "research"),
+            "instruction": task["instruction"],
+            "context": task.get("context", {}),
+            "allowed_resource_ids": task.get("allowed_resource_ids", []),
+            "status": "scheduled",
+            "scheduled_at": scheduled_at,
+            "created_at": datetime.now(timezone.utc),
+            "recurrence_rule": recurrence_rule,
+            "parent_task_id": task.get("task_id"),
+            "notification_session_scope": task.get("notification_session_scope", ""),
+            "notification_target_type": task.get("notification_target_type", ""),
+            "discord_channel_id": task.get("discord_channel_id", ""),
+            "discord_channel_name": task.get("discord_channel_name", ""),
+            "target_channel_id": task.get("target_channel_id", ""),
+        }
+
+        now = datetime.now(timezone.utc)
+        schedule_utc = scheduled_at.astimezone(timezone.utc)
+        if schedule_utc <= now + timedelta(days=30):
+            cloud_task_name = self._compute_cloud_task_name(followup_id)
+            if cloud_task_name:
+                doc["cloud_task_name"] = cloud_task_name
+
+        doc_ref = self._db.collection(ASYNC_TASKS_COLLECTION).document(followup_id)
+        await doc_ref.set(doc)
+
+        created_name = None
+        if doc.get("cloud_task_name"):
+            created_name = self._create_cloud_task(
+                task_id=followup_id,
+                user_id=task["user_id"],
+                schedule_time=scheduled_at,
+            )
+            if not created_name:
+                try:
+                    await doc_ref.update({"cloud_task_name": firestore.DELETE_FIELD})
+                except Exception:
+                    logger.warning(
+                        "Recurring follow-up task %s: failed to roll back cloud_task_name",
+                        followup_id,
+                        exc_info=True,
+                    )
+
+        logger.info(
+            "Task %s scheduled recurring follow-up task %s for %s rule=%r queued=%s",
+            task.get("task_id"),
+            followup_id,
+            scheduled_at.isoformat(),
+            recurrence_rule,
+            bool(created_name),
+        )
+
+    def _parse_schedule_next(self, result: str) -> Optional[tuple[str, datetime]]:
+        match = SCHEDULE_NEXT_RE.search(result or "")
+        if not match:
+            return None
+
+        recurrence_rule = match.group("rule").strip()
+        raw_when = match.group("when").strip()
+        try:
+            scheduled_at = datetime.fromisoformat(raw_when.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("Ignoring invalid SCHEDULE_NEXT datetime: %r", raw_when)
+            return None
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+        return recurrence_rule, scheduled_at
 
     async def create_email_batch_task(
         self,

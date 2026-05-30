@@ -1,10 +1,9 @@
 """Unit tests for gateway-owned async task execution."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from src.agent.client import AdkConfirmationRequest
 from src.internal.task_executor import (
     GatewayTaskExecutor,
     build_allowed_resource_state,
@@ -122,6 +121,7 @@ class TestGatewayTaskExecutor:
             state={
                 "_resource_confirmed_sheet-1": True,
                 "_resource_confirmed_doc-1": True,
+                "_offline_mode": True,
                 "channel": "discord",
                 "session_scope": "discord:guild:g1:channel:c1",
                 "discord_channel_id": "c1",
@@ -306,79 +306,65 @@ class TestGatewayTaskExecutor:
         discord_sender.send_channel.assert_any_await("c1", "Fallback text.")
 
     @pytest.mark.asyncio
-    async def test_offline_confirmation_auto_declined_and_task_succeeds(
+    async def test_offline_task_does_not_auto_decline_confirmation_requests(
         self, executor, firestore_client, agent_client, discord_sender
     ):
-        confirmation = AdkConfirmationRequest(
-            function_call_id="fc-123",
-            original_function_call={
-                "name": "append_record_to_sheet",
-                "args": {"sheet_id": "bad-id,sheet_tab:", "record": {}},
-            },
-            tool_confirmation={},
+        result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is True
+        agent_client.extract_confirmation_requests.assert_not_called()
+        agent_client.send_confirmation_responses_batch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_schedule_next_creates_recurring_followup_task(
+        self, executor, firestore_client, agent_client, discord_sender
+    ):
+        next_run = datetime.now(timezone.utc) + timedelta(days=7)
+        agent_client.extract_text = MagicMock(
+            return_value=(
+                "Added 3 restaurants.\n"
+                f"SCHEDULE_NEXT: every week | {next_run.isoformat()}"
+            )
         )
-        # Model accepts the rejection on the first try and produces a text response.
-        agent_client.extract_confirmation_requests = MagicMock(side_effect=[[confirmation], []])
-        agent_client.send_confirmation_responses_batch = AsyncMock(return_value=["follow-up-event"])
-        agent_client.extract_text = MagicMock(return_value="29 books transferred; 1 failed: sheet_id 'bad-id,sheet_tab:' not authorized")
+        with patch.object(
+            executor,
+            "_compute_cloud_task_name",
+            return_value="projects/p/tasks/followup",
+        ), patch.object(
+            executor,
+            "_create_cloud_task",
+            return_value="projects/p/tasks/followup",
+        ):
+            result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is True
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        doc_ref.set.assert_awaited_once()
+        followup_doc = doc_ref.set.await_args.args[0]
+        assert followup_doc["status"] == "scheduled"
+        assert followup_doc["task_type"] == "research"
+        assert followup_doc["instruction"] == "Research AI"
+        assert followup_doc["context"] == {"topic": "AI"}
+        assert followup_doc["allowed_resource_ids"] == ["sheet-1", "doc-1"]
+        assert followup_doc["recurrence_rule"] == "every week"
+        assert followup_doc["parent_task_id"] == TASK_ID
+        assert followup_doc["discord_channel_id"] == "c1"
+        assert followup_doc["scheduled_at"].isoformat() == next_run.isoformat()
+        assert followup_doc["cloud_task_name"] == "projects/p/tasks/followup"
+
+    @pytest.mark.asyncio
+    async def test_invalid_schedule_next_is_ignored(
+        self, executor, firestore_client, agent_client
+    ):
+        agent_client.extract_text = MagicMock(
+            return_value="Done.\nSCHEDULE_NEXT: every week | not-a-date"
+        )
 
         result = await executor.execute_task(TASK_ID)
 
         assert result["success"] is True
-        agent_client.send_confirmation_responses_batch.assert_awaited_once()
-        call_kwargs = agent_client.send_confirmation_responses_batch.await_args.kwargs
-        assert call_kwargs["confirmations"] == [("fc-123", False)]
-        discord_sender.send_channel.assert_awaited_once()
-        _, text = discord_sender.send_channel.await_args.args
-        assert "29 books" in text
-
-    @pytest.mark.asyncio
-    async def test_offline_confirmation_empty_followup_still_fails(
-        self, executor, firestore_client, agent_client, discord_sender
-    ):
-        confirmation = AdkConfirmationRequest(
-            function_call_id="fc-456",
-            original_function_call={
-                "name": "append_record_to_sheet",
-                "args": {"sheet_id": "bad-id", "record": {}},
-            },
-            tool_confirmation={},
-        )
-        # Model keeps retrying the same tool — exhaust all 5 rounds, then fail.
-        agent_client.extract_confirmation_requests = MagicMock(return_value=[confirmation])
-        agent_client.send_confirmation_responses_batch = AsyncMock(return_value=["follow-up-event"])
-        agent_client.extract_text = MagicMock(return_value="")
-
-        result = await executor.execute_task(TASK_ID)
-
-        assert result["success"] is False
-        assert "empty response" in result["error"].lower()
-        assert agent_client.send_confirmation_responses_batch.await_count == 5
-
-    @pytest.mark.asyncio
-    async def test_offline_confirmation_model_retries_once_then_succeeds(
-        self, executor, firestore_client, agent_client, discord_sender
-    ):
-        confirmation = AdkConfirmationRequest(
-            function_call_id="fc-789",
-            original_function_call={
-                "name": "delete_calendar_event",
-                "args": {"event_id": "evt-1"},
-            },
-            tool_confirmation={},
-        )
-        # First decline: model retries; second decline: model gives up and explains.
-        agent_client.extract_confirmation_requests = MagicMock(
-            side_effect=[[confirmation], [confirmation], []]
-        )
-        agent_client.send_confirmation_responses_batch = AsyncMock(return_value=["follow-up-event"])
-        agent_client.extract_text = MagicMock(return_value="Could not delete the event — confirmation required.")
-
-        result = await executor.execute_task(TASK_ID)
-
-        assert result["success"] is True
-        assert agent_client.send_confirmation_responses_batch.await_count == 2
-        discord_sender.send_channel.assert_awaited_once()
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        doc_ref.set.assert_not_awaited()
 
 
 ENV = {

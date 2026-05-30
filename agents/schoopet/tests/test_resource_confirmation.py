@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from agents.schoopet.resource_confirmation import (
+    _OFFLINE_MODE_KEY,
     _RESOURCE_CONFIRMED_PREFIX,
     _approved_resource_ids,
     make_resource_confirmation,
@@ -50,6 +51,23 @@ async def test_resource_confirmation_requires_confirmation_for_unapproved_resour
     assert "decision=require_confirmation" in caplog.text
     assert "actual_resource_id=doc-456" in caplog.text
     assert "approved_resource_ids=['sheet-123']" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_resource_confirmation_skips_prompt_in_offline_mode(caplog):
+    caplog.set_level(logging.INFO)
+    check = make_resource_confirmation("sheet_id")
+    state = _State({_OFFLINE_MODE_KEY: True})
+    tool_context = SimpleNamespace(state=state, tool_confirmation=None)
+
+    requires_confirmation = await check(
+        tool_context=tool_context,
+        sheet_id="not-preapproved",
+    )
+
+    assert requires_confirmation is False
+    assert "decision=approved source=offline_mode" in caplog.text
+    assert "actual_resource_id=not-preapproved" in caplog.text
 
 
 def test_approved_resource_ids_extracts_flat_resource_ids():

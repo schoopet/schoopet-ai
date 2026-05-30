@@ -143,7 +143,7 @@ There are two broad confirmation shapes:
 - one-off confirmations, such as creating or updating calendar events
 - resource-scoped confirmations for existing Sheet, Doc, and Drive folder IDs
 
-Resource-scoped confirmations store `_resource_confirmed_<resource-id>` in ADK session state after approval. Background tasks cannot ask live confirmation questions, so task creation can pass `allowed_resource_ids`. The gateway seeds the task Agent Engine session with the same state keys.
+Resource-scoped confirmations store `_resource_confirmed_<resource-id>` in ADK session state after approval. Background tasks cannot ask live confirmation questions, so the gateway also seeds `_offline_mode=True`; resource confirmation hooks skip suspension in that mode and let tools return their real API result or error. Task creation can still pass `allowed_resource_ids` for auditability and non-offline pre-authorization.
 
 ## Background Tasks
 
@@ -156,7 +156,7 @@ Immediate flow:
 3. Tool creates a Cloud Task targeting `/internal/tasks/execute`.
 4. Gateway authenticates the internal request.
 5. Gateway atomically claims the task by moving `pending` or `scheduled` to `running`.
-6. Gateway creates a fresh Agent Engine session with channel and allowed-resource state.
+6. Gateway creates a fresh Agent Engine session with channel, offline-mode, and allowed-resource state.
 7. Gateway sends the task prompt to the agent.
 8. Gateway records `completed` or `failed`.
 9. Gateway sends the result to the configured Discord channel.
