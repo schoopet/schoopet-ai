@@ -4,9 +4,9 @@ uvicorn>=0.27.0
 python-multipart>=0.0.6
 
 # Google Cloud
-google-adk[agent-identity]==1.33.0
+google-adk[agent-identity]==2.1.0
 google-genai==1.73.1
-google-cloud-aiplatform==1.148.1
+google-cloud-aiplatform==1.154.0
 google-cloud-firestore>=2.14.0
 google-cloud-secret-manager>=2.16.0
 google-cloud-storage>=2.14.0,<3.0
