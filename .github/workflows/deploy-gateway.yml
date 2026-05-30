@@ -69,7 +69,15 @@ jobs:
           printf '```\n' >> "$GITHUB_STEP_SUMMARY"
           cat /tmp/plan.txt >> "$GITHUB_STEP_SUMMARY"
           printf '```\n' >> "$GITHUB_STEP_SUMMARY"
-          echo "has-changes=$([ $PLAN_EXIT -eq 2 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          if [ $PLAN_EXIT -eq 2 ]; then
+            # Auto-apply if the only changes are Cloud Run service updates (e.g. image digest).
+            # Anything else (IAM, Pub/Sub, scheduler, etc.) still requires approval.
+            NON_CLOUDRUN=$(terraform show -json tfplan \
+              | jq '[.resource_changes[] | select(.change.actions != ["no-op"] and .type != "google_cloud_run_v2_service")] | length')
+            echo "has-changes=$([ "$NON_CLOUDRUN" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-changes=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
