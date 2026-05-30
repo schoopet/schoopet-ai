@@ -41,9 +41,20 @@ if [ -f "$SECRETS_FILE" ]; then
 fi
 
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT}"
-REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
+ENGINE_REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 CONNECTOR_ID="google-personal-${ENV_NAME}"
 ENGINE_ID="${PERSONAL_AGENT_ENGINE_ID}"
+
+# Derive connector location from the full connector name if already set in env,
+# so dev (global) and prod (us-central1) use the right endpoint.
+# Format: projects/<proj>/locations/<loc>/connectors/<id>
+if [ -n "$IAM_CONNECTOR_GOOGLE_PERSONAL_NAME" ]; then
+    CONNECTOR_LOCATION=$(echo "$IAM_CONNECTOR_GOOGLE_PERSONAL_NAME" | awk -F'/' '{print $4}')
+    CONNECTOR_NAME="$IAM_CONNECTOR_GOOGLE_PERSONAL_NAME"
+else
+    CONNECTOR_LOCATION="${ENGINE_REGION}"
+    CONNECTOR_NAME="projects/${PROJECT_ID}/locations/${CONNECTOR_LOCATION}/connectors/${CONNECTOR_ID}"
+fi
 
 if [ -z "$PROJECT_ID" ]; then
     echo "Error: GOOGLE_CLOUD_PROJECT not set"
@@ -61,10 +72,10 @@ fi
 echo "=========================================="
 echo "Provisioning IAM Connector"
 echo "=========================================="
-echo "Environment: $ENV_NAME"
-echo "Project:     $PROJECT_ID"
-echo "Region:      $REGION"
-echo "Connector:   $CONNECTOR_ID"
+echo "Environment:        $ENV_NAME"
+echo "Project:            $PROJECT_ID"
+echo "Connector location: $CONNECTOR_LOCATION"
+echo "Connector:          $CONNECTOR_ID"
 echo "=========================================="
 
 # ── 1. Enable APIs ────────────────────────────────────────────────────────────
@@ -80,7 +91,7 @@ echo "APIs enabled."
 echo ""
 echo "Checking for existing connector..."
 EXISTING=$(gcloud alpha agent-identity connectors describe "$CONNECTOR_ID" \
-    --project="$PROJECT_ID" --location="$REGION" --format="value(name)" 2>/dev/null || true)
+    --project="$PROJECT_ID" --location="$CONNECTOR_LOCATION" --format="value(name)" 2>/dev/null || true)
 
 if [ -n "$EXISTING" ]; then
     echo "Connector already exists: $EXISTING"
@@ -88,7 +99,7 @@ else
     echo "Creating connector..."
     gcloud alpha agent-identity connectors create "$CONNECTOR_ID" \
         --project="$PROJECT_ID" \
-        --location="$REGION" \
+        --location="$CONNECTOR_LOCATION" \
         --three-legged-oauth-authorization-url="https://accounts.google.com/o/oauth2/v2/auth?access_type=offline&prompt=consent" \
         --three-legged-oauth-token-url="https://oauth2.googleapis.com/token" \
         --three-legged-oauth-client-id="${GOOGLE_OAUTH_CLIENT_ID}" \
@@ -97,15 +108,13 @@ else
     echo "Connector created."
 fi
 
-CONNECTOR_NAME="projects/${PROJECT_ID}/locations/${REGION}/connectors/${CONNECTOR_ID}"
-
 # ── 3. Grant agent principal roles/iamconnectors.user ────────────────────────
 
 echo ""
 echo "Fetching agent engine effective identity..."
 TOKEN=$(gcloud auth print-access-token)
 EFFECTIVE_IDENTITY=$(curl -s -H "Authorization: Bearer $TOKEN" \
-    "https://${REGION}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/${REGION}/reasoningEngines/${ENGINE_ID}" \
+    "https://${ENGINE_REGION}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/${ENGINE_REGION}/reasoningEngines/${ENGINE_ID}" \
     | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('spec',{}).get('effectiveIdentity',''))")
 
 if [ -z "$EFFECTIVE_IDENTITY" ]; then
@@ -123,7 +132,7 @@ RESPONSE=$(curl -s -X POST \
     -H "Authorization: Bearer $TOKEN" \
     -H "x-goog-user-project: $PROJECT_ID" \
     -H "Content-Type: application/json" \
-    "https://iamconnectors.googleapis.com/v1alpha/projects/${PROJECT_ID}/locations/${REGION}/connectors/${CONNECTOR_ID}:setIamPolicy" \
+    "https://iamconnectors.googleapis.com/v1alpha/${CONNECTOR_NAME}:setIamPolicy" \
     -d "{
         \"policy\": {
             \"bindings\": [{

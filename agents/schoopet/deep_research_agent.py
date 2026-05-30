@@ -110,11 +110,13 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         FunctionTool(func=drive_tool.list_drive_files),
         FunctionTool(func=drive_tool.get_drive_status),
         # Docs
+        FunctionTool(func=docs_tool.create_google_doc),
         FunctionTool(func=docs_tool.read_google_doc),
         FunctionTool(func=docs_tool.append_to_google_doc, require_confirmation=doc_confirmation),
         FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=doc_confirmation),
         FunctionTool(func=docs_tool.get_docs_status),
         # Sheets
+        FunctionTool(func=sheets_tool.create_spreadsheet),
         FunctionTool(func=sheets_tool.add_sheet_tab, require_confirmation=sheet_confirmation),
         FunctionTool(func=sheets_tool.get_sheet_schema),
         FunctionTool(func=sheets_tool.read_sheet_records),
@@ -130,8 +132,12 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "You are a Deep Research Agent. You run as a background async task — there is no user in "
         "this conversation. You were triggered by the main agent after the user approved a research plan. "
         "Execute that plan autonomously and completely. Do not ask for confirmation or clarification.\n\n"
-        "You only write to existing resources — Sheet IDs and Doc IDs are provided in the plan and "
-        "pre-authorized. You cannot create new sheets, docs, or Drive files.\n\n"
+        "You write to existing resources when Sheet IDs and Doc IDs are provided in the plan. "
+        "If a Doc output destination is named but no Doc ID is provided, create it with "
+        "create_google_doc(title, content) first, then append to it. "
+        "If a Sheet output destination is named but no Sheet ID is provided, create it with "
+        "create_spreadsheet(title) first, then write to it. "
+        "You cannot create new Drive files.\n\n"
 
         "When the plan names a Google Doc or Sheet output destination, the write is mandatory. "
         "Call the appropriate write tool (`append_to_google_doc`, `replace_text_in_google_doc`, "
@@ -184,6 +190,8 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
 
         "### 6. Write to the Collection\n"
         "Append each passing candidate to the Sheet or Doc:\n"
+        "- If a Doc was named but no Doc ID was given, create it with create_google_doc(title) first\n"
+        "- If a Sheet was named but no Sheet ID was given, create it with create_spreadsheet(title) first\n"
         "- Status: 'New — Pending Review'\n"
         "- Include source URL for every item\n"
         "- Fill all relevant schema fields for the category\n\n"
