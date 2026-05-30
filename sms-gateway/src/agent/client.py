@@ -8,6 +8,7 @@ import time
 from typing import Any, Union
 
 import vertexai
+import vertexai.agent_engines
 from google.adk.events import Event
 from google.genai import types
 
@@ -170,9 +171,7 @@ class AgentEngineClient:
             f"projects/{project_id}/locations/{location}"
             f"/reasoningEngines/{agent_engine_id}"
         )
-        self._engine_short_name = f"reasoningEngines/{agent_engine_id}"
-        self._client = None
-        self._adk_app = None
+        self._engine = None
         self._init_client()
         logger.info(f"Initialized AgentEngineClient for {self._resource_name}")
 
@@ -180,10 +179,10 @@ class AgentEngineClient:
         """(Re)initialize the Vertex AI client and agent engine reference.
 
         Called at startup and again whenever the token expires (401).
-        vertexai.Client is instance-based and picks up fresh ADC credentials.
+        vertexai.init() reinitializes the global config with fresh ADC credentials.
         """
-        self._client = vertexai.Client(project=self._project_id, location=self._location)
-        self._adk_app = self._client.aio.agent_engines
+        vertexai.init(project=self._project_id, location=self._location)
+        self._engine = vertexai.agent_engines.AgentEngine(self._resource_name)
 
     async def create_session(self, user_id: str, state: dict | None = None) -> str:
         """Create a new Agent Engine session.
@@ -195,13 +194,8 @@ class AgentEngineClient:
         Returns:
             The session ID string.
         """
-        config = {"session_state": state} if state else {}
-        op = await self._adk_app.sessions.create(
-            name=self._engine_short_name,
-            user_id=user_id,
-            config=config,
-        )
-        session_id = op.response.name.split("/")[-1]
+        result = await self._engine.async_create_session(user_id=user_id, state=state)
+        session_id = result["id"]
         logger.info(f"Created session {session_id} for user {user_id}")
         return session_id
 
@@ -212,9 +206,7 @@ class AgentEngineClient:
         block downstream session creation.
         """
         try:
-            await self._adk_app.sessions.delete(
-                name=f"{self._engine_short_name}/sessions/{session_id}",
-            )
+            await self._engine.async_delete_session(user_id=user_id, session_id=session_id)
             logger.info(f"Deleted session {session_id} for user {user_id}")
         except Exception as e:
             logger.warning(
@@ -279,15 +271,10 @@ class AgentEngineClient:
 
         async def stream_response():
             try:
-                async for event in self._client.agent_engines._async_stream_query(
-                    name=self._resource_name,
-                    config={
-                        "input": {
-                            "user_id": user_id,
-                            "session_id": session_id,
-                            "message": msg_payload,
-                        }
-                    },
+                async for event in self._engine.async_stream_query(
+                    user_id=user_id,
+                    session_id=session_id,
+                    message=msg_payload,
                 ):
                     # Reinitialize client on expired token and propagate so caller retries
                     if isinstance(event, dict) and event.get("code") == 401:

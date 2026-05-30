@@ -8,24 +8,26 @@ from google.genai import types
 from src.agent.client import AgentEngineClient, AdkConfirmationRequest
 
 
-class _FakeAgentEngines:
+class _FakeEngine:
     def __init__(self, events):
         self._events = events
 
-    async def _async_stream_query(self, *, name, config=None):
+    async def async_stream_query(self, **kwargs):
         for event in self._events:
             yield event
+
+    async def async_create_session(self, **kwargs):
+        return {"id": "test-session-id"}
+
+    async def async_delete_session(self, **kwargs):
+        pass
 
 
 def _make_client(events):
     client = AgentEngineClient.__new__(AgentEngineClient)
     client._timeout = 1
     client._resource_name = "projects/test/locations/us-central1/reasoningEngines/123"
-    client._engine_short_name = "reasoningEngines/123"
-    fake_vertexai_client = MagicMock()
-    fake_vertexai_client.agent_engines = _FakeAgentEngines(events)
-    client._client = fake_vertexai_client
-    client._adk_app = MagicMock()
+    client._engine = _FakeEngine(events)
     client._init_client = MagicMock()
     return client
 

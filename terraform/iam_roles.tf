@@ -6,8 +6,5 @@ resource "google_project_iam_custom_role" "agent_engine_user" {
   permissions = [
     "aiplatform.reasoningEngines.query",
     "aiplatform.reasoningEngines.get",
-    "aiplatform.sessions.create",
-    "aiplatform.sessions.delete",
-    "aiplatform.sessions.get",
   ]
 }
