@@ -2,15 +2,66 @@ name: Deploy Gateway
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, dev]
     paths:
       - 'sms-gateway/**'
       - 'terraform/**'
       - '.github/workflows/deploy-gateway.yml'
 
 jobs:
+  deploy-dev:
+    name: Build and deploy to dev
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_DEV_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEV_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '~> 1.5'
+          terraform_wrapper: false
+
+      - name: Build and push image
+        id: image
+        run: |
+          IMAGE="us-docker.pkg.dev/schoopet-dev/schoopet/shoopet-sms-gateway"
+          gcloud builds submit --tag "$IMAGE" --project schoopet-dev \
+            --gcs-source-staging-dir="gs://schoopet-dev_cloudbuild/source/" \
+            --gcs-log-dir="gs://schoopet-dev_cloudbuild/logs/" \
+            sms-gateway/
+          DIGEST=$(gcloud artifacts docker images describe "$IMAGE" \
+            --project schoopet-dev \
+            --format="value(image_summary.digest)" 2>/dev/null)
+          echo "ref=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -backend-config="prefix=env/dev"
+
+      - name: Terraform apply
+        working-directory: terraform
+        run: |
+          terraform apply -auto-approve \
+            -var-file="environments/dev.tfvars" \
+            -var="sms_gateway_image=${{ steps.image.outputs.ref }}"
+
   build-and-plan:
     name: Build image and plan Terraform changes
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
       contents: read
