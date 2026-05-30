@@ -4,29 +4,21 @@ gemini-3.x preview models are only available on the global endpoint
 (aiplatform.googleapis.com), not the regional endpoint
 (us-central1-aiplatform.googleapis.com).
 
-This subclass overrides api_client to create the genai Client with
-location='global', which causes the genai library to use the global
-base URL automatically.
+This subclass follows the ADK 2.x documented pattern for customizing the
+underlying Client: use @cached_property and pass location='global' with
+vertexai=True so the genai library routes to aiplatform.googleapis.com
+automatically.
 """
-import os
+from functools import cached_property
 
 from google.adk.models.google_llm import Gemini as _BaseGemini
-from google.genai import types
 
 
 class GlobalGemini(_BaseGemini):
     """Gemini model that routes requests to the global Vertex AI endpoint."""
 
-    @property
+    @cached_property
     def api_client(self):
         from google.genai import Client
 
-        project = os.environ.get("GOOGLE_CLOUD_PROJECT")
-        return Client(
-            project=project,
-            location="global",
-            http_options=types.HttpOptions(
-                headers=self._tracking_headers(),
-                retry_options=self.retry_options,
-            ),
-        )
+        return Client(vertexai=True, location="global")
