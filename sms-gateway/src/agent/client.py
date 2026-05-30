@@ -8,6 +8,7 @@ import time
 from typing import Any, Union
 
 import vertexai
+from vertexai.agent_engines import AgentEngine as _AgentEngine
 from google.adk.events import Event
 from google.genai import types
 
@@ -170,18 +171,18 @@ class AgentEngineClient:
             f"projects/{project_id}/locations/{location}"
             f"/reasoningEngines/{agent_engine_id}"
         )
-        self._client = None
+        vertexai.init(project=project_id, location=location)
         self._adk_app = None
         self._init_client()
         logger.info(f"Initialized AgentEngineClient for {self._resource_name}")
 
     def _init_client(self):
-        """(Re)initialize the Vertex AI client and agent engine reference.
+        """(Re)initialize the agent engine reference.
 
         Called at startup and again whenever the token expires (401).
+        AgentEngine re-reads ADC credentials on construction.
         """
-        self._client = vertexai.Client(project=self._project_id, location=self._location)
-        self._adk_app = self._client.agent_engines.get(name=self._resource_name)
+        self._adk_app = _AgentEngine(resource_name=self._resource_name)
 
     async def create_session(self, user_id: str, state: dict | None = None) -> str:
         """Create a new Agent Engine session.
