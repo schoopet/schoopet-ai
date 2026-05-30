@@ -140,3 +140,30 @@ async def test_public_read_google_doc_returns_json():
     parsed = json.loads(result)
     assert parsed["document_id"] == "doc123"
     assert parsed["title"] == "Project Plan"
+
+
+@pytest.mark.asyncio
+async def test_create_google_doc_preapproves_new_doc_for_offline_writes():
+    """Newly created docs must auto-approve themselves so offline (no-user)
+    tasks can immediately append/replace text without an interactive confirmation."""
+    from agents.schoopet.resource_confirmation import _RESOURCE_CONFIRMED_PREFIX
+
+    tool = DocsTool.__new__(DocsTool)
+    tool._oauth_client = MagicMock()
+    tool._get_services = AsyncMock(return_value=(MagicMock(), MagicMock()))
+    tool._create_google_doc_with_token = MagicMock(
+        return_value={
+            "document_id": "newdoc999",
+            "document_url": "https://docs.google.com/document/d/newdoc999/edit",
+            "title": "Research Output",
+            "folder_id": "",
+        }
+    )
+    state: dict = {}
+    tool_context = MagicMock()
+    tool_context.user_id = "+15555550123"
+    tool_context.state = state
+
+    await tool.create_google_doc("Research Output", "", "", tool_context)
+
+    assert state[f"{_RESOURCE_CONFIRMED_PREFIX}newdoc999"] is True

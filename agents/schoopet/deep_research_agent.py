@@ -5,12 +5,16 @@ from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.load_memory_tool import LoadMemoryTool
 from google.adk.tools.google_search_tool import GoogleSearchTool
 from google.adk.tools.exit_loop_tool import exit_loop
+from google.adk.tools.agent_tool import AgentTool
 from .global_gemini import GlobalGemini
 from .calendar_tool import CalendarTool
+from .code_executor_agent import create_code_executor_agent
 from .drive_sheets_tool import DocsTool, DriveTool, SheetsTool
-from .memory_tool import save_memory, save_multiple_memories
+from .memory_tool import save_memory, save_multiple_memories, save_session_to_memory
 from .model_callbacks import on_tool_error
+from .preferences_tool import PreferencesTool
 from .resource_confirmation import sheet_confirmation, doc_confirmation
+from .time_tool import TimeTool
 
 
 _FLASH_MODEL = "gemini-3-flash-preview"
@@ -98,11 +102,22 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
     drive_tool = DriveTool()
     docs_tool = DocsTool()
     sheets_tool = SheetsTool()
+    time_tool = TimeTool()
+    preferences_tool = PreferencesTool()
+
+    code_executor_tool = AgentTool(agent=create_code_executor_agent())
 
     tools = [
         load_memory_tool,
         save_memory_tool,
         save_multiple_memories_tool,
+        # Code execution — for reliable dedup, date math, and ranking
+        code_executor_tool,
+        # Time + timezone — required for date-anchored searches and SCHEDULE_NEXT
+        FunctionTool(func=time_tool.get_current_time),
+        FunctionTool(func=time_tool.parse_natural_datetime),
+        FunctionTool(func=time_tool.next_occurrence),
+        FunctionTool(func=preferences_tool.get_timezone),
         # Calendar — useful for events research (check what's already on the calendar)
         FunctionTool(func=calendar_tool.list_calendar_events),
         FunctionTool(func=calendar_tool.get_calendar_status),
@@ -124,6 +139,7 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         FunctionTool(func=sheets_tool.append_record_to_sheet, require_confirmation=sheet_confirmation),
         FunctionTool(func=sheets_tool.find_sheet_rows),
         FunctionTool(func=sheets_tool.update_sheet_row, require_confirmation=sheet_confirmation),
+        FunctionTool(func=sheets_tool.batch_update_sheet_rows, require_confirmation=sheet_confirmation),
         FunctionTool(func=sheets_tool.read_sheet),
         FunctionTool(func=sheets_tool.get_sheets_status),
     ]
@@ -132,24 +148,32 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "You are a Deep Research Agent. You run as a background async task — there is no user in "
         "this conversation. You were triggered by the main agent after the user approved a research plan. "
         "Execute that plan autonomously and completely. Do not ask for confirmation or clarification.\n\n"
-        "You write to existing resources when Sheet IDs and Doc IDs are provided in the plan. "
-        "If a Doc output destination is named but no Doc ID is provided, create it with "
-        "create_google_doc(title, content) first, then append to it. "
-        "If a Sheet output destination is named but no Sheet ID is provided, create it with "
-        "create_spreadsheet(title) first, then write to it. "
-        "You cannot create new Drive files.\n\n"
 
-        "When the plan names a Google Doc or Sheet output destination, the write is mandatory. "
-        "Call the appropriate write tool (`append_to_google_doc`, `replace_text_in_google_doc`, "
-        "`ensure_sheet_headers`, `append_record_to_sheet`, or `update_sheet_row`) before your final "
-        "response. Do not place the full output only in your final response and assume another agent "
-        "will save it. If the write tool returns an error, report that error explicitly.\n\n"
+        "## Output Destinations\n"
+        "The plan names a Google Doc or Sheet as the output destination. Writing to it is mandatory — "
+        "never return the full output only in your final response and assume another agent will save it.\n"
+        "- If a Sheet/Doc ID is provided in the plan, write to it directly.\n"
+        "- If an output is named but no ID is provided, create it first: "
+        "`create_google_doc(title)` for docs, `create_spreadsheet(title)` for sheets. "
+        "Newly created resources are auto-approved for subsequent writes in the same task.\n"
+        "- You cannot create new Drive files (other than Docs/Sheets above).\n"
+        "Write tools: `append_to_google_doc`, `replace_text_in_google_doc`, `ensure_sheet_headers`, "
+        "`append_record_to_sheet`, `update_sheet_row`, `batch_update_sheet_rows`. "
+        "Prefer `batch_update_sheet_rows` when modifying 3+ existing rows in one go. "
+        "If a write tool returns an error, report that error explicitly.\n\n"
 
         "## Reading the Research Plan\n"
         "Your input arrives as a message starting with DEEP_RESEARCH_TASK: followed by the approved plan. "
         "The plan contains everything you need: category, location, output destination (Sheet ID / Doc ID), "
         "filters, preferences summary, and — if recurring — the recurrence rule and deduplication instructions. "
         "Parse it carefully before starting.\n\n"
+
+        "## Time and Dates\n"
+        "For any date math (recency anchoring, SCHEDULE_NEXT, comparing date_added values), call "
+        "`get_timezone()` once for the user's timezone, then use `get_current_time(timezone_str)` for "
+        "'now', `parse_natural_datetime(text, user_timezone)` for plan-relative dates, and "
+        "`next_occurrence(rule, user_timezone)` for the next firing of a recurrence rule. "
+        "Always express timestamps in the user's local timezone, not raw UTC.\n\n"
 
         "## Execution Flow\n\n"
 
@@ -163,7 +187,7 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "### 2. Check the Existing Collection (Recurring Runs)\n"
         "If the plan specifies a recurrence rule or says to check prior results:\n"
         "- Read the Sheet or Doc collection before searching\n"
-        "- Find the most recent date_added across all entries\n"
+        "- Find the most recent date_added across all entries (use `code_executor` if the list is long)\n"
         "- Use that date to anchor recency searches ('opened after [date]', 'announced since [date]')\n"
         "- Build the full list of already-tracked names and rejected items before running searches\n"
         "This ensures the research loop focuses only on what is genuinely new.\n\n"
@@ -180,6 +204,8 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "- Never add an item already in the collection (any status)\n"
         "- Never re-add items with status 'Rejected'\n"
         "- Match case-insensitively, ignoring punctuation\n"
+        "- For lists beyond a handful of items, delegate the normalization + comparison to `code_executor` "
+        "  so the matching is deterministic (lowercasing, punctuation stripping) rather than eyeballed\n"
         "- Flag near-matches (similar name, different location) with a note rather than skipping silently\n\n"
 
         "### 5. Filter and Rank\n"
@@ -189,9 +215,7 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "- Prefer a smaller set of strong candidates over a large mediocre list\n\n"
 
         "### 6. Write to the Collection\n"
-        "Append each passing candidate to the Sheet or Doc:\n"
-        "- If a Doc was named but no Doc ID was given, create it with create_google_doc(title) first\n"
-        "- If a Sheet was named but no Sheet ID was given, create it with create_spreadsheet(title) first\n"
+        "Append each passing candidate to the destination from the Output Destinations section above.\n"
         "- Status: 'New — Pending Review'\n"
         "- Include source URL for every item\n"
         "- Fill all relevant schema fields for the category\n\n"
@@ -207,7 +231,8 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "### 7. Schedule Next Occurrence (Recurring Only)\n"
         "If the plan includes a recurrence rule (e.g. 'every week', 'monthly on Mondays'):\n"
         "- Do NOT use async task tools directly — you don't have them\n"
-        "- Instead, include the next scheduled run details prominently in your summary so the main agent "
+        "- Compute the next firing with `next_occurrence(rule, user_timezone)`\n"
+        "- Include the next scheduled run prominently in your summary so the main agent "
         "  can schedule it when it processes your result\n"
         "- Format: SCHEDULE_NEXT: <recurrence rule> | <next ISO datetime>\n\n"
 
@@ -237,5 +262,6 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         sub_agents=[_make_research_loop()],
         instruction=prompt,
         on_tool_error_callback=on_tool_error,
+        after_agent_callback=save_session_to_memory,
     )
     return agent

@@ -340,7 +340,7 @@ async def test_public_batch_update_sheet_rows_returns_json(sheets_tool):
 
 @pytest.mark.asyncio
 async def test_public_create_spreadsheet_returns_json(sheets_tool):
-    sheets_tool._get_service = AsyncMock(return_value=(MagicMock(), None))
+    sheets_tool._get_service = AsyncMock(return_value=MagicMock())
     sheets_tool._create_spreadsheet_with_token = MagicMock(
         return_value={
             "spreadsheet_id": "sheet123",
@@ -363,3 +363,29 @@ async def test_public_create_spreadsheet_returns_json(sheets_tool):
     parsed = json.loads(result)
     assert parsed["spreadsheet_id"] == "sheet123"
     assert parsed["sheet_tab"] == "Candidates"
+
+
+@pytest.mark.asyncio
+async def test_create_spreadsheet_preapproves_new_sheet_for_offline_writes(sheets_tool):
+    """Newly created sheets must auto-approve themselves so offline (no-user)
+    tasks can immediately write to them without an interactive confirmation."""
+    from agents.schoopet.resource_confirmation import _RESOURCE_CONFIRMED_PREFIX
+
+    sheets_tool._get_service = AsyncMock(return_value=MagicMock())
+    sheets_tool._create_spreadsheet_with_token = MagicMock(
+        return_value={
+            "spreadsheet_id": "newsheet999",
+            "spreadsheet_url": "https://docs.google.com/spreadsheets/d/newsheet999/edit",
+            "title": "Research Output",
+            "sheet_tab": "Sheet1",
+            "headers": [],
+        }
+    )
+    state: dict = {}
+    tool_context = MagicMock()
+    tool_context.user_id = "+15555550123"
+    tool_context.state = state
+
+    await sheets_tool.create_spreadsheet("Research Output", "Sheet1", [], tool_context)
+
+    assert state[f"{_RESOURCE_CONFIRMED_PREFIX}newsheet999"] is True
