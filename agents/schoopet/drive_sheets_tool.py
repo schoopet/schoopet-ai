@@ -375,35 +375,6 @@ class SheetsTool:
             "headers": headers,
         }
 
-    def _read_sheet_with_token(
-        self,
-        service,
-        sheet_id: str,
-        sheet_tab: str,
-        max_rows: int,
-    ) -> str:
-        """Read a sheet using the Google Sheets service client."""
-        result = (
-            service.spreadsheets()
-            .values()
-            .get(spreadsheetId=sheet_id, range=sheet_tab)
-            .execute()
-        )
-        rows = result.get("values", [])
-        if not rows:
-            return "Sheet is empty."
-
-        truncated = rows[:max_rows]
-        lines = []
-        for i, row in enumerate(truncated):
-            prefix = "HDR" if i == 0 else f"R{i:>3}"
-            lines.append(f"{prefix}: {' | '.join(str(c) for c in row)}")
-
-        result = "\n".join(lines)
-        if len(rows) > max_rows:
-            result += f"\n... ({len(rows) - max_rows} more rows not shown)"
-        return result
-
     def _append_row_with_token(
         self,
         service,
@@ -683,129 +654,7 @@ class SheetsTool:
             "rows_affected": len(rows),
         }
 
-    def _update_row_with_token(
-        self,
-        service,
-        sheet_id: str,
-        row: int,
-        updates: Dict[str, Any],
-        sheet_tab: str,
-    ) -> Dict[str, Any]:
-        result = self._batch_update_rows_with_token(
-            service, sheet_id, [{"row": row, "updates": updates}], sheet_tab
-        )
-        result["row"] = row
-        return result
-
     # ── Public methods ──────────────────────────────────────────────────────────
-
-    async def append_row_to_sheet(
-        self,
-        values: List[str],
-        sheet_id: str,
-        sheet_tab: str = "Sheet1",
-        tool_context: ToolContext = None,
-    ) -> str:
-        """
-        Append a row of values to a Google Sheet.
-
-        Args:
-            values: List of cell values to append as a new row.
-            sheet_id: The Google Sheets document ID (from the URL).
-            sheet_tab: Name of the sheet tab (default: "Sheet1").
-
-        Returns:
-            Confirmation message or access instructions if not connected.
-
-        Note:
-            Requires user_id from tool_context.
-        """
-        _, err = require_user_id(tool_context, "sheets")
-        if err:
-            return err
-
-        service = await self._get_service(tool_context)
-        if service is None:
-            return ""
-
-        try:
-            return self._append_row_with_token(service, values, sheet_id, sheet_tab)
-        except HttpError as e:
-            return f"Error appending to Sheets: {e}"
-
-    async def read_sheet(
-        self,
-        sheet_id: str,
-        sheet_tab: str = "Sheet1",
-        max_rows: int = 100,
-        tool_context: ToolContext = None,
-    ) -> str:
-        """
-        Read current data and headers from a Google Sheet.
-
-        Call this before appending a row to verify the column layout, or to
-        inspect existing data.
-
-        Args:
-            sheet_id: The Google Sheets document ID (from the URL).
-            sheet_tab: Name of the sheet tab (default: "Sheet1").
-            max_rows: Maximum number of rows to return (default: 100).
-
-        Returns:
-            Headers row and data rows as a plain-text table, or access instructions.
-
-        Note:
-            Requires user_id from tool_context.
-        """
-        _, err = require_user_id(tool_context, "sheets")
-        if err:
-            return err
-
-        service = await self._get_service(tool_context)
-        if service is None:
-            return ""
-
-        try:
-            return self._read_sheet_with_token(service, sheet_id, sheet_tab, max_rows)
-        except HttpError as e:
-            return f"Error reading sheet: {e}"
-
-    async def add_sheet_column(
-        self,
-        sheet_id: str,
-        column_header: str,
-        sheet_tab: str = "Sheet1",
-        tool_context: ToolContext = None,
-    ) -> str:
-        """
-        Append a new column header to row 1 of a Google Sheet.
-
-        Internally reads the current row 1 to find the next empty column, then
-        writes the header there.
-
-        Args:
-            sheet_id: The Google Sheets document ID (from the URL).
-            column_header: The header text for the new column.
-            sheet_tab: Name of the sheet tab (default: "Sheet1").
-
-        Returns:
-            Confirmation of which cell was written, or access instructions.
-
-        Note:
-            Requires user_id from tool_context.
-        """
-        _, err = require_user_id(tool_context, "sheets")
-        if err:
-            return err
-
-        service = await self._get_service(tool_context)
-        if service is None:
-            return ""
-
-        try:
-            return self._add_column_with_token(service, sheet_id, column_header, sheet_tab)
-        except HttpError as e:
-            return f"Error adding column: {e}"
 
     async def update_sheet_cell(
         self,
@@ -1053,30 +902,6 @@ class SheetsTool:
         except (HttpError, ValueError) as e:
             return f"Error finding sheet rows: {e}"
 
-    async def update_sheet_row(
-        self,
-        sheet_id: str,
-        row: int,
-        updates: Dict[str, Any],
-        sheet_tab: str = "Sheet1",
-        tool_context: ToolContext = None,
-    ) -> str:
-        """Update one row using a dict of header name to value."""
-        _, err = require_user_id(tool_context, "sheets")
-        if err:
-            return err
-
-        service = await self._get_service(tool_context)
-        if service is None:
-            return ""
-
-        try:
-            return _json_dumps(
-                self._update_row_with_token(service, sheet_id, row, updates, sheet_tab)
-            )
-        except (HttpError, ValueError) as e:
-            return f"Error updating sheet row: {e}"
-
     async def batch_update_sheet_rows(
         self,
         sheet_id: str,
@@ -1243,36 +1068,10 @@ class DocsTool:
                 documentId=document_id,
                 body={"requests": requests},
             ).execute()
-        return {"document_id": document_id, "written_characters": len(content)}
-
-    def _append_to_google_doc_with_token(
-        self,
-        docs_service,
-        document_id: str,
-        content: str,
-    ) -> Dict[str, Any]:
-        document = docs_service.documents().get(documentId=document_id).execute()
-        end_index = max(1, document.get("body", {}).get("content", [{}])[-1].get("endIndex", 1) - 1)
-        (
-            docs_service.documents()
-            .batchUpdate(
-                documentId=document_id,
-                body={
-                    "requests": [
-                        {
-                            "insertText": {
-                                "location": {"index": end_index},
-                                "text": content,
-                            }
-                        }
-                    ]
-                },
-            )
-            .execute()
-        )
         return {
             "document_id": document_id,
-            "appended_characters": len(content),
+            "document_url": f"https://docs.google.com/document/d/{document_id}/edit",
+            "written_characters": len(content),
         }
 
     def _append_formatted_to_doc_with_token(
@@ -1291,6 +1090,7 @@ class DocsTool:
             ).execute()
         return {
             "document_id": document_id,
+            "document_url": f"https://docs.google.com/document/d/{document_id}/edit",
             "appended_characters": len(content),
         }
 
@@ -1382,28 +1182,6 @@ class DocsTool:
             return _json_dumps(self._read_google_doc_with_token(docs_service, document_id))
         except HttpError as e:
             return f"Error reading Google Doc: {e}"
-
-    async def append_to_google_doc(
-        self,
-        document_id: str,
-        content: str,
-        tool_context: ToolContext = None,
-    ) -> str:
-        """Append text to the end of a Google Doc."""
-        _, err = require_user_id(tool_context, "docs")
-        if err:
-            return err
-
-        docs_service, _ = await self._get_services(tool_context)
-        if docs_service is None:
-            return ""
-
-        try:
-            return _json_dumps(
-                self._append_to_google_doc_with_token(docs_service, document_id, content)
-            )
-        except HttpError as e:
-            return f"Error appending to Google Doc: {e}"
 
     async def append_formatted_to_doc(
         self,

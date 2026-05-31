@@ -88,20 +88,6 @@ def test_read_google_doc_with_token():
     }
 
 
-def test_append_to_google_doc_with_token():
-    tool = DocsTool.__new__(DocsTool)
-    docs_service = _make_docs_service()
-
-    result = tool._append_to_google_doc_with_token(docs_service, "doc123", "More text")
-
-    batch_call = docs_service.documents.return_value.batchUpdate.call_args.kwargs
-    request = batch_call["body"]["requests"][0]["insertText"]
-    assert batch_call["documentId"] == "doc123"
-    assert request["location"]["index"] == 12
-    assert request["text"] == "More text"
-    assert result == {"document_id": "doc123", "appended_characters": 9}
-
-
 def test_replace_text_in_google_doc_with_token():
     tool = DocsTool.__new__(DocsTool)
     docs_service = _make_docs_service()

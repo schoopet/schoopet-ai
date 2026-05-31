@@ -54,7 +54,8 @@ _TOOL_LABELS: dict[str, str] = {
     # Docs
     "create_google_doc": "Creating document",
     "read_google_doc": "Reading document",
-    "append_to_google_doc": "Updating document",
+    "append_formatted_to_doc": "Updating document",
+    "overwrite_google_doc": "Updating document",
     "replace_text_in_google_doc": "Updating document",
     "get_docs_status": "Checking Docs",
     # Sheets
@@ -65,10 +66,7 @@ _TOOL_LABELS: dict[str, str] = {
     "ensure_sheet_headers": "Updating spreadsheet",
     "append_record_to_sheet": "Updating spreadsheet",
     "find_sheet_rows": "Searching spreadsheet",
-    "update_sheet_row": "Updating spreadsheet",
-    "append_row_to_sheet": "Updating spreadsheet",
-    "read_sheet": "Reading spreadsheet",
-    "add_sheet_column": "Updating spreadsheet",
+    "batch_update_sheet_rows": "Updating spreadsheet",
     "update_sheet_cell": "Updating spreadsheet",
     "get_sheets_status": "Checking Sheets",
     # Gmail

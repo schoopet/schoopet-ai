@@ -175,24 +175,6 @@ def test_find_rows_with_token_unknown_column_raises(sheets_tool):
         )
 
 
-def test_update_row_with_token_updates_by_header(sheets_tool):
-    service = _make_sheets_service([{"values": [["Name", "Email", "Role"]]}])
-
-    result = sheets_tool._update_row_with_token(
-        service,
-        "sheet123",
-        4,
-        {"Email": "ada@example.com", "Role": "Engineer"},
-        "Leads",
-    )
-
-    assert result["row"] == 4
-    call_kwargs = service.spreadsheets.return_value.values.return_value.batchUpdate.call_args.kwargs
-    ranges = [d["range"] for d in call_kwargs["body"]["data"]]
-    assert "Leads!B4" in ranges  # Email is column 2
-    assert "Leads!C4" in ranges  # Role is column 3
-
-
 @pytest.mark.asyncio
 async def test_public_read_sheet_records_returns_json(sheets_tool):
     sheets_tool._get_service = AsyncMock(return_value=(MagicMock(), None))

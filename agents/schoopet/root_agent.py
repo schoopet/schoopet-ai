@@ -17,13 +17,13 @@ from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
 from .code_executor_agent import create_code_executor_agent
 from .deep_research_agent import create_deep_research_agent
-from .web_tool import fetch_url
 from google.adk.agents.llm_agent import LlmAgent
 from .global_gemini import GlobalGemini
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.load_memory_tool import LoadMemoryTool
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from google.adk.tools.agent_tool import AgentTool
+from google.adk.tools.url_context_tool import url_context
 from .resource_confirmation import doc_confirmation, sheet_confirmation, drive_folder_confirmation
 
 
@@ -155,45 +155,39 @@ def _personal_prompt() -> str:
         "If a tool returns empty, authorization is being requested — stay silent, the user will receive a consent link.\n\n"
 
         "## Google Docs\n"
-        "- create_google_doc(title, content, folder_id)\n"
-        "- read_google_doc(document_id) — returns document text as Markdown\n"
-        "- append_formatted_to_doc(document_id, content) — add to end of doc\n"
-        "- overwrite_google_doc(document_id, content) — replace entire doc content\n"
-        "- replace_text_in_google_doc(document_id, search_text, replace_text)\n"
+        "- create_google_doc(title, content, folder_id) — returns JSON with document_id and document_url\n"
+        "- read_google_doc(document_id) — returns JSON {document_id, title, text}; `text` is Markdown reconstructed from the doc's styles\n"
+        "- append_formatted_to_doc(document_id, content) — add Markdown content to the end of a doc\n"
+        "- overwrite_google_doc(document_id, content) — clear and replace the entire doc with new Markdown content\n"
+        "- replace_text_in_google_doc(document_id, search_text, replace_text) — literal string replace; does NOT interpret Markdown in replace_text\n"
         "- get_docs_status()\n\n"
-        "Both write tools accept Markdown-like content:\n"
+        "Markdown syntax accepted by `append_formatted_to_doc` and `overwrite_google_doc`:\n"
         "  # Heading 1 / ## Heading 2 / ### Heading 3\n"
         "  **bold**, *italic*, ***bold italic***\n"
         "  - bullet item  (leading dash + space)\n"
         "  --- (horizontal divider)\n"
-        "Always use formatting when writing structured content (lists, reports, summaries with sections). "
-        "Use plain paragraphs only for short prose with no structure.\n\n"
-        "## Web\n"
-        "- fetch_url(url) — retrieve plain text from any public web page (up to 50 KB)\n"
-        "Use when the user shares a URL and wants you to read it, or when you need to look up "
-        "details from a specific page (article, event listing, product page, etc.).\n\n"
+        "Use formatting whenever the content has structure — lists, reports, summaries with sections, or distinct items. "
+        "Plain paragraphs are fine only for short, single-thought prose.\n"
+        "Choose `append_formatted_to_doc` to add new content to an existing doc. "
+        "Choose `overwrite_google_doc` only when regenerating the entire doc from scratch (e.g. a weekly report that replaces last week's content).\n\n"
+        "## Web context\n"
+        "The `url_context` tool runs server-side: when a URL appears in the user's message, in search results, or in a document you read, "
+        "the model can fetch and incorporate its content automatically. You do not invoke it explicitly — "
+        "just reference the URL naturally and the page content will be available.\n\n"
 
         "## Google Sheets\n"
         "- create_spreadsheet(title, sheet_tab, headers)\n"
         "- add_sheet_tab(sheet_id, sheet_tab, headers)\n"
-        "- read_sheet(sheet_id, sheet_tab, max_rows)\n"
-        "- get_sheet_schema(sheet_id, sheet_tab)\n"
-        "- read_sheet_records(sheet_id, sheet_tab, max_rows)\n"
-        "- ensure_sheet_headers(sheet_id, headers, sheet_tab)\n"
-        "- append_record_to_sheet(record, sheet_id, sheet_tab)\n"
+        "- get_sheet_schema(sheet_id, sheet_tab) — headers + row counts, no data\n"
+        "- read_sheet_records(sheet_id, sheet_tab, max_rows) — JSON records keyed by header (canonical read)\n"
+        "- ensure_sheet_headers(sheet_id, headers, sheet_tab) — add any missing headers; also bolds and freezes row 1\n"
+        "- append_record_to_sheet(record, sheet_id, sheet_tab) — dict keyed by header; auto-ensures headers exist\n"
         "- find_sheet_rows(sheet_id, match_column, match_value, sheet_tab, max_rows)\n"
-        "- update_sheet_row(sheet_id, row, updates, sheet_tab)\n"
-        "- batch_update_sheet_rows(sheet_id, rows, sheet_tab): update many rows at once — "
-        "rows is a list of {row: int, updates: {header: value}}. "
-        "Prefer this over calling update_sheet_row in a loop whenever you need to update 3 or more rows.\n"
-        "- append_row_to_sheet(values, sheet_id, sheet_tab)\n"
-        "- add_sheet_column(sheet_id, column_header, sheet_tab)\n"
-        "- update_sheet_cell(sheet_id, row, column, value, sheet_tab)\n"
+        "- batch_update_sheet_rows(sheet_id, rows, sheet_tab) — list of {row: int, updates: {header: value}}; use for any row update (one row or many)\n"
+        "- update_sheet_cell(sheet_id, row, column, value, sheet_tab) — low-level positional cell write; use only when you can't address the target by header\n"
         "- get_sheets_status()\n\n"
-        "Preferred workflow: if no spreadsheet exists, call create_spreadsheet. "
-        "If you need another tab, call add_sheet_tab. Then call get_sheet_schema or "
-        "read_sheet_records, then ensure_sheet_headers, then append_record_to_sheet "
-        "or update_sheet_row. Use the lower-level cell tools only when you need exact cell control.\n\n"
+        "Preferred workflow: create_spreadsheet (or add_sheet_tab) → read_sheet_records to inspect → "
+        "append_record_to_sheet for new rows → batch_update_sheet_rows for edits.\n\n"
 
         "## Async Tasks\n"
         "Delegate long-running or scheduled work to background workers.\n"
@@ -365,7 +359,6 @@ def create_agent(
     overwrite_google_doc_tool = FunctionTool(func=docs_tool.overwrite_google_doc, require_confirmation=doc_confirmation)
     replace_text_in_google_doc_tool = FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=doc_confirmation)
     docs_status_tool = FunctionTool(func=docs_tool.get_docs_status)
-    fetch_url_tool = FunctionTool(func=fetch_url)
 
     # Sheets tools
     create_spreadsheet_tool = FunctionTool(func=sheets_tool.create_spreadsheet)
@@ -375,11 +368,7 @@ def create_agent(
     ensure_sheet_headers_tool = FunctionTool(func=sheets_tool.ensure_sheet_headers, require_confirmation=sheet_confirmation)
     append_record_to_sheet_tool = FunctionTool(func=sheets_tool.append_record_to_sheet, require_confirmation=sheet_confirmation)
     find_sheet_rows_tool = FunctionTool(func=sheets_tool.find_sheet_rows)
-    update_sheet_row_tool = FunctionTool(func=sheets_tool.update_sheet_row, require_confirmation=sheet_confirmation)
     batch_update_sheet_rows_tool = FunctionTool(func=sheets_tool.batch_update_sheet_rows, require_confirmation=sheet_confirmation)
-    append_to_sheet_tool = FunctionTool(func=sheets_tool.append_row_to_sheet, require_confirmation=sheet_confirmation)
-    read_sheet_tool = FunctionTool(func=sheets_tool.read_sheet)
-    add_column_tool = FunctionTool(func=sheets_tool.add_sheet_column, require_confirmation=sheet_confirmation)
     update_cell_tool = FunctionTool(func=sheets_tool.update_sheet_cell, require_confirmation=sheet_confirmation)
     sheets_status_tool = FunctionTool(func=sheets_tool.get_sheets_status)
 
@@ -439,7 +428,7 @@ def create_agent(
         overwrite_google_doc_tool,
         replace_text_in_google_doc_tool,
         docs_status_tool,
-        fetch_url_tool,
+        url_context,
         # Sheets tools
         create_spreadsheet_tool,
         add_sheet_tab_tool,
@@ -448,11 +437,7 @@ def create_agent(
         ensure_sheet_headers_tool,
         append_record_to_sheet_tool,
         find_sheet_rows_tool,
-        update_sheet_row_tool,
         batch_update_sheet_rows_tool,
-        append_to_sheet_tool,
-        read_sheet_tool,
-        add_column_tool,
         update_cell_tool,
         sheets_status_tool,
         set_timezone_tool,

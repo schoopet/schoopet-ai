@@ -22,9 +22,7 @@ REQUIRE_CONFIRMATION_CALLABLE = {
     "add_sheet_tab",
     "ensure_sheet_headers",
     "append_record_to_sheet",
-    "update_sheet_row",
-    "append_row_to_sheet",
-    "add_sheet_column",
+    "batch_update_sheet_rows",
     "update_sheet_cell",
     # Doc tools — approve once per document_id
     "append_formatted_to_doc",
@@ -50,7 +48,6 @@ NO_CONFIRMATION = {
     "get_sheet_schema",
     "read_sheet_records",
     "find_sheet_rows",
-    "read_sheet",
     "get_sheets_status",
     "get_timezone",
     "get_current_time",
@@ -68,7 +65,6 @@ NO_CONFIRMATION = {
     "list_email_rules",
     "create_google_doc",
     "create_spreadsheet",
-    "fetch_url",
 }
 
 # "bool" | "callable" | False

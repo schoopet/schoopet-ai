@@ -12,7 +12,7 @@ from .model_callbacks import on_tool_error
 from .preferences_tool import PreferencesTool
 from .resource_confirmation import sheet_confirmation, doc_confirmation
 from .time_tool import TimeTool
-from .web_tool import fetch_url
+from google.adk.tools.url_context_tool import url_context
 
 
 _PRO_MODEL = "gemini-3.1-pro-preview"
@@ -49,8 +49,8 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         save_multiple_memories_tool,
         # Search — primary research tool
         search_tool,
-        # Web fetch — retrieve full page content from URLs found during search
-        FunctionTool(func=fetch_url),
+        # Url context — model-side fetch of URLs that appear in search results or memory
+        url_context,
         # Code execution — for reliable dedup, date math, and ranking
         code_executor_tool,
         # Time + timezone — required for date-anchored searches and SCHEDULE_NEXT
@@ -79,9 +79,7 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         FunctionTool(func=sheets_tool.ensure_sheet_headers, require_confirmation=sheet_confirmation),
         FunctionTool(func=sheets_tool.append_record_to_sheet, require_confirmation=sheet_confirmation),
         FunctionTool(func=sheets_tool.find_sheet_rows),
-        FunctionTool(func=sheets_tool.update_sheet_row, require_confirmation=sheet_confirmation),
         FunctionTool(func=sheets_tool.batch_update_sheet_rows, require_confirmation=sheet_confirmation),
-        FunctionTool(func=sheets_tool.read_sheet),
         FunctionTool(func=sheets_tool.get_sheets_status),
     ]
 
@@ -97,14 +95,26 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "- If an output is named but no ID is provided, create it first: "
         "`create_google_doc(title)` for docs, `create_spreadsheet(title)` for sheets. "
         "Newly created resources are auto-approved for subsequent writes in the same task.\n"
-        "- You cannot create new Drive files (other than Docs/Sheets above).\n"
-        "Write tools: `append_formatted_to_doc` (add content to end of a Doc), "
-        "`overwrite_google_doc` (replace entire Doc content — use for recurring runs that regenerate the full doc). "
-        "Both accept Markdown: # H1 / ## H2 / ### H3, **bold**, *italic*, - bullets, --- dividers. "
-        "Also: `replace_text_in_google_doc`, "
-        "`ensure_sheet_headers`, `append_record_to_sheet`, `update_sheet_row`, `batch_update_sheet_rows`. "
-        "Prefer `batch_update_sheet_rows` when modifying 3+ existing rows in one go. "
+        "- You cannot create new Drive files (other than Docs/Sheets above).\n\n"
+
+        "Doc write tools:\n"
+        "- `append_formatted_to_doc(document_id, content)` — add new entries to an existing collection (default for recurring research that grows over time).\n"
+        "- `overwrite_google_doc(document_id, content)` — clear and rewrite the entire doc; use only when the plan explicitly says to regenerate the full doc each run.\n"
+        "- `replace_text_in_google_doc(document_id, search_text, replace_text)` — literal string replace, NO Markdown interpretation in either argument.\n"
+        "Both formatted-write tools accept this Markdown subset:\n"
+        "  # Heading 1 / ## Heading 2 / ### Heading 3\n"
+        "  **bold**, *italic*, ***bold italic***\n"
+        "  - bullet item  (leading dash + space)\n"
+        "  --- (horizontal divider)\n\n"
+
+        "Sheet write tools: `ensure_sheet_headers` (idempotent; also bolds + freezes row 1), "
+        "`append_record_to_sheet` (dict keyed by header; auto-ensures headers), "
+        "`batch_update_sheet_rows` (list of {row, updates}; use for any row update, one or many). "
         "If a write tool returns an error, report that error explicitly.\n\n"
+
+        "Read tools: `read_sheet_records` returns JSON records keyed by header. "
+        "`read_google_doc` returns JSON `{document_id, title, text}` where `text` is the doc reconstructed as Markdown "
+        "(`#`/`##`/`###` headings, `**bold**`/`*italic*`, `- ` bullets) — useful for finding the most recent entries when checking existing collections.\n\n"
 
         "## Reading the Research Plan\n"
         "Your input arrives as a message starting with DEEP_RESEARCH_TASK: followed by the approved plan. "
@@ -146,9 +156,9 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "Stop when you have at least 6 strong, varied candidates — do not call more times than necessary. "
         "For each item found, note: name/title, key details (location, date, price, rating, genre), "
         "source URL, and one sentence on why it fits the research goal.\n\n"
-        "Use `fetch_url(url)` to get full details from a specific page when search snippets are "
-        "insufficient — e.g. to confirm event dates/prices, read a venue's description, or verify "
-        "a restaurant menu. Fetch only the 1-2 most important URLs per search round; do not fetch every result.\n\n"
+        "URLs from search results are read automatically by the `url_context` model tool — when "
+        "you mention or reason about a result's URL, the page content is incorporated server-side. "
+        "You do not call a fetch tool; just cite the URL and the model will use what's on the page.\n\n"
 
         "### 4. Deduplicate\n"
         "Cross-reference all findings against the existing collection (built in step 2 or read now):\n"
@@ -166,14 +176,13 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "- Prefer a smaller set of strong candidates over a large mediocre list\n\n"
 
         "### 6. Write to the Collection\n"
-        "Append each passing candidate to the destination from the Output Destinations section above.\n"
-        "- For Google Docs: use `append_formatted_to_doc` with markdown formatting. "
-        "Use ## for section headings (e.g. category or date range), ### for individual item titles, "
-        "**bold** for key details (price, date, venue), - bullets for notes/features, "
-        "and --- between entries for visual separation.\n"
+        "Write each passing candidate to the destination using the tools from the Output Destinations section above. "
+        "For Docs, use Markdown structure: ## for grouping (e.g. category or date range), ### for individual item titles, "
+        "**bold** for key details (price, date, venue), - for bullet notes, and --- between entries for separation.\n"
+        "Every item must include:\n"
         "- Status: 'New — Pending Review'\n"
-        "- Include source URL for every item\n"
-        "- Fill all relevant schema fields for the category\n\n"
+        "- source URL\n"
+        "- All relevant schema fields for the category\n\n"
 
         "Collection schemas:\n"
         "- Restaurants/Cafes/Bars: name, cuisine, neighborhood, price_range, source_url, rating, notes, status, date_added\n"
