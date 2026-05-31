@@ -156,7 +156,7 @@ def _personal_prompt() -> str:
         "## Google Docs\n"
         "- create_google_doc(title, content, folder_id)\n"
         "- read_google_doc(document_id)\n"
-        "- append_to_google_doc(document_id, content)\n"
+        "- append_formatted_to_doc(document_id, content) — supports # H1 / ## H2 / ### H3, **bold**, *italic*, - bullets, --- dividers\n"
         "- replace_text_in_google_doc(document_id, search_text, replace_text)\n"
         "- get_docs_status()\n\n"
         "Use for native Google Docs documents when you need editable prose, notes, drafts, or reports. "
@@ -350,7 +350,7 @@ def create_agent(
     # Docs tools
     create_google_doc_tool = FunctionTool(func=docs_tool.create_google_doc)
     read_google_doc_tool = FunctionTool(func=docs_tool.read_google_doc)
-    append_to_google_doc_tool = FunctionTool(func=docs_tool.append_to_google_doc, require_confirmation=doc_confirmation)
+    append_formatted_to_doc_tool = FunctionTool(func=docs_tool.append_formatted_to_doc, require_confirmation=doc_confirmation)
     replace_text_in_google_doc_tool = FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=doc_confirmation)
     docs_status_tool = FunctionTool(func=docs_tool.get_docs_status)
 
@@ -422,7 +422,7 @@ def create_agent(
         # Docs tools
         create_google_doc_tool,
         read_google_doc_tool,
-        append_to_google_doc_tool,
+        append_formatted_to_doc_tool,
         replace_text_in_google_doc_tool,
         docs_status_tool,
         # Sheets tools

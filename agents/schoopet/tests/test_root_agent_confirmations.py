@@ -27,7 +27,7 @@ REQUIRE_CONFIRMATION_CALLABLE = {
     "add_sheet_column",
     "update_sheet_cell",
     # Doc tools — approve once per document_id
-    "append_to_google_doc",
+    "append_formatted_to_doc",
     "replace_text_in_google_doc",
     # Drive tools — approve once per folder_id
     "save_attachment_to_drive",

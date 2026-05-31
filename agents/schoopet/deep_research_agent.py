@@ -64,7 +64,7 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         # Docs
         FunctionTool(func=docs_tool.create_google_doc),
         FunctionTool(func=docs_tool.read_google_doc),
-        FunctionTool(func=docs_tool.append_to_google_doc, require_confirmation=doc_confirmation),
+        FunctionTool(func=docs_tool.append_formatted_to_doc, require_confirmation=doc_confirmation),
         FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=doc_confirmation),
         FunctionTool(func=docs_tool.get_docs_status),
         # Sheets
@@ -94,8 +94,9 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "`create_google_doc(title)` for docs, `create_spreadsheet(title)` for sheets. "
         "Newly created resources are auto-approved for subsequent writes in the same task.\n"
         "- You cannot create new Drive files (other than Docs/Sheets above).\n"
-        "Write tools: `append_to_google_doc`, `replace_text_in_google_doc`, `ensure_sheet_headers`, "
-        "`append_record_to_sheet`, `update_sheet_row`, `batch_update_sheet_rows`. "
+        "Write tools: `append_formatted_to_doc` (for Docs — supports rich formatting), "
+        "`replace_text_in_google_doc`, "
+        "`ensure_sheet_headers`, `append_record_to_sheet`, `update_sheet_row`, `batch_update_sheet_rows`. "
         "Prefer `batch_update_sheet_rows` when modifying 3+ existing rows in one go. "
         "If a write tool returns an error, report that error explicitly.\n\n"
 
@@ -157,6 +158,10 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
 
         "### 6. Write to the Collection\n"
         "Append each passing candidate to the destination from the Output Destinations section above.\n"
+        "- For Google Docs: use `append_formatted_to_doc` with markdown formatting. "
+        "Use ## for section headings (e.g. category or date range), ### for individual item titles, "
+        "**bold** for key details (price, date, venue), - bullets for notes/features, "
+        "and --- between entries for visual separation.\n"
         "- Status: 'New — Pending Review'\n"
         "- Include source URL for every item\n"
         "- Fill all relevant schema fields for the category\n\n"

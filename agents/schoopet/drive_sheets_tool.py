@@ -1167,6 +1167,25 @@ class DocsTool:
             "appended_characters": len(content),
         }
 
+    def _append_formatted_to_doc_with_token(
+        self,
+        docs_service,
+        document_id: str,
+        content: str,
+    ) -> Dict[str, Any]:
+        document = docs_service.documents().get(documentId=document_id).execute()
+        end_index = max(1, document.get("body", {}).get("content", [{}])[-1].get("endIndex", 1) - 1)
+        requests, _ = _build_formatted_requests(content, end_index)
+        if requests:
+            docs_service.documents().batchUpdate(
+                documentId=document_id,
+                body={"requests": requests},
+            ).execute()
+        return {
+            "document_id": document_id,
+            "appended_characters": len(content),
+        }
+
     def _replace_text_in_google_doc_with_token(
         self,
         docs_service,
@@ -1278,6 +1297,36 @@ class DocsTool:
         except HttpError as e:
             return f"Error appending to Google Doc: {e}"
 
+    async def append_formatted_to_doc(
+        self,
+        document_id: str,
+        content: str,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Append rich formatted content to a Google Doc using Markdown-like syntax.
+
+        Supported formatting:
+        - # Heading 1 / ## Heading 2 / ### Heading 3
+        - **bold**, *italic*, ***bold italic***
+        - - bullet item  (leading dash + space)
+        - --- (horizontal divider — inserts a blank line)
+        - Plain paragraphs (blank lines become empty paragraphs)
+        """
+        _, err = require_user_id(tool_context, "docs")
+        if err:
+            return err
+
+        docs_service, _ = await self._get_services(tool_context)
+        if docs_service is None:
+            return ""
+
+        try:
+            return _json_dumps(
+                self._append_formatted_to_doc_with_token(docs_service, document_id, content)
+            )
+        except HttpError as e:
+            return f"Error appending formatted content to Google Doc: {e}"
+
     async def replace_text_in_google_doc(
         self,
         document_id: str,
@@ -1360,3 +1409,122 @@ def _stringify_cell(value: Any) -> str:
 def _json_dumps(obj: dict) -> str:
     import json
     return json.dumps(obj, ensure_ascii=True)
+
+
+def _utf16_len(s: str) -> int:
+    """UTF-16 code units — what the Google Docs API counts for character indices."""
+    return len(s.encode("utf-16-le")) // 2
+
+
+def _parse_inline_runs(text: str) -> List[tuple]:
+    """Parse inline markdown into list of (text, bold, italic) tuples."""
+    import re
+    runs: List[tuple] = []
+    pattern = re.compile(r"\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*", re.DOTALL)
+    last_end = 0
+    for m in pattern.finditer(text):
+        if m.start() > last_end:
+            runs.append((text[last_end : m.start()], False, False))
+        if m.group(1) is not None:
+            runs.append((m.group(1), True, True))
+        elif m.group(2) is not None:
+            runs.append((m.group(2), True, False))
+        else:
+            runs.append((m.group(3), False, True))
+        last_end = m.end()
+    if last_end < len(text):
+        runs.append((text[last_end:], False, False))
+    return runs or [(text, False, False)]
+
+
+def _build_formatted_requests(markdown: str, start_index: int) -> tuple:
+    """Convert a markdown string into Google Docs batchUpdate requests.
+
+    Handles: # H1 / ## H2 / ### H3, **bold**, *italic*, - bullets, --- dividers.
+    Returns (requests_list, final_end_index).
+
+    Requests are ordered so that insertText calls come first (in document order),
+    followed by paragraph-style and inline-style updates, and finally bullet
+    formatting — matching the sequence the Docs API executes them.
+    """
+    insert_requests: List[Dict] = []
+    style_requests: List[Dict] = []
+    bullet_requests: List[Dict] = []
+    idx = start_index
+
+    for line in markdown.split("\n"):
+        is_bullet = False
+
+        if line.startswith("### "):
+            named_style, plain = "HEADING_3", line[4:]
+        elif line.startswith("## "):
+            named_style, plain = "HEADING_2", line[3:]
+        elif line.startswith("# "):
+            named_style, plain = "HEADING_1", line[2:]
+        elif line.startswith("- ") or line.startswith("* "):
+            named_style, plain, is_bullet = "NORMAL_TEXT", line[2:], True
+        elif line == "---":
+            insert_requests.append(
+                {"insertText": {"location": {"index": idx}, "text": "\n"}}
+            )
+            idx += 1
+            continue
+        else:
+            named_style, plain = "NORMAL_TEXT", line
+
+        inline_runs = _parse_inline_runs(plain)
+        paragraph_text = "".join(r[0] for r in inline_runs) + "\n"
+        para_len = _utf16_len(paragraph_text)
+        para_end = idx + para_len
+
+        insert_requests.append(
+            {"insertText": {"location": {"index": idx}, "text": paragraph_text}}
+        )
+
+        if named_style != "NORMAL_TEXT":
+            style_requests.append(
+                {
+                    "updateParagraphStyle": {
+                        "range": {"startIndex": idx, "endIndex": para_end},
+                        "paragraphStyle": {"namedStyleType": named_style},
+                        "fields": "namedStyleType",
+                    }
+                }
+            )
+
+        if is_bullet:
+            bullet_requests.append(
+                {
+                    "createParagraphBullets": {
+                        "range": {"startIndex": idx, "endIndex": para_end},
+                        "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE",
+                    }
+                }
+            )
+
+        run_idx = idx
+        for run_text, bold, italic in inline_runs:
+            run_end = run_idx + _utf16_len(run_text)
+            if bold or italic:
+                text_style: Dict[str, Any] = {}
+                fields: List[str] = []
+                if bold:
+                    text_style["bold"] = True
+                    fields.append("bold")
+                if italic:
+                    text_style["italic"] = True
+                    fields.append("italic")
+                style_requests.append(
+                    {
+                        "updateTextStyle": {
+                            "range": {"startIndex": run_idx, "endIndex": run_end},
+                            "textStyle": text_style,
+                            "fields": ",".join(fields),
+                        }
+                    }
+                )
+            run_idx = run_end
+
+        idx = para_end
+
+    return insert_requests + style_requests + bullet_requests, idx
