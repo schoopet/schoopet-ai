@@ -1,7 +1,8 @@
 """Unit tests for Discord gateway attachment handling."""
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
+import discord
 import pytest
 from google.adk.events import Event
 from google.genai import types
@@ -122,6 +123,7 @@ def gateway_services():
         )
     )
     session_manager.update_last_activity = AsyncMock()
+    session_manager.get_pending_approval = AsyncMock()
     session_manager.get_pending_approval_group = AsyncMock()
     session_manager.clear_pending_approval_group = AsyncMock()
     _coord = PendingApprovalCoordinator()
@@ -267,7 +269,7 @@ async def test_approve_callback_sends_confirmation_clears_pending_and_sends_resu
         "agent_session_id": "agent-session-123",
         "adk_confirmation_function_call_id": "confirm-1",
     }
-    session_manager.get_pending_confirmation = AsyncMock(return_value=pending)
+    session_manager.get_pending_approval = AsyncMock(return_value=pending)
     session_manager.get_pending_approval_group = AsyncMock(return_value=[pending])
     session_manager.clear_pending_approval_group = AsyncMock()
     agent_client.send_confirmation_responses_batch = AsyncMock(
@@ -305,7 +307,7 @@ async def test_approve_callback_sends_confirmation_clears_pending_and_sends_resu
 @pytest.mark.asyncio
 async def test_reject_callback_sends_false_confirmation(gateway_services):
     gateway, session_manager, agent_client = gateway_services
-    session_manager.get_pending_confirmation = AsyncMock(
+    session_manager.get_pending_approval = AsyncMock(
         return_value={
             "id": "pending-123",
             "agent_session_id": "agent-session-123",
@@ -360,7 +362,7 @@ async def test_approve_callback_resolves_entire_pending_group(gateway_services):
         "agent_session_id": "agent-session-123",
         "adk_confirmation_function_call_id": "confirm-b",
     }
-    session_manager.get_pending_confirmation = AsyncMock(return_value=pending_a)
+    session_manager.get_pending_approval = AsyncMock(return_value=pending_a)
     session_manager.get_pending_approval_group = AsyncMock(
         return_value=[pending_a, pending_b]
     )
@@ -414,8 +416,81 @@ async def test_button_click_by_different_user_is_rejected(gateway_services):
         "This approval is not for you.",
         ephemeral=True,
     )
-    session_manager.get_pending_confirmation.assert_not_awaited()
+    session_manager.get_pending_approval.assert_not_awaited()
     agent_client.send_confirmation_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_approval_callback_defers_before_pending_lookup(gateway_services):
+    gateway, session_manager, agent_client = gateway_services
+    calls: list[str] = []
+    pending = {
+        "id": "pending-123",
+        "agent_session_id": "agent-session-123",
+        "adk_confirmation_function_call_id": "confirm-1",
+    }
+
+    async def defer():
+        calls.append("defer")
+
+    async def get_pending_approval(*args, **kwargs):
+        calls.append("get_pending_approval")
+        return pending
+
+    session_manager.get_pending_approval = AsyncMock(side_effect=get_pending_approval)
+    session_manager.get_pending_approval_group = AsyncMock(return_value=[pending])
+    session_manager.clear_pending_approval_group = AsyncMock()
+    agent_client.send_confirmation_responses_batch = AsyncMock(return_value=[])
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id="user-123"),
+        response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock(side_effect=defer)),
+        followup=SimpleNamespace(send=AsyncMock()),
+        edit_original_response=AsyncMock(),
+    )
+    view = _ConfirmationView(gateway, "user-123", "pending-123")
+
+    await gateway._resolve_confirmation_button(
+        interaction=interaction,
+        user_id="user-123",
+        pending_id="pending-123",
+        confirmed=True,
+        view=view,
+        session_scope="discord:dm:99999",
+    )
+
+    assert calls[:2] == ["defer", "get_pending_approval"]
+
+
+@pytest.mark.asyncio
+async def test_approval_callback_returns_when_discord_interaction_expired(gateway_services):
+    gateway, session_manager, agent_client = gateway_services
+    response = MagicMock(status=404, reason="Not Found")
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id="user-123"),
+        response=SimpleNamespace(
+            send_message=AsyncMock(),
+            defer=AsyncMock(
+                side_effect=discord.NotFound(
+                    response,
+                    {"code": 10062, "message": "Unknown interaction"},
+                )
+            ),
+        ),
+        followup=SimpleNamespace(send=AsyncMock()),
+        edit_original_response=AsyncMock(),
+    )
+    view = _ConfirmationView(gateway, "user-123", "pending-123")
+
+    await gateway._resolve_confirmation_button(
+        interaction=interaction,
+        user_id="user-123",
+        pending_id="pending-123",
+        confirmed=True,
+        view=view,
+    )
+
+    session_manager.get_pending_approval.assert_not_awaited()
+    agent_client.send_confirmation_responses_batch.assert_not_awaited()
 
 
 @pytest.mark.asyncio

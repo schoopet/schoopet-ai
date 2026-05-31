@@ -551,6 +551,16 @@ class SchoopetGateway(discord.Client):
             )
             return
 
+        try:
+            await interaction.response.defer()
+        except discord.NotFound:
+            logger.warning(
+                "[confirm] Discord interaction expired before ACK: user=%s pending_id=%s",
+                user_id,
+                pending_id,
+            )
+            return
+
         pending = await self._session_manager.get_pending_approval(
             user_id,
             pending_id,
@@ -558,7 +568,7 @@ class SchoopetGateway(discord.Client):
         )
         if not pending:
             view.disable_buttons()
-            await interaction.response.edit_message(view=view)
+            await interaction.edit_original_response(view=view)
             await interaction.followup.send("That approval is no longer pending.")
             return
 
@@ -569,8 +579,6 @@ class SchoopetGateway(discord.Client):
             f"[confirm] User response (online): user={uid} pending_id={pending_id} "
             f"tool={tool_name} action={action}"
         )
-
-        await interaction.response.defer()
 
         try:
             pending_group = await self._session_manager.get_pending_approval_group(
