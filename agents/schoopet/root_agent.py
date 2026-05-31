@@ -17,6 +17,7 @@ from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
 from .code_executor_agent import create_code_executor_agent
 from .deep_research_agent import create_deep_research_agent
+from .web_tool import fetch_url
 from google.adk.agents.llm_agent import LlmAgent
 from .global_gemini import GlobalGemini
 from google.adk.tools.function_tool import FunctionTool
@@ -156,11 +157,14 @@ def _personal_prompt() -> str:
         "## Google Docs\n"
         "- create_google_doc(title, content, folder_id)\n"
         "- read_google_doc(document_id)\n"
-        "- append_formatted_to_doc(document_id, content) — supports # H1 / ## H2 / ### H3, **bold**, *italic*, - bullets, --- dividers\n"
+        "- append_formatted_to_doc(document_id, content) — add to end; supports # H1/## H2/### H3, **bold**, *italic*, - bullets, --- dividers\n"
+        "- overwrite_google_doc(document_id, content) — replace entire doc with fresh formatted content\n"
         "- replace_text_in_google_doc(document_id, search_text, replace_text)\n"
         "- get_docs_status()\n\n"
         "Use for native Google Docs documents when you need editable prose, notes, drafts, or reports. "
         "Prefer Docs over plain text Drive files when the user wants a Google Doc.\n\n"
+        "## Web\n"
+        "- fetch_url(url) — retrieve plain text from any public web page (up to 50 KB)\n\n"
 
         "## Google Sheets\n"
         "- create_spreadsheet(title, sheet_tab, headers)\n"
@@ -351,8 +355,10 @@ def create_agent(
     create_google_doc_tool = FunctionTool(func=docs_tool.create_google_doc)
     read_google_doc_tool = FunctionTool(func=docs_tool.read_google_doc)
     append_formatted_to_doc_tool = FunctionTool(func=docs_tool.append_formatted_to_doc, require_confirmation=doc_confirmation)
+    overwrite_google_doc_tool = FunctionTool(func=docs_tool.overwrite_google_doc, require_confirmation=doc_confirmation)
     replace_text_in_google_doc_tool = FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=doc_confirmation)
     docs_status_tool = FunctionTool(func=docs_tool.get_docs_status)
+    fetch_url_tool = FunctionTool(func=fetch_url)
 
     # Sheets tools
     create_spreadsheet_tool = FunctionTool(func=sheets_tool.create_spreadsheet)
@@ -423,8 +429,10 @@ def create_agent(
         create_google_doc_tool,
         read_google_doc_tool,
         append_formatted_to_doc_tool,
+        overwrite_google_doc_tool,
         replace_text_in_google_doc_tool,
         docs_status_tool,
+        fetch_url_tool,
         # Sheets tools
         create_spreadsheet_tool,
         add_sheet_tab_tool,

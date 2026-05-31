@@ -12,6 +12,7 @@ from .model_callbacks import on_tool_error
 from .preferences_tool import PreferencesTool
 from .resource_confirmation import sheet_confirmation, doc_confirmation
 from .time_tool import TimeTool
+from .web_tool import fetch_url
 
 
 _PRO_MODEL = "gemini-3.1-pro-preview"
@@ -48,6 +49,8 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         save_multiple_memories_tool,
         # Search — primary research tool
         search_tool,
+        # Web fetch — retrieve full page content from URLs found during search
+        FunctionTool(func=fetch_url),
         # Code execution — for reliable dedup, date math, and ranking
         code_executor_tool,
         # Time + timezone — required for date-anchored searches and SCHEDULE_NEXT
@@ -65,6 +68,7 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         FunctionTool(func=docs_tool.create_google_doc),
         FunctionTool(func=docs_tool.read_google_doc),
         FunctionTool(func=docs_tool.append_formatted_to_doc, require_confirmation=doc_confirmation),
+        FunctionTool(func=docs_tool.overwrite_google_doc, require_confirmation=doc_confirmation),
         FunctionTool(func=docs_tool.replace_text_in_google_doc, require_confirmation=doc_confirmation),
         FunctionTool(func=docs_tool.get_docs_status),
         # Sheets
@@ -94,7 +98,8 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "`create_google_doc(title)` for docs, `create_spreadsheet(title)` for sheets. "
         "Newly created resources are auto-approved for subsequent writes in the same task.\n"
         "- You cannot create new Drive files (other than Docs/Sheets above).\n"
-        "Write tools: `append_formatted_to_doc` (for Docs — supports rich formatting), "
+        "Write tools: `append_formatted_to_doc` (add content to end of a Doc), "
+        "`overwrite_google_doc` (replace entire Doc content — use for recurring runs that regenerate the full doc), "
         "`replace_text_in_google_doc`, "
         "`ensure_sheet_headers`, `append_record_to_sheet`, `update_sheet_row`, `batch_update_sheet_rows`. "
         "Prefer `batch_update_sheet_rows` when modifying 3+ existing rows in one go. "

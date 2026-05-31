@@ -49,7 +49,7 @@ def test_create_google_doc_with_content():
     tool = DocsTool.__new__(DocsTool)
     docs_service = _make_docs_service()
     drive_service = _make_drive_service()
-    tool._append_to_google_doc_with_token = MagicMock(
+    tool._append_formatted_to_doc_with_token = MagicMock(
         return_value={"document_id": "doc123", "appended_characters": 5}
     )
 
@@ -67,7 +67,7 @@ def test_create_google_doc_with_content():
         "mimeType": "application/vnd.google-apps.document",
         "parents": ["folder123"],
     }
-    tool._append_to_google_doc_with_token.assert_called_once_with(
+    tool._append_formatted_to_doc_with_token.assert_called_once_with(
         docs_service,
         "doc123",
         "Hello",
@@ -84,7 +84,7 @@ def test_read_google_doc_with_token():
     assert result == {
         "document_id": "doc123",
         "title": "Project Plan",
-        "text": "Hello world\n",
+        "text": "Hello world",
     }
 
 

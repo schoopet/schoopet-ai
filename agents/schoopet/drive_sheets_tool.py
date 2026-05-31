@@ -494,6 +494,55 @@ class SheetsTool:
             "remaining_records": max(0, len(data_rows) - len(records)),
         }
 
+    def _get_sheet_gid(self, service, spreadsheet_id: str, tab_name: str) -> Optional[int]:
+        """Return the numeric sheetId (gid) for a named tab, or None."""
+        meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        for sheet in meta.get("sheets", []):
+            props = sheet.get("properties", {})
+            if props.get("title") == tab_name:
+                return props.get("sheetId")
+        return None
+
+    def _format_header_row(self, service, spreadsheet_id: str, tab_name: str, num_cols: int) -> None:
+        """Bold and freeze the header row for a sheet tab."""
+        gid = self._get_sheet_gid(service, spreadsheet_id, tab_name)
+        if gid is None or num_cols == 0:
+            return
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": gid,
+                                "startRowIndex": 0,
+                                "endRowIndex": 1,
+                                "startColumnIndex": 0,
+                                "endColumnIndex": num_cols,
+                            },
+                            "cell": {
+                                "userEnteredFormat": {
+                                    "textFormat": {"bold": True},
+                                    "backgroundColor": {"red": 0.85, "green": 0.90, "blue": 0.98},
+                                }
+                            },
+                            "fields": "userEnteredFormat(textFormat,backgroundColor)",
+                        }
+                    },
+                    {
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": gid,
+                                "gridProperties": {"frozenRowCount": 1},
+                            },
+                            "fields": "gridProperties.frozenRowCount",
+                        }
+                    },
+                ]
+            },
+        ).execute()
+
     def _ensure_headers_with_token(
         self,
         service,
@@ -509,6 +558,8 @@ class SheetsTool:
             self._add_column_with_token(service, sheet_id, header, sheet_tab)
             added_headers.append(header)
             current_headers.append(header)
+
+        self._format_header_row(service, sheet_id, sheet_tab, len(current_headers))
 
         return {
             "sheet_id": sheet_id,
@@ -1104,7 +1155,7 @@ class DocsTool:
         document_url = file_result.get("webViewLink", "")
 
         if content and document_id:
-            self._append_to_google_doc_with_token(docs_service, document_id, content)
+            self._append_formatted_to_doc_with_token(docs_service, document_id, content)
 
         return {
             "document_id": document_id,
@@ -1113,17 +1164,50 @@ class DocsTool:
             "folder_id": folder_id,
         }
 
-    def _extract_document_text(self, document: Dict[str, Any]) -> str:
-        pieces: List[str] = []
+    def _extract_document_markdown(self, document: Dict[str, Any]) -> str:
+        _HEADING_PREFIX = {
+            "HEADING_1": "# ",
+            "HEADING_2": "## ",
+            "HEADING_3": "### ",
+            "HEADING_4": "#### ",
+        }
+        lines: List[str] = []
         for element in document.get("body", {}).get("content", []):
             paragraph = element.get("paragraph")
             if not paragraph:
                 continue
+            style_type = paragraph.get("paragraphStyle", {}).get("namedStyleType", "NORMAL_TEXT")
+            prefix = _HEADING_PREFIX.get(style_type, "")
+            is_bullet = "bullet" in paragraph
+            runs: List[str] = []
             for item in paragraph.get("elements", []):
                 text_run = item.get("textRun")
-                if text_run:
-                    pieces.append(text_run.get("content", ""))
-        return "".join(pieces)
+                if not text_run:
+                    continue
+                text = text_run.get("content", "").rstrip("\n")
+                if not text:
+                    continue
+                ts = text_run.get("textStyle", {})
+                bold = ts.get("bold", False)
+                italic = ts.get("italic", False)
+                if bold and italic:
+                    text = f"***{text}***"
+                elif bold:
+                    text = f"**{text}**"
+                elif italic:
+                    text = f"*{text}*"
+                runs.append(text)
+            line = "".join(runs)
+            if not line:
+                lines.append("")
+                continue
+            if prefix:
+                lines.append(f"{prefix}{line}")
+            elif is_bullet:
+                lines.append(f"- {line}")
+            else:
+                lines.append(line)
+        return "\n".join(lines)
 
     def _read_google_doc_with_token(
         self,
@@ -1134,8 +1218,32 @@ class DocsTool:
         return {
             "document_id": document_id,
             "title": document.get("title", ""),
-            "text": self._extract_document_text(document),
+            "text": self._extract_document_markdown(document),
         }
+
+    def _overwrite_google_doc_with_token(
+        self,
+        docs_service,
+        document_id: str,
+        content: str,
+    ) -> Dict[str, Any]:
+        document = docs_service.documents().get(documentId=document_id).execute()
+        end_index = document.get("body", {}).get("content", [{}])[-1].get("endIndex", 2)
+        requests: List[Dict] = []
+        if end_index > 2:
+            requests.append({
+                "deleteContentRange": {
+                    "range": {"startIndex": 1, "endIndex": end_index - 1}
+                }
+            })
+        formatted, _ = _build_formatted_requests(content, 1)
+        requests.extend(formatted)
+        if requests:
+            docs_service.documents().batchUpdate(
+                documentId=document_id,
+                body={"requests": requests},
+            ).execute()
+        return {"document_id": document_id, "written_characters": len(content)}
 
     def _append_to_google_doc_with_token(
         self,
@@ -1326,6 +1434,33 @@ class DocsTool:
             )
         except HttpError as e:
             return f"Error appending formatted content to Google Doc: {e}"
+
+    async def overwrite_google_doc(
+        self,
+        document_id: str,
+        content: str,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Replace the entire content of a Google Doc with new formatted content.
+
+        Clears the existing body and writes fresh content using the same Markdown
+        syntax as append_formatted_to_doc. Use this for recurring tasks that want
+        to regenerate the doc from scratch rather than append.
+        """
+        _, err = require_user_id(tool_context, "docs")
+        if err:
+            return err
+
+        docs_service, _ = await self._get_services(tool_context)
+        if docs_service is None:
+            return ""
+
+        try:
+            return _json_dumps(
+                self._overwrite_google_doc_with_token(docs_service, document_id, content)
+            )
+        except HttpError as e:
+            return f"Error overwriting Google Doc: {e}"
 
     async def replace_text_in_google_doc(
         self,

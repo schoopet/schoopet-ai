@@ -28,6 +28,7 @@ REQUIRE_CONFIRMATION_CALLABLE = {
     "update_sheet_cell",
     # Doc tools — approve once per document_id
     "append_formatted_to_doc",
+    "overwrite_google_doc",
     "replace_text_in_google_doc",
     # Drive tools — approve once per folder_id
     "save_attachment_to_drive",
@@ -67,6 +68,7 @@ NO_CONFIRMATION = {
     "list_email_rules",
     "create_google_doc",
     "create_spreadsheet",
+    "fetch_url",
 }
 
 # "bool" | "callable" | False
