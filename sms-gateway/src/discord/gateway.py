@@ -614,14 +614,28 @@ class SchoopetGateway(discord.Client):
             )
             return
 
+        buttons_disabled = False
+        view.disable_buttons()
+        try:
+            await interaction.edit_original_response(view=view)
+            buttons_disabled = True
+        except Exception:
+            logger.warning(
+                "[confirm] Failed to disable Discord approval buttons immediately: "
+                "user=%s pending_id=%s",
+                user_id,
+                pending_id,
+                exc_info=True,
+            )
+
         pending = await self._session_manager.get_pending_approval(
             user_id,
             pending_id,
             session_scope=session_scope or None,
         )
         if not pending:
-            view.disable_buttons()
-            await interaction.edit_original_response(view=view)
+            if not buttons_disabled:
+                await interaction.edit_original_response(view=view)
             await interaction.followup.send("That approval is no longer pending.")
             return
 
@@ -663,8 +677,8 @@ class SchoopetGateway(discord.Client):
                 pending_id,
                 session_scope=session_scope or None,
             )
-            view.disable_buttons()
-            await interaction.edit_original_response(view=view)
+            if not buttons_disabled:
+                await interaction.edit_original_response(view=view)
 
             new_confirmations = self._agent_client.extract_confirmation_requests(all_events)
             response = self._agent_client.extract_text(all_events)

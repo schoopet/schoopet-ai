@@ -565,6 +565,9 @@ async def test_approval_callback_defers_before_pending_lookup(gateway_services):
         calls.append("get_pending_approval")
         return pending
 
+    async def edit_original_response(**kwargs):
+        calls.append("edit_original_response")
+
     session_manager.get_pending_approval = AsyncMock(side_effect=get_pending_approval)
     session_manager.get_pending_approval_group = AsyncMock(return_value=[pending])
     session_manager.clear_pending_approval_group = AsyncMock()
@@ -573,7 +576,7 @@ async def test_approval_callback_defers_before_pending_lookup(gateway_services):
         user=SimpleNamespace(id="user-123"),
         response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock(side_effect=defer)),
         followup=SimpleNamespace(send=AsyncMock()),
-        edit_original_response=AsyncMock(),
+        edit_original_response=AsyncMock(side_effect=edit_original_response),
     )
     view = _ConfirmationView(gateway, "user-123", "pending-123")
 
@@ -586,7 +589,8 @@ async def test_approval_callback_defers_before_pending_lookup(gateway_services):
         session_scope="discord:dm:99999",
     )
 
-    assert calls[:2] == ["defer", "get_pending_approval"]
+    assert calls[:3] == ["defer", "edit_original_response", "get_pending_approval"]
+    assert all(item.disabled for item in view.children)
 
 
 @pytest.mark.asyncio
