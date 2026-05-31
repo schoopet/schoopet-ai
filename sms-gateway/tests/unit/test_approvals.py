@@ -22,7 +22,7 @@ def coord():
 
 def test_single_action_shows_full_args(coord):
     msg = coord.format_notification([_pending("update_sheet_row")])
-    assert "Approve 1 action(s)" in msg
+    assert "Approve this action for this Google Sheet?" in msg
     assert "sheet123" in msg
     assert "update_sheet_row" in msg
 
@@ -30,15 +30,14 @@ def test_single_action_shows_full_args(coord):
 def test_small_group_lists_each_action(coord):
     group = [_pending("update_sheet_row", row=i) for i in range(2, 5)]
     msg = coord.format_notification(group)
-    assert "Approve 3 action(s)" in msg
+    assert "Approve all 3 actions?" in msg
     assert msg.count("- update_sheet_row") == 3
 
 
 def test_large_uniform_group_collapses_to_summary(coord):
     group = [_pending("update_sheet_row", row=i) for i in range(2, 34)]  # 32 rows
     msg = coord.format_notification(group)
-    assert "Approve 32 action(s)" in msg
-    assert "sheet123" in msg
+    assert "Approve all 32 actions?" in msg
     assert "32 × update_sheet_row" in msg
     # must not list each row individually — stays well under Discord's 4000-char limit
     assert len(msg) < 300
@@ -50,7 +49,7 @@ def test_large_mixed_group_truncates_with_overflow_line(coord):
         + [_pending("append_record_to_sheet", row=i) for i in range(6, 10)]
     )
     msg = coord.format_notification(group)
-    assert "Approve 8 action(s)" in msg
+    assert "Approve all 8 actions?" in msg
     assert "… and 3 more" in msg
     assert msg.count("\n- ") == PendingApprovalCoordinator.MAX_LISTED_ACTIONS + 1  # 5 listed + overflow
 

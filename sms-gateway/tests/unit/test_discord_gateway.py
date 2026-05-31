@@ -126,6 +126,7 @@ def gateway_services():
     session_manager.get_pending_approval = AsyncMock()
     session_manager.get_pending_approval_group = AsyncMock()
     session_manager.clear_pending_approval_group = AsyncMock()
+    session_manager.set_pending_approval_group_message = AsyncMock()
     _coord = PendingApprovalCoordinator()
     session_manager.should_send_pending_approval_notification = _coord.should_send_notification
     session_manager.pending_approval_notification_id = _coord.notification_id
@@ -217,14 +218,20 @@ async def test_gateway_confirmation_request_stores_pending_and_sends_button_view
 ):
     gateway, session_manager, agent_client = gateway_services
     agent_client.send_message_events = AsyncMock(return_value=_confirmation_events())
-    session_manager.add_pending_approval = AsyncMock(
-        return_value={
-            "id": "pending-123",
-            "tool_name": "send_email",
-            "is_group_notification_owner": True,
-        }
+    pending = {
+        "id": "pending-123",
+        "tool_name": "send_email",
+        "tool_args": {"to": "x@example.com", "subject": "Hi"},
+        "approval_group_id": "session:agent-session-123:discord:",
+        "approval_notification_id": "pending-123",
+        "is_group_notification_owner": True,
+    }
+    session_manager.add_pending_approval = AsyncMock(return_value=pending)
+    session_manager.get_pending_approval_group = AsyncMock(return_value=[pending])
+    channel = SimpleNamespace(
+        id="channel-123",
+        send=AsyncMock(return_value=SimpleNamespace(id=123)),
     )
-    channel = SimpleNamespace(send=AsyncMock())
 
     await gateway._handle_gateway_message("user-123", "send it", channel)
 
@@ -232,31 +239,152 @@ async def test_gateway_confirmation_request_stores_pending_and_sends_button_view
     send_kwargs = channel.send.await_args.kwargs
     assert isinstance(send_kwargs["view"], _ConfirmationView)
     assert "Approve this action?" in channel.send.await_args.args[0]
+    session_manager.set_pending_approval_group_message.assert_awaited_once_with(
+        "user-123",
+        "pending-123",
+        approval_channel_id="channel-123",
+        approval_message_id="123",
+        session_scope="discord:dm:channel-123",
+    )
     session_manager.update_last_activity.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_gateway_multiple_confirmations_shows_all_buttons(gateway_services):
+async def test_gateway_multiple_confirmations_shows_one_grouped_button_view(gateway_services):
     gateway, session_manager, agent_client = gateway_services
     agent_client.send_message_events = AsyncMock(return_value=_two_confirmation_events())
-    session_manager.add_pending_approval = AsyncMock(
-        side_effect=[
-            {"id": "pending-1", "tool_name": "create_calendar_event"},
-            {"id": "pending-2", "tool_name": "save_file_to_drive"},
-        ]
+    pending_1 = {
+        "id": "pending-1",
+        "tool_name": "create_calendar_event",
+        "tool_args": {"title": "Lunch"},
+        "approval_group_id": "session:agent-session-123:discord:",
+        "approval_notification_id": "pending-1",
+        "is_group_notification_owner": True,
+    }
+    pending_2 = {
+        "id": "pending-2",
+        "tool_name": "save_file_to_drive",
+        "tool_args": {"filename": "notes.txt"},
+        "approval_group_id": "session:agent-session-123:discord:",
+        "approval_notification_id": "pending-1",
+        "is_group_notification_owner": False,
+    }
+    session_manager.add_pending_approval = AsyncMock(side_effect=[pending_1, pending_2])
+    session_manager.get_pending_approval_group = AsyncMock(return_value=[pending_1, pending_2])
+    channel = SimpleNamespace(
+        id="channel-123",
+        send=AsyncMock(return_value=SimpleNamespace(id=123)),
     )
-    channel = SimpleNamespace(send=AsyncMock())
 
     await gateway._handle_gateway_message("user-123", "do both", channel)
 
     assert session_manager.add_pending_approval.await_count == 2
-    # 1 status message ("> working...") + 2 confirmation button views
-    assert channel.send.await_count == 3
+    # 1 status message ("> working...") + 1 grouped confirmation button view
+    assert channel.send.await_count == 2
     confirmation_calls = [c for c in channel.send.await_args_list if "view" in c.kwargs]
-    assert len(confirmation_calls) == 2
-    for call in confirmation_calls:
-        assert isinstance(call.kwargs["view"], _ConfirmationView)
+    assert len(confirmation_calls) == 1
+    call = confirmation_calls[0]
+    assert isinstance(call.kwargs["view"], _ConfirmationView)
+    assert "Approve all 2 actions?" in call.args[0]
+    assert [item.label for item in call.kwargs["view"].children] == ["Approve All", "Reject All"]
     session_manager.update_last_activity.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_gateway_appends_confirmation_by_editing_existing_group_message(gateway_services):
+    gateway, session_manager, _ = gateway_services
+    pending = {
+        "id": "pending-2",
+        "tool_name": "save_file_to_drive",
+        "tool_args": {"filename": "notes.txt"},
+        "approval_group_id": "session:agent-session-123:discord:",
+        "approval_notification_id": "pending-1",
+        "approval_message_id": "123",
+        "approval_channel_id": "channel-123",
+    }
+    pending_group = [
+        {
+            "id": "pending-1",
+            "tool_name": "create_calendar_event",
+            "tool_args": {"title": "Lunch"},
+            "approval_group_id": "session:agent-session-123:discord:",
+            "approval_notification_id": "pending-1",
+            "is_group_notification_owner": True,
+            "approval_message_id": "123",
+            "approval_channel_id": "channel-123",
+        },
+        pending,
+    ]
+    existing_message = SimpleNamespace(edit=AsyncMock())
+    channel = SimpleNamespace(
+        id="channel-123",
+        fetch_message=AsyncMock(return_value=existing_message),
+        send=AsyncMock(),
+    )
+    session_manager.add_pending_approval = AsyncMock(return_value=pending)
+    session_manager.get_pending_approval_group = AsyncMock(return_value=pending_group)
+
+    await gateway._store_and_send_confirmations(
+        user_id="user-123",
+        confirmations=[object()],
+        session_id="agent-session-123",
+        channel=channel,
+        session_scope="discord:dm:99999",
+    )
+
+    existing_message.edit.assert_awaited_once()
+    channel.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_gateway_sends_new_group_message_when_existing_edit_fails(gateway_services):
+    gateway, session_manager, _ = gateway_services
+    pending = {
+        "id": "pending-2",
+        "tool_name": "save_file_to_drive",
+        "tool_args": {"filename": "notes.txt"},
+        "approval_group_id": "session:agent-session-123:discord:",
+        "approval_notification_id": "pending-1",
+        "approval_message_id": "123",
+        "approval_channel_id": "channel-123",
+    }
+    pending_group = [
+        {
+            "id": "pending-1",
+            "tool_name": "create_calendar_event",
+            "tool_args": {"title": "Lunch"},
+            "approval_group_id": "session:agent-session-123:discord:",
+            "approval_notification_id": "pending-1",
+            "is_group_notification_owner": True,
+            "approval_message_id": "123",
+            "approval_channel_id": "channel-123",
+        },
+        pending,
+    ]
+    channel = SimpleNamespace(
+        id="channel-123",
+        fetch_message=AsyncMock(side_effect=RuntimeError("deleted")),
+        send=AsyncMock(return_value=SimpleNamespace(id=456)),
+    )
+    session_manager.add_pending_approval = AsyncMock(return_value=pending)
+    session_manager.get_pending_approval_group = AsyncMock(return_value=pending_group)
+
+    await gateway._store_and_send_confirmations(
+        user_id="user-123",
+        confirmations=[object()],
+        session_id="agent-session-123",
+        channel=channel,
+        session_scope="discord:dm:99999",
+    )
+
+    channel.send.assert_awaited_once()
+    session_manager.set_pending_approval_group_message.assert_awaited_once_with(
+        "user-123",
+        "pending-1",
+        approval_channel_id="channel-123",
+        approval_message_id="456",
+        session_scope="discord:dm:99999",
+    )
 
 
 @pytest.mark.asyncio

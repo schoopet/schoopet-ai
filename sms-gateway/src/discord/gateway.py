@@ -171,6 +171,7 @@ class _ConfirmationView(discord.ui.View):
         user_id: str,
         pending_id: str,
         session_scope: str = "",
+        action_count: int = 1,
     ):
         super().__init__(timeout=15 * 60)
         self._gateway = gateway
@@ -179,12 +180,12 @@ class _ConfirmationView(discord.ui.View):
         self._session_scope = session_scope
 
         approve = discord.ui.Button(
-            label="Approve",
+            label="Approve All" if action_count > 1 else "Approve",
             style=discord.ButtonStyle.success,
             custom_id=f"{pending_id}:approve",
         )
         reject = discord.ui.Button(
-            label="Reject",
+            label="Reject All" if action_count > 1 else "Reject",
             style=discord.ButtonStyle.danger,
             custom_id=f"{pending_id}:reject",
         )
@@ -354,8 +355,7 @@ class SchoopetGateway(discord.Client):
         session_scope: str,
         followup=None,
     ) -> None:
-        pending_by_group: dict[str, list[dict]] = {}
-        send_group: dict[str, bool] = {}
+        touched_groups: dict[str, str] = {}
 
         for confirmation in confirmations:
             pending = await self._session_manager.add_pending_approval(
@@ -366,16 +366,15 @@ class SchoopetGateway(discord.Client):
                 session_scope=session_scope,
             )
             group_id = pending.get("approval_group_id") or pending["id"]
-            pending_by_group.setdefault(group_id, []).append(pending)
-            send_group[group_id] = (
-                send_group.get(group_id, False)
-                or pending.get("is_group_notification_owner", True)
-            )
+            touched_groups[group_id] = pending["id"]
 
-        for group_id, pending_group in pending_by_group.items():
-            if not send_group.get(group_id, True):
-                continue
-            if not self._session_manager.should_send_pending_approval_notification(pending_group):
+        for pending_id in touched_groups.values():
+            pending_group = await self._session_manager.get_pending_approval_group(
+                user_id,
+                pending_id,
+                session_scope=session_scope or None,
+            )
+            if not pending_group:
                 continue
             notification_id = self._session_manager.pending_approval_notification_id(pending_group)
             message = self._session_manager.format_pending_approval_notification(pending_group)
@@ -384,11 +383,65 @@ class SchoopetGateway(discord.Client):
                 user_id,
                 notification_id,
                 session_scope=session_scope,
+                action_count=len(pending_group),
             )
-            if followup is not None:
-                await followup.send(message, view=view)
-            else:
-                await channel.send(message, view=view)
+            await self._send_or_update_confirmation_group(
+                user_id=user_id,
+                notification_id=notification_id,
+                pending_group=pending_group,
+                message=message,
+                view=view,
+                channel=channel,
+                session_scope=session_scope,
+                followup=followup,
+            )
+
+    async def _send_or_update_confirmation_group(
+        self,
+        *,
+        user_id: str,
+        notification_id: str,
+        pending_group: list[dict],
+        message: str,
+        view: _ConfirmationView,
+        channel,
+        session_scope: str,
+        followup=None,
+    ) -> None:
+        existing_message_id = next(
+            (pending.get("approval_message_id") for pending in pending_group if pending.get("approval_message_id")),
+            "",
+        )
+        if existing_message_id and hasattr(channel, "fetch_message"):
+            try:
+                existing_message = await channel.fetch_message(int(existing_message_id))
+                await existing_message.edit(content=message, view=view)
+                return
+            except Exception as exc:
+                logger.warning(
+                    "[confirm] Failed to edit approval message; sending a new one: "
+                    "user=%s pending_id=%s message_id=%s error=%s",
+                    user_id,
+                    notification_id,
+                    existing_message_id,
+                    exc,
+                )
+
+        if followup is not None:
+            sent = await followup.send(message, view=view)
+        else:
+            sent = await channel.send(message, view=view)
+
+        sent_message_id = getattr(sent, "id", "")
+        channel_id = getattr(channel, "id", "")
+        if sent_message_id and channel_id:
+            await self._session_manager.set_pending_approval_group_message(
+                user_id,
+                notification_id,
+                approval_channel_id=str(channel_id),
+                approval_message_id=str(sent_message_id),
+                session_scope=session_scope or None,
+            )
 
     async def _handle_gateway_message(
         self,

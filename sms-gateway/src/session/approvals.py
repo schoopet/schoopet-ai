@@ -41,13 +41,18 @@ class PendingApprovalCoordinator:
         session_scope: str,
         created_at: datetime,
     ) -> dict[str, Any]:
-        group_id, resource_id, resource_label = self._group_for_confirmation(
+        resource_id, resource_label = self._resource_for_confirmation(
             confirmation_data,
-            pending_id,
+        )
+        group_id = self._group_for_live_session(
+            session_id=session_id,
+            channel=channel,
+            session_scope=session_scope,
         )
         existing_owner_id = self._existing_notification_id(existing_pending, group_id)
+        existing_message = self._existing_message_metadata(existing_pending, group_id)
 
-        return {
+        pending = {
             "id": pending_id,
             "user_id": user_id,
             "agent_session_id": session_id,
@@ -67,6 +72,9 @@ class PendingApprovalCoordinator:
             "approval_notification_id": existing_owner_id or pending_id,
             "is_group_notification_owner": not bool(existing_owner_id),
         }
+        if existing_message:
+            pending.update(existing_message)
+        return pending
 
     def group_for_pending_id(
         self,
@@ -101,11 +109,7 @@ class PendingApprovalCoordinator:
     def notification_id(self, pending_group: list[dict[str, Any]]) -> str:
         if not pending_group:
             return ""
-        return (
-            pending_group[0].get("approval_notification_id")
-            or pending_group[0].get("id")
-            or ""
-        )
+        return self._notification_owner(pending_group).get("id") or ""
 
     def should_send_notification(self, pending_group: list[dict[str, Any]]) -> bool:
         return any(
@@ -116,19 +120,19 @@ class PendingApprovalCoordinator:
     MAX_LISTED_ACTIONS = 5
 
     def format_notification(self, pending_group: list[dict[str, Any]]) -> str:
-        first = pending_group[0]
-        resource_id = first.get("approval_resource_id") or ""
-        resource_label = first.get("approval_resource_label") or "resource"
         count = len(pending_group)
 
-        if resource_id:
-            header = f"Approve {count} action(s) for this {resource_label}?\n{resource_id}"
-        else:
-            header = "Approve this action?"
-
         if count == 1:
+            first = pending_group[0]
+            resource_id = first.get("approval_resource_id") or ""
+            resource_label = first.get("approval_resource_label") or "resource"
+            if resource_id:
+                header = f"Approve this action for this {resource_label}?\n{resource_id}"
+            else:
+                header = "Approve this action?"
             return f"{header}\n{self._format_action(first)}"
 
+        header = f"Approve all {count} actions?"
         tool_names = [p.get("tool_name", "unknown") for p in pending_group]
         if len(set(tool_names)) == 1 and count > self.MAX_LISTED_ACTIONS:
             return f"{header}\n- {count} × {tool_names[0]}"
@@ -139,11 +143,19 @@ class PendingApprovalCoordinator:
             actions += f"\n- … and {count - self.MAX_LISTED_ACTIONS} more"
         return f"{header}\n{actions}"
 
-    def _group_for_confirmation(
+    @staticmethod
+    def _group_for_live_session(
+        *,
+        session_id: str,
+        channel: str,
+        session_scope: str,
+    ) -> str:
+        return f"session:{session_id}:{channel}:{session_scope}"
+
+    def _resource_for_confirmation(
         self,
         confirmation_data: dict[str, Any],
-        pending_id: str,
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str]:
         tool_args = confirmation_data.get("tool_args") or {}
         if not isinstance(tool_args, dict):
             tool_args = {}
@@ -151,10 +163,9 @@ class PendingApprovalCoordinator:
         for arg_name, label in RESOURCE_ID_ARGS.items():
             resource_id = str(tool_args.get(arg_name) or "").strip()
             if resource_id:
-                return f"resource:{resource_id}", resource_id, label
+                return resource_id, label
 
-        function_call_id = str(confirmation_data.get("function_call_id") or pending_id)
-        return f"action:{function_call_id}", "", ""
+        return "", ""
 
     def _existing_notification_id(
         self,
@@ -178,6 +189,30 @@ class PendingApprovalCoordinator:
                     continue
             return pending.get("approval_notification_id") or pending.get("id") or ""
         return ""
+
+    @staticmethod
+    def _existing_message_metadata(
+        pending_approvals: list[dict[str, Any]],
+        group_id: str,
+    ) -> dict[str, Any]:
+        for pending in pending_approvals:
+            if pending.get("approval_group_id") != group_id:
+                continue
+            message_id = pending.get("approval_message_id")
+            channel_id = pending.get("approval_channel_id")
+            if message_id and channel_id:
+                return {
+                    "approval_message_id": message_id,
+                    "approval_channel_id": channel_id,
+                }
+        return {}
+
+    @staticmethod
+    def _notification_owner(pending_group: list[dict[str, Any]]) -> dict[str, Any]:
+        return next(
+            (pending for pending in pending_group if pending.get("is_group_notification_owner")),
+            pending_group[0],
+        )
 
     @staticmethod
     def _find_pending(

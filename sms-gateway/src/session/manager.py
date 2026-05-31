@@ -467,6 +467,47 @@ class SessionManager:
         )
         await doc_ref.update({"pending_confirmations": remaining})
 
+    async def set_pending_approval_group_message(
+        self,
+        user_id: str,
+        pending_id: str,
+        *,
+        approval_channel_id: str,
+        approval_message_id: str,
+        session_scope: str | None = None,
+    ) -> None:
+        """Store the Discord message that owns a pending approval group."""
+        session = await self.get_session(user_id, session_scope=session_scope)
+        if not session:
+            return
+
+        pending_group = self._approval_coordinator.group_for_pending_id(
+            session.pending_confirmations,
+            pending_id,
+        )
+        if not pending_group:
+            return
+
+        group_ids = {pending.get("id") for pending in pending_group}
+        updated_pending = []
+        for pending in session.pending_confirmations:
+            if pending.get("id") in group_ids:
+                pending = {
+                    **pending,
+                    "approval_channel_id": approval_channel_id,
+                    "approval_message_id": approval_message_id,
+                }
+            updated_pending.append(pending)
+
+        doc_id = self._doc_id(user_id, session_scope)
+        doc_ref = self._collection.document(doc_id)
+        logger.info(
+            f"[firestore] update {COLLECTION_NAME}/{doc_id}: "
+            f"approval_group_message pending_id={pending_id} "
+            f"message_id={approval_message_id}"
+        )
+        await doc_ref.update({"pending_confirmations": updated_pending})
+
     def should_send_pending_approval_notification(self, pending_group: list[dict]) -> bool:
         """Return whether a grouped pending approval should emit a user prompt."""
         return self._approval_coordinator.should_send_notification(pending_group)
