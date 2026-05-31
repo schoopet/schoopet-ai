@@ -1,10 +1,7 @@
-from google.adk.agents.context import Context
 from google.adk.agents.llm_agent import LlmAgent
-from google.adk.agents.loop_agent import LoopAgent
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.load_memory_tool import LoadMemoryTool
-from google.adk.tools.google_search_tool import GoogleSearchTool
-from google.adk.tools.exit_loop_tool import exit_loop
+from google.adk.tools.google_search_agent_tool import GoogleSearchAgentTool, create_google_search_agent
 from google.adk.tools.agent_tool import AgentTool
 from .global_gemini import GlobalGemini
 from .calendar_tool import CalendarTool
@@ -17,73 +14,7 @@ from .resource_confirmation import sheet_confirmation, doc_confirmation
 from .time_tool import TimeTool
 
 
-_FLASH_MODEL = "gemini-3-flash-preview"
 _PRO_MODEL = "gemini-3.1-pro-preview"
-
-
-async def _append_iteration_results(callback_context: Context) -> None:
-    """Append iteration_results to cumulative search_results after each searcher run."""
-    findings = callback_context.state.get("iteration_results", "")
-    existing = callback_context.state.get("search_results", "")
-    callback_context.state["search_results"] = (existing + "\n\n" + findings).strip()
-
-
-def _make_research_loop() -> LoopAgent:
-    """LoopAgent: search → critique, up to 3 iterations.
-
-    research_searcher only has GoogleSearchTool (no function tools), so
-    bypass_multi_tools_limit is never triggered and the tool stays named
-    google_search. Findings are accumulated via after_agent_callback —
-    guaranteed to run after every searcher execution, no model involved.
-    """
-    searcher = LlmAgent(
-        name="research_searcher",
-        model=GlobalGemini(model=_FLASH_MODEL),
-        tools=[GoogleSearchTool()],
-        output_key="iteration_results",
-        after_agent_callback=_append_iteration_results,
-        on_tool_error_callback=on_tool_error,
-        instruction=(
-            "You are a research search assistant. Your job is to find candidates matching "
-            "the research task described in the conversation.\n\n"
-            "On the first iteration: run broad searches covering general quality, recently opened/upcoming, "
-            "and preference-specific angles.\n"
-            "On subsequent iterations: focus on gaps identified by the critique agent in critique_result. "
-            "Do not repeat items already in search_results.\n\n"
-            "For each item found, include:\n"
-            "- Name / title\n"
-            "- Key details (location, date, price, rating, genre — whatever applies)\n"
-            "- Source URL\n"
-            "- One sentence on why it fits the research goal\n\n"
-            "Output only the NEW findings from this iteration as a structured list. "
-            "Do not include items already in search_results. Do not filter or rank."
-        ),
-    )
-
-    critique = LlmAgent(
-        name="research_critique",
-        model=GlobalGemini(model=_PRO_MODEL),
-        tools=[FunctionTool(func=exit_loop)],
-        output_key="critique_result",
-        on_tool_error_callback=on_tool_error,
-        instruction=(
-            "You are a research quality critic. Review all search results accumulated so far "
-            "(in search_results from prior iterations) and evaluate coverage.\n\n"
-            "Evaluate:\n"
-            "1. Are there at least 6 distinct, high-quality candidates?\n"
-            "2. Do results cover multiple angles (established quality, recently opened, preference-matched)?\n"
-            "3. Is there meaningful variety (neighborhoods, styles, price points, etc.)?\n\n"
-            "If coverage is sufficient: call exit_loop() — no further output needed.\n"
-            "If more is needed, output: NEEDS_MORE_RESEARCH: <specific gaps to address next>\n\n"
-            "Be strict — only call exit_loop() when coverage is genuinely good."
-        ),
-    )
-
-    return LoopAgent(
-        name="research_loop",
-        sub_agents=[searcher, critique],
-        max_iterations=3,
-    )
 
 
 def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
@@ -107,10 +38,16 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
 
     code_executor_tool = AgentTool(agent=create_code_executor_agent())
 
+    search_tool = GoogleSearchAgentTool(
+        create_google_search_agent(GlobalGemini(model=_PRO_MODEL))
+    )
+
     tools = [
         load_memory_tool,
         save_memory_tool,
         save_multiple_memories_tool,
+        # Search — primary research tool
+        search_tool,
         # Code execution — for reliable dedup, date math, and ranking
         code_executor_tool,
         # Time + timezone — required for date-anchored searches and SCHEDULE_NEXT
@@ -190,14 +127,18 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "- Find the most recent date_added across all entries (use `code_executor` if the list is long)\n"
         "- Use that date to anchor recency searches ('opened after [date]', 'announced since [date]')\n"
         "- Build the full list of already-tracked names and rejected items before running searches\n"
-        "This ensures the research loop focuses only on what is genuinely new.\n\n"
+        "This ensures your searches focus only on what is genuinely new.\n\n"
 
-        "### 3. Run the Research Loop\n"
-        "Delegate to the research_loop sub-agent. It runs up to 3 iterations of:\n"
-        "  a. **Search** — Google searches covering broad quality, recency, and preference-specific angles. "
-        "     On subsequent iterations it focuses on gaps identified by the prior critique.\n"
-        "  b. **Critique** — evaluates total coverage; calls exit_loop() if sufficient, otherwise outputs gaps\n\n"
-        "Consolidated results are in session state under search_results after the loop completes.\n\n"
+        "### 3. Run Iterative Searches\n"
+        "Use the `google_search_agent` tool directly to find candidates. Call it 1-3 times with "
+        "varied, complementary queries covering different angles:\n"
+        "- First call: broad quality + recency (e.g. 'best new [category] [location] 2024 2025')\n"
+        "- Second call: preference-specific angle (e.g. '[style/cuisine/genre] [location] highly rated')\n"
+        "- Third call (if needed): gap-filling (e.g. recently opened, upcoming, niche criteria)\n\n"
+        "After each call, assess your running total of distinct quality candidates. "
+        "Stop when you have at least 6 strong, varied candidates — do not call more times than necessary. "
+        "For each item found, note: name/title, key details (location, date, price, rating, genre), "
+        "source URL, and one sentence on why it fits the research goal.\n\n"
 
         "### 4. Deduplicate\n"
         "Cross-reference all findings against the existing collection (built in step 2 or read now):\n"
@@ -259,7 +200,6 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         name="deep_research_agent",
         model=GlobalGemini(model=model_name),
         tools=tools,
-        sub_agents=[_make_research_loop()],
         instruction=prompt,
         on_tool_error_callback=on_tool_error,
         after_agent_callback=save_session_to_memory,
