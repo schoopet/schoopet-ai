@@ -20,6 +20,8 @@ from typing import Any
 
 from google.adk.tools import ToolContext
 
+from .utils import normalize_drive_id
+
 logger = logging.getLogger(__name__)
 
 # Session-state keys shared with gateway async task execution.
@@ -44,7 +46,7 @@ def make_resource_confirmation(id_arg: str):
                 (e.g. "sheet_id", "document_id", "folder_id").
     """
     async def _check(tool_context: ToolContext = None, **kwargs: Any) -> bool:
-        resource_id = kwargs.get(id_arg) or "_default_"
+        resource_id = normalize_drive_id(kwargs.get(id_arg) or "_default_")
         state_key = f"{_RESOURCE_CONFIRMED_PREFIX}{resource_id}"
 
         if tool_context is None:
@@ -133,3 +135,4 @@ def make_resource_confirmation(id_arg: str):
 sheet_confirmation = make_resource_confirmation("sheet_id")
 doc_confirmation = make_resource_confirmation("document_id")
 drive_folder_confirmation = make_resource_confirmation("folder_id")
+drive_file_confirmation = make_resource_confirmation("file_id")

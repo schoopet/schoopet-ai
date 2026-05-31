@@ -200,7 +200,7 @@ def test_list_files_formats_results(drive_tool):
     )
 
     assert "Files in folder (1):" in result
-    assert "resume.pdf | ID: file-1 | PDF | Modified: 2026-04-26" in result
+    assert "resume.pdf | URL: https://drive.google.com/file/d/file-1/view | PDF | Modified: 2026-04-26" in result
 
     list_call = drive_service.files.return_value.list.call_args.kwargs
     assert list_call["q"] == "'folder-123' in parents and trashed=false and name contains 'resume'"

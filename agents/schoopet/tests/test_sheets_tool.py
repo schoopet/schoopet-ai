@@ -54,7 +54,7 @@ def test_sheet_metadata_with_token(sheets_tool):
     metadata = sheets_tool._sheet_metadata_with_token(service, "sheet123", "Leads")
 
     assert metadata == {
-        "sheet_id": "sheet123",
+        "spreadsheet_url": "https://docs.google.com/spreadsheets/d/sheet123/edit",
         "sheet_tab": "Leads",
         "headers": ["Name", "Email"],
         "header_count": 2,
@@ -180,7 +180,7 @@ async def test_public_read_sheet_records_returns_json(sheets_tool):
     sheets_tool._get_service = AsyncMock(return_value=(MagicMock(), None))
     sheets_tool._read_records_with_token = MagicMock(
         return_value={
-            "sheet_id": "sheet123",
+            "spreadsheet_url": "https://docs.google.com/spreadsheets/d/sheet123/edit",
             "sheet_tab": "Leads",
             "headers": ["Name"],
             "records": [{"Name": "Ada"}],
@@ -219,7 +219,7 @@ def test_create_spreadsheet_with_headers(sheets_tool):
         ["Name", "Email"],
         "Candidates",
     )
-    assert result["spreadsheet_id"] == "sheet123"
+    assert result["spreadsheet_url"] == "https://docs.google.com/spreadsheets/d/sheet123/edit"
     assert result["sheet_tab"] == "Candidates"
 
 
@@ -246,7 +246,7 @@ def test_add_sheet_tab_with_headers(sheets_tool):
         "Archive",
     )
     assert result == {
-        "spreadsheet_id": "sheet123",
+        "spreadsheet_url": "https://docs.google.com/spreadsheets/d/sheet123/edit",
         "sheet_tab": "Archive",
         "headers": ["Name"],
     }
@@ -295,7 +295,12 @@ def test_batch_update_rows_empty_list_returns_zero_counts(sheets_tool):
 
     result = sheets_tool._batch_update_rows_with_token(service, "sheet123", [], "Leads")
 
-    assert result == {"sheet_id": "sheet123", "sheet_tab": "Leads", "updated_cells": 0, "rows_affected": 0}
+    assert result == {
+        "spreadsheet_url": "https://docs.google.com/spreadsheets/d/sheet123/edit",
+        "sheet_tab": "Leads",
+        "updated_cells": 0,
+        "rows_affected": 0,
+    }
     service.spreadsheets.return_value.values.return_value.batchUpdate.assert_not_called()
 
 
@@ -303,7 +308,12 @@ def test_batch_update_rows_empty_list_returns_zero_counts(sheets_tool):
 async def test_public_batch_update_sheet_rows_returns_json(sheets_tool):
     sheets_tool._get_service = AsyncMock(return_value=MagicMock())
     sheets_tool._batch_update_rows_with_token = MagicMock(
-        return_value={"sheet_id": "sheet123", "sheet_tab": "Leads", "updated_cells": 6, "rows_affected": 3}
+        return_value={
+            "spreadsheet_url": "https://docs.google.com/spreadsheets/d/sheet123/edit",
+            "sheet_tab": "Leads",
+            "updated_cells": 6,
+            "rows_affected": 3,
+        }
     )
     tool_context = MagicMock()
     tool_context.user_id = "+15555550123"
@@ -325,7 +335,6 @@ async def test_public_create_spreadsheet_returns_json(sheets_tool):
     sheets_tool._get_service = AsyncMock(return_value=MagicMock())
     sheets_tool._create_spreadsheet_with_token = MagicMock(
         return_value={
-            "spreadsheet_id": "sheet123",
             "spreadsheet_url": "https://docs.google.com/spreadsheets/d/sheet123/edit",
             "title": "Hiring Tracker",
             "sheet_tab": "Candidates",
@@ -343,7 +352,7 @@ async def test_public_create_spreadsheet_returns_json(sheets_tool):
     )
 
     parsed = json.loads(result)
-    assert parsed["spreadsheet_id"] == "sheet123"
+    assert parsed["spreadsheet_url"] == "https://docs.google.com/spreadsheets/d/sheet123/edit"
     assert parsed["sheet_tab"] == "Candidates"
 
 
@@ -356,7 +365,6 @@ async def test_create_spreadsheet_preapproves_new_sheet_for_offline_writes(sheet
     sheets_tool._get_service = AsyncMock(return_value=MagicMock())
     sheets_tool._create_spreadsheet_with_token = MagicMock(
         return_value={
-            "spreadsheet_id": "newsheet999",
             "spreadsheet_url": "https://docs.google.com/spreadsheets/d/newsheet999/edit",
             "title": "Research Output",
             "sheet_tab": "Sheet1",

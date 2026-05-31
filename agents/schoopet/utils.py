@@ -1,5 +1,48 @@
 """Shared utilities for the Schoopet agent package."""
+import re
 from typing import Optional
+
+
+_DRIVE_ID_PATTERNS = [
+    re.compile(r"/document/d/([A-Za-z0-9_-]+)"),
+    re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)"),
+    re.compile(r"/presentation/d/([A-Za-z0-9_-]+)"),
+    re.compile(r"/file/d/([A-Za-z0-9_-]+)"),
+    re.compile(r"/(?:drive/)?folders/([A-Za-z0-9_-]+)"),
+    re.compile(r"[?&]id=([A-Za-z0-9_-]+)"),
+]
+
+
+def normalize_drive_id(value: str) -> str:
+    """Return a bare Drive resource ID for common Drive URL inputs."""
+    if not value or "/" not in value:
+        return value
+
+    for pattern in _DRIVE_ID_PATTERNS:
+        match = pattern.search(value)
+        if match:
+            return match.group(1)
+    return value
+
+
+def doc_url(document_id: str) -> str:
+    return f"https://docs.google.com/document/d/{document_id}/edit"
+
+
+def sheet_url(spreadsheet_id: str) -> str:
+    return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
+
+
+def drive_file_url(file_id: str, mime_type: str = "") -> str:
+    if mime_type == "application/vnd.google-apps.document":
+        return doc_url(file_id)
+    if mime_type == "application/vnd.google-apps.spreadsheet":
+        return sheet_url(file_id)
+    if mime_type == "application/vnd.google-apps.presentation":
+        return f"https://docs.google.com/presentation/d/{file_id}/edit"
+    if mime_type == "application/vnd.google-apps.folder":
+        return f"https://drive.google.com/drive/folders/{file_id}"
+    return f"https://drive.google.com/file/d/{file_id}/view"
 
 
 def normalize_user_id(user_id: str) -> str:

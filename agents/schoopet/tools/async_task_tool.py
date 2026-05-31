@@ -21,6 +21,7 @@ from ..async_tasks.models import (
     TaskStatus,
 )
 from ..preferences_tool import PreferencesTool
+from ..utils import normalize_drive_id
 from .cloud_tasks_client import get_cloud_tasks_client
 
 logger = logging.getLogger(__name__)
@@ -162,8 +163,8 @@ class AsyncTaskTool:
             schedule_at: Specific datetime to execute (ISO 8601 format).
                 Use for "remind me tomorrow at 9am" type requests.
                 Format: "2025-01-12T09:00:00" or "2025-01-12T09:00:00-08:00"
-            allowed_resource_ids: Flat list of resource IDs (Sheet IDs, Doc IDs, Drive folder
-                IDs) pre-authorized for offline access. Use when the task needs to read/write
+            allowed_resource_ids: Flat list of resource IDs or URLs (Sheet IDs, Doc IDs,
+                Drive folder IDs) pre-authorized for offline access. Use when the task needs to read/write
                 known resources without interrupting the user for confirmation.
             target_channel_id: Optional Discord channel snowflake ID to deliver the
                 completion notification to, overriding the originating channel.
@@ -231,6 +232,10 @@ class AsyncTaskTool:
         # fires and claims the document while the cloud_task_name update is in flight.
         cloud_tasks = get_cloud_tasks_client()
         cloud_task_name = cloud_tasks.get_task_name(task_id)
+        normalized_allowed_resource_ids = [
+            normalize_drive_id(resource_id)
+            for resource_id in (allowed_resource_ids or [])
+        ]
 
         # Create task document with cloud_task_name already populated
         task = AsyncTaskDocument(
@@ -239,7 +244,7 @@ class AsyncTaskTool:
             task_type=task_type,
             instruction=instruction,
             context=context or {},
-            allowed_resource_ids=allowed_resource_ids or [],
+            allowed_resource_ids=normalized_allowed_resource_ids,
             scheduled_at=scheduled_at_dt,
             cloud_task_name=cloud_task_name,
             notification_session_scope=notification_context.get("notification_session_scope", ""),

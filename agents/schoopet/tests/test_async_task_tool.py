@@ -86,7 +86,12 @@ class TestAsyncTaskTool:
         async_task_tool.create_async_task(
             task_type="research",
             instruction="DEEP_RESEARCH_TASK: find restaurants",
-            allowed_resource_ids=["sheet-abc", "sheet-def", "doc-xyz", "folder-1"],
+            allowed_resource_ids=[
+                "sheet-abc",
+                "https://docs.google.com/spreadsheets/d/sheet-def/edit",
+                "https://docs.google.com/document/d/doc-xyz/edit",
+                "https://drive.google.com/drive/folders/folder-1",
+            ],
             tool_context=tool_context,
         )
 

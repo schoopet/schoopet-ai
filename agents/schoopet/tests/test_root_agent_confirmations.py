@@ -28,8 +28,9 @@ REQUIRE_CONFIRMATION_CALLABLE = {
     "append_formatted_to_doc",
     "overwrite_google_doc",
     "replace_text_in_google_doc",
-    # Drive tools — approve once per folder_id
+    # Drive tools — approve once per folder_id / file_id
     "save_attachment_to_drive",
+    "rename_drive_file",
 }
 
 NO_CONFIRMATION = {

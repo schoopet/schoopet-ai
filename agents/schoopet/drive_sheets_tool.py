@@ -10,7 +10,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from .resource_confirmation import _RESOURCE_CONFIRMED_PREFIX
-from .utils import require_user_id
+from .utils import doc_url, drive_file_url, normalize_drive_id, require_user_id, sheet_url
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class DriveTool:
             .execute()
         )
         file_id = data.get("id", "")
-        file_link = f"https://drive.google.com/file/d/{file_id}/view" if file_id else ""
+        file_link = drive_file_url(file_id, "text/plain") if file_id else ""
         return f"Saved '{filename}' to Drive.{' Link: ' + file_link if file_link else ''}"
 
     def _save_binary_with_token(
@@ -96,8 +96,30 @@ class DriveTool:
             .execute()
         )
         file_id = data.get("id", "")
-        file_link = f"https://drive.google.com/file/d/{file_id}/view" if file_id else ""
+        file_link = drive_file_url(file_id, mime_type) if file_id else ""
         return f"Saved '{filename}' to Drive.{' Link: ' + file_link if file_link else ''}"
+
+    def _rename_drive_file_with_token(
+        self,
+        service,
+        file_id: str,
+        new_name: str,
+    ) -> Dict[str, Any]:
+        """Rename a Drive file (works for Docs, Sheets, Slides, or any Drive file)."""
+        data = (
+            service.files()
+            .update(
+                fileId=file_id,
+                body={"name": new_name},
+                fields="id,name,mimeType",
+            )
+            .execute()
+        )
+        return {
+            "file_url": drive_file_url(data.get("id", file_id), data.get("mimeType", "")),
+            "name": data.get("name", new_name),
+            "mime_type": data.get("mimeType", ""),
+        }
 
     def _list_files_with_token(
         self,
@@ -131,7 +153,10 @@ class DriveTool:
             modified = f.get("modifiedTime", "")[:10]
             mime = f.get("mimeType", "")
             type_label = _mime_label(mime)
-            lines.append(f"  {f['name']} | ID: {f['id']} | {type_label} | Modified: {modified}")
+            lines.append(
+                f"  {f['name']} | URL: {drive_file_url(f['id'], mime)} | "
+                f"{type_label} | Modified: {modified}"
+            )
         return "\n".join(lines)
 
     # ── Public methods ──────────────────────────────────────────────────────────
@@ -160,6 +185,7 @@ class DriveTool:
         _, err = require_user_id(tool_context, "drive")
         if err:
             return err
+        folder_id = normalize_drive_id(folder_id)
 
         service = await self._get_service(tool_context)
         if service is None:
@@ -199,6 +225,7 @@ class DriveTool:
         _, err = require_user_id(tool_context, "drive")
         if err:
             return err
+        folder_id = normalize_drive_id(folder_id)
 
         artifact = await tool_context.load_artifact(artifact_filename)
         if not artifact or not artifact.inline_data:
@@ -219,6 +246,45 @@ class DriveTool:
         except HttpError as e:
             return f"Error saving attachment to Drive: {e}"
 
+    async def rename_drive_file(
+        self,
+        file_id: str,
+        new_name: str,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Rename a Google Drive file.
+
+        Works for any Drive resource — Google Docs, Sheets, Slides, PDFs, etc.
+        Only changes the file's name (title); the contents, parents, and sharing
+        are untouched.
+
+        Args:
+            file_id: (Required) Drive file ID. For a Google Doc this is the same
+                as document_id; for a Sheet, the same as sheet_id.
+            new_name: (Required) New name to set on the file.
+
+        Returns:
+            JSON {file_url, name, mime_type} on success, or an error string.
+
+        Note:
+            Requires user_id from tool_context.
+        """
+        _, err = require_user_id(tool_context, "drive")
+        if err:
+            return err
+        file_id = normalize_drive_id(file_id)
+
+        service = await self._get_service(tool_context)
+        if service is None:
+            return ""
+
+        try:
+            return _json_dumps(
+                self._rename_drive_file_with_token(service, file_id, new_name)
+            )
+        except HttpError as e:
+            return f"Error renaming Drive file: {e}"
+
     async def list_drive_files(
         self,
         folder_id: str,
@@ -238,7 +304,7 @@ class DriveTool:
             max_results: Maximum number of files to return (default: 20).
 
         Returns:
-            Formatted list of files (name, ID, type, last modified), or access instructions.
+            Formatted list of files (name, URL, type, last modified), or access instructions.
 
         Note:
             Requires user_id from tool_context.
@@ -246,6 +312,7 @@ class DriveTool:
         _, err = require_user_id(tool_context, "drive")
         if err:
             return err
+        folder_id = normalize_drive_id(folder_id)
 
         service = await self._get_service(tool_context)
         if service is None:
@@ -334,8 +401,7 @@ class SheetsTool:
             self._ensure_headers_with_token(service, sheet_id, headers, sheet_tab)
 
         return {
-            "spreadsheet_id": sheet_id,
-            "spreadsheet_url": spreadsheet_url,
+            "spreadsheet_url": spreadsheet_url or sheet_url(sheet_id),
             "title": title,
             "sheet_tab": sheet_tab,
             "headers": headers,
@@ -370,7 +436,7 @@ class SheetsTool:
             self._ensure_headers_with_token(service, sheet_id, headers, sheet_tab)
 
         return {
-            "spreadsheet_id": sheet_id,
+            "spreadsheet_url": sheet_url(sheet_id),
             "sheet_tab": sheet_tab,
             "headers": headers,
         }
@@ -436,7 +502,7 @@ class SheetsTool:
         headers = rows[0] if rows else []
         data_rows = rows[1:] if len(rows) > 1 else []
         return {
-            "sheet_id": sheet_id,
+            "spreadsheet_url": sheet_url(sheet_id),
             "sheet_tab": sheet_tab,
             "headers": headers,
             "header_count": len(headers),
@@ -457,7 +523,7 @@ class SheetsTool:
         truncated_rows = data_rows[:max_rows]
         records = [_row_to_record(headers, row) for row in truncated_rows]
         return {
-            "sheet_id": sheet_id,
+            "spreadsheet_url": sheet_url(sheet_id),
             "sheet_tab": sheet_tab,
             "headers": headers,
             "records": records,
@@ -533,7 +599,7 @@ class SheetsTool:
         self._format_header_row(service, sheet_id, sheet_tab, len(current_headers))
 
         return {
-            "sheet_id": sheet_id,
+            "spreadsheet_url": sheet_url(sheet_id),
             "sheet_tab": sheet_tab,
             "headers": current_headers,
             "added_headers": added_headers,
@@ -557,7 +623,7 @@ class SheetsTool:
         values = [_stringify_cell(record.get(header, "")) for header in current_headers]
         append_result = self._append_row_with_token(service, values, sheet_id, sheet_tab)
         return {
-            "sheet_id": sheet_id,
+            "spreadsheet_url": sheet_url(sheet_id),
             "sheet_tab": sheet_tab,
             "headers": current_headers,
             "record": {header: _stringify_cell(record.get(header, "")) for header in current_headers},
@@ -577,7 +643,7 @@ class SheetsTool:
         headers = rows[0] if rows else []
         if not headers:
             return {
-                "sheet_id": sheet_id,
+                "spreadsheet_url": sheet_url(sheet_id),
                 "sheet_tab": sheet_tab,
                 "match_column": match_column,
                 "match_value": match_value,
@@ -600,7 +666,7 @@ class SheetsTool:
 
         truncated = matches[:max_rows]
         return {
-            "sheet_id": sheet_id,
+            "spreadsheet_url": sheet_url(sheet_id),
             "sheet_tab": sheet_tab,
             "match_column": match_column,
             "match_value": match_value,
@@ -636,7 +702,12 @@ class SheetsTool:
                 })
 
         if not data:
-            return {"sheet_id": sheet_id, "sheet_tab": sheet_tab, "updated_cells": 0, "rows_affected": 0}
+            return {
+                "spreadsheet_url": sheet_url(sheet_id),
+                "sheet_tab": sheet_tab,
+                "updated_cells": 0,
+                "rows_affected": 0,
+            }
 
         result = (
             service.spreadsheets()
@@ -648,7 +719,7 @@ class SheetsTool:
             .execute()
         )
         return {
-            "sheet_id": sheet_id,
+            "spreadsheet_url": sheet_url(sheet_id),
             "sheet_tab": sheet_tab,
             "updated_cells": result.get("totalUpdatedCells", len(data)),
             "rows_affected": len(rows),
@@ -684,6 +755,7 @@ class SheetsTool:
         _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
+        sheet_id = normalize_drive_id(sheet_id)
 
         service = await self._get_service(tool_context)
         if service is None:
@@ -702,7 +774,14 @@ class SheetsTool:
                 )
                 .execute()
             )
-            return f"Cell {cell_range} updated to '{value}'."
+            return _json_dumps(
+                {
+                    "spreadsheet_url": sheet_url(sheet_id),
+                    "sheet_tab": sheet_tab,
+                    "cell": cell_range,
+                    "value": value,
+                }
+            )
         except HttpError as e:
             return f"Error updating cell: {e}"
 
@@ -751,7 +830,7 @@ class SheetsTool:
                 sheet_tab,
                 headers or [],
             )
-            sheet_id = result.get("spreadsheet_id", "")
+            sheet_id = normalize_drive_id(result.get("spreadsheet_url", ""))
             if sheet_id and tool_context is not None:
                 tool_context.state[f"{_RESOURCE_CONFIRMED_PREFIX}{sheet_id}"] = True
             return _json_dumps(result)
@@ -769,6 +848,7 @@ class SheetsTool:
         _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
+        sheet_id = normalize_drive_id(sheet_id)
 
         service = await self._get_service(tool_context)
         if service is None:
@@ -796,6 +876,7 @@ class SheetsTool:
         _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
+        sheet_id = normalize_drive_id(sheet_id)
 
         service = await self._get_service(tool_context)
         if service is None:
@@ -817,6 +898,7 @@ class SheetsTool:
         _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
+        sheet_id = normalize_drive_id(sheet_id)
 
         service = await self._get_service(tool_context)
         if service is None:
@@ -840,6 +922,7 @@ class SheetsTool:
         _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
+        sheet_id = normalize_drive_id(sheet_id)
 
         service = await self._get_service(tool_context)
         if service is None:
@@ -863,6 +946,7 @@ class SheetsTool:
         _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
+        sheet_id = normalize_drive_id(sheet_id)
 
         service = await self._get_service(tool_context)
         if service is None:
@@ -888,6 +972,7 @@ class SheetsTool:
         _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
+        sheet_id = normalize_drive_id(sheet_id)
 
         service = await self._get_service(tool_context)
         if service is None:
@@ -931,6 +1016,7 @@ class SheetsTool:
         _, err = require_user_id(tool_context, "sheets")
         if err:
             return err
+        sheet_id = normalize_drive_id(sheet_id)
 
         service = await self._get_service(tool_context)
         if service is None:
@@ -977,16 +1063,14 @@ class DocsTool:
             .execute()
         )
         document_id = file_result.get("id", "")
-        document_url = file_result.get("webViewLink", "")
+        document_url = file_result.get("webViewLink", "") or doc_url(document_id)
 
         if content and document_id:
             self._append_formatted_to_doc_with_token(docs_service, document_id, content)
 
         return {
-            "document_id": document_id,
             "document_url": document_url,
             "title": title,
-            "folder_id": folder_id,
         }
 
     def _extract_document_markdown(self, document: Dict[str, Any]) -> str:
@@ -1041,7 +1125,7 @@ class DocsTool:
     ) -> Dict[str, Any]:
         document = docs_service.documents().get(documentId=document_id).execute()
         return {
-            "document_id": document_id,
+            "document_url": doc_url(document_id),
             "title": document.get("title", ""),
             "text": self._extract_document_markdown(document),
         }
@@ -1069,8 +1153,7 @@ class DocsTool:
                 body={"requests": requests},
             ).execute()
         return {
-            "document_id": document_id,
-            "document_url": f"https://docs.google.com/document/d/{document_id}/edit",
+            "document_url": doc_url(document_id),
             "written_characters": len(content),
         }
 
@@ -1089,8 +1172,7 @@ class DocsTool:
                 body={"requests": requests},
             ).execute()
         return {
-            "document_id": document_id,
-            "document_url": f"https://docs.google.com/document/d/{document_id}/edit",
+            "document_url": doc_url(document_id),
             "appended_characters": len(content),
         }
 
@@ -1127,7 +1209,7 @@ class DocsTool:
             .get("occurrencesChanged", 0)
         )
         return {
-            "document_id": document_id,
+            "document_url": doc_url(document_id),
             "search_text": search_text,
             "replace_text": replace_text,
             "occurrences_changed": occurrences_changed,
@@ -1144,6 +1226,7 @@ class DocsTool:
         _, err = require_user_id(tool_context, "docs")
         if err:
             return err
+        folder_id = normalize_drive_id(folder_id)
 
         docs_service, drive_service = await self._get_services(tool_context)
         if docs_service is None or drive_service is None:
@@ -1157,7 +1240,7 @@ class DocsTool:
                 content,
                 folder_id,
             )
-            document_id = result.get("document_id", "")
+            document_id = normalize_drive_id(result.get("document_url", ""))
             if document_id and tool_context is not None:
                 tool_context.state[f"{_RESOURCE_CONFIRMED_PREFIX}{document_id}"] = True
             return _json_dumps(result)
@@ -1173,6 +1256,7 @@ class DocsTool:
         _, err = require_user_id(tool_context, "docs")
         if err:
             return err
+        document_id = normalize_drive_id(document_id)
 
         docs_service, _ = await self._get_services(tool_context)
         if docs_service is None:
@@ -1201,6 +1285,7 @@ class DocsTool:
         _, err = require_user_id(tool_context, "docs")
         if err:
             return err
+        document_id = normalize_drive_id(document_id)
 
         docs_service, _ = await self._get_services(tool_context)
         if docs_service is None:
@@ -1228,6 +1313,7 @@ class DocsTool:
         _, err = require_user_id(tool_context, "docs")
         if err:
             return err
+        document_id = normalize_drive_id(document_id)
 
         docs_service, _ = await self._get_services(tool_context)
         if docs_service is None:
@@ -1251,6 +1337,7 @@ class DocsTool:
         _, err = require_user_id(tool_context, "docs")
         if err:
             return err
+        document_id = normalize_drive_id(document_id)
 
         docs_service, _ = await self._get_services(tool_context)
         if docs_service is None:

@@ -24,7 +24,7 @@ from google.adk.tools.load_memory_tool import LoadMemoryTool
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.url_context_tool import url_context
-from .resource_confirmation import doc_confirmation, sheet_confirmation, drive_folder_confirmation
+from .resource_confirmation import doc_confirmation, sheet_confirmation, drive_folder_confirmation, drive_file_confirmation
 
 
 def _personal_prompt() -> str:
@@ -99,7 +99,7 @@ def _personal_prompt() -> str:
         "1. **Draft a research plan** and present it to the user. The plan must include:\n"
         "   - Category and any subcategory (e.g. 'Italian restaurants', 'jazz concerts')\n"
         "   - Location or scope\n"
-        "   - Output destination: existing Sheet ID + tab, or Doc ID, or offer to create one\n"
+        "   - Output destination: existing Sheet URL + tab, or Doc URL, or offer to create one\n"
         "   - Filters and preferences (retrieve from memory first)\n"
         "   - For recurring plans: instruction to check the collection for the most recent date_added "
         "     and only surface items not already tracked or previously rejected\n\n"
@@ -107,9 +107,9 @@ def _personal_prompt() -> str:
         "3. **Schedule as an async task** using create_async_task with:\n"
         "   - task_type: 'research'\n"
         "   - instruction: the approved plan, prefixed with DEEP_RESEARCH_TASK:\n"
-        "   - allowed_resource_ids: flat list of pre-authorized resource IDs, e.g. "
-        '["sheet-id", "doc-id", "folder-id"]\n'
-        "   - Always pass the relevant resource IDs — this lets the task write to those resources "
+        "   - allowed_resource_ids: flat list of pre-authorized resource IDs or URLs, e.g. "
+        '["sheet-url", "doc-url", "folder-url"]\n'
+        "   - Always pass the relevant resource IDs or URLs — this lets the task write to those resources "
         "     without prompting the user again during background execution.\n"
         "   - For immediate one-off: no schedule delay\n"
         "   - For recurring: schedule_at the first occurrence; the plan should include the recurrence "
@@ -149,14 +149,23 @@ def _personal_prompt() -> str:
         "## Google Drive\n"
         "- save_file_to_drive(filename, content, folder_id): Save text content\n"
         "- save_attachment_to_drive(artifact_filename, drive_filename, folder_id): Save binary files\n"
+        "- rename_drive_file(file_id, new_name): Rename any Drive file (Doc, Sheet, Slide, PDF, ...). Use after overwrite_google_doc when the new content makes the old title stale.\n"
         "- list_drive_files(folder_id, query, max_results): List files — folder_id is required; use 'root' for the Drive root\n"
         "- get_drive_status(): Check connection\n\n"
         "Drive, Sheets, and Docs share one Google authorization. "
         "If a tool returns empty, authorization is being requested — stay silent, the user will receive a consent link.\n\n"
 
+        "Drive/Docs/Sheets tools accept either a bare ID or a full URL anywhere they ask for "
+        "document_id, sheet_id, file_id, or folder_id. They return only URL fields "
+        "(document_url, spreadsheet_url, file_url) — there is no bare-ID field in the response. "
+        "When you reference a Drive resource in a message to the user, ALWAYS render it as a "
+        "Markdown link [Title](url) using the URL the tool returned. Never print a bare ID to the user. "
+        "When you need to reference a resource in a follow-up tool call, pass the URL straight back "
+        "in as the ID argument — normalization is handled internally.\n\n"
+
         "## Google Docs\n"
-        "- create_google_doc(title, content, folder_id) — returns JSON with document_id and document_url\n"
-        "- read_google_doc(document_id) — returns JSON {document_id, title, text}; `text` is Markdown reconstructed from the doc's styles\n"
+        "- create_google_doc(title, content, folder_id) — returns JSON with document_url\n"
+        "- read_google_doc(document_id) — returns JSON {document_url, title, text}; `text` is Markdown reconstructed from the doc's styles\n"
         "- append_formatted_to_doc(document_id, content) — add Markdown content to the end of a doc\n"
         "- overwrite_google_doc(document_id, content) — clear and replace the entire doc with new Markdown content\n"
         "- replace_text_in_google_doc(document_id, search_text, replace_text) — literal string replace; does NOT interpret Markdown in replace_text\n"
@@ -221,7 +230,7 @@ def _personal_prompt() -> str:
 
         "**Offline resource writes:**\n"
         "When a background task needs to write to an existing Sheet, Doc, or Drive folder, always pass "
-        "those IDs in allowed_resource_ids. This pre-authorizes the resource so the offline task does "
+        "those IDs or URLs in allowed_resource_ids. This pre-authorizes the resource so the offline task does "
         "not pause on an interactive confirmation request.\n\n"
 
         "**Recurring tasks:**\n"
@@ -349,6 +358,7 @@ def create_agent(
     # Drive tools
     save_to_drive_tool = FunctionTool(func=drive_tool.save_file_to_drive, require_confirmation=True)
     save_attachment_to_drive_tool = FunctionTool(func=drive_tool.save_attachment_to_drive, require_confirmation=drive_folder_confirmation)
+    rename_drive_file_tool = FunctionTool(func=drive_tool.rename_drive_file, require_confirmation=drive_file_confirmation)
     list_drive_files_tool = FunctionTool(func=drive_tool.list_drive_files)
     drive_status_tool = FunctionTool(func=drive_tool.get_drive_status)
 
@@ -419,6 +429,7 @@ def create_agent(
         # Drive tools
         save_to_drive_tool,
         save_attachment_to_drive_tool,
+        rename_drive_file_tool,
         list_drive_files_tool,
         drive_status_tool,
         # Docs tools

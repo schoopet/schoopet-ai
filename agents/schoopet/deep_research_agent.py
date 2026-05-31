@@ -10,7 +10,7 @@ from .drive_sheets_tool import DocsTool, DriveTool, SheetsTool
 from .memory_tool import save_memory, save_multiple_memories, save_session_to_memory
 from .model_callbacks import on_tool_error
 from .preferences_tool import PreferencesTool
-from .resource_confirmation import sheet_confirmation, doc_confirmation
+from .resource_confirmation import sheet_confirmation, doc_confirmation, drive_file_confirmation
 from .time_tool import TimeTool
 from google.adk.tools.url_context_tool import url_context
 
@@ -63,6 +63,7 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         FunctionTool(func=calendar_tool.get_calendar_status),
         # Drive
         FunctionTool(func=drive_tool.list_drive_files),
+        FunctionTool(func=drive_tool.rename_drive_file, require_confirmation=drive_file_confirmation),
         FunctionTool(func=drive_tool.get_drive_status),
         # Docs
         FunctionTool(func=docs_tool.create_google_doc),
@@ -91,16 +92,25 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "## Output Destinations\n"
         "The plan names a Google Doc or Sheet as the output destination. Writing to it is mandatory — "
         "never return the full output only in your final response and assume another agent will save it.\n"
-        "- If a Sheet/Doc ID is provided in the plan, write to it directly.\n"
-        "- If an output is named but no ID is provided, create it first: "
+        "- If a Sheet/Doc URL or ID is provided in the plan, write to it directly.\n"
+        "- If an output is named but no URL or ID is provided, create it first: "
         "`create_google_doc(title)` for docs, `create_spreadsheet(title)` for sheets. "
         "Newly created resources are auto-approved for subsequent writes in the same task.\n"
         "- You cannot create new Drive files (other than Docs/Sheets above).\n\n"
+
+        "Drive/Docs/Sheets tools accept either a bare ID or a full URL anywhere they ask for "
+        "document_id, sheet_id, file_id, or folder_id. They return only URL fields "
+        "(document_url, spreadsheet_url, file_url) — there is no bare-ID field in the response. "
+        "When you reference a Drive resource in a message to the user, ALWAYS render it as a "
+        "Markdown link [Title](url) using the URL the tool returned. Never print a bare ID to the user. "
+        "When you need to reference a resource in a follow-up tool call, pass the URL straight back "
+        "in as the ID argument — normalization is handled internally.\n\n"
 
         "Doc write tools:\n"
         "- `append_formatted_to_doc(document_id, content)` — add new entries to an existing collection (default for recurring research that grows over time).\n"
         "- `overwrite_google_doc(document_id, content)` — clear and rewrite the entire doc; use only when the plan explicitly says to regenerate the full doc each run.\n"
         "- `replace_text_in_google_doc(document_id, search_text, replace_text)` — literal string replace, NO Markdown interpretation in either argument.\n"
+        "- `rename_drive_file(file_id, new_name)` — rename a Doc or Sheet. Use after `overwrite_google_doc` when the new content makes the existing title stale (e.g. weekly report that bakes the date range into the title).\n"
         "Both formatted-write tools accept this Markdown subset:\n"
         "  # Heading 1 / ## Heading 2 / ### Heading 3\n"
         "  **bold**, *italic*, ***bold italic***\n"
@@ -113,12 +123,12 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "If a write tool returns an error, report that error explicitly.\n\n"
 
         "Read tools: `read_sheet_records` returns JSON records keyed by header. "
-        "`read_google_doc` returns JSON `{document_id, title, text}` where `text` is the doc reconstructed as Markdown "
+        "`read_google_doc` returns JSON `{document_url, title, text}` where `text` is the doc reconstructed as Markdown "
         "(`#`/`##`/`###` headings, `**bold**`/`*italic*`, `- ` bullets) — useful for finding the most recent entries when checking existing collections.\n\n"
 
         "## Reading the Research Plan\n"
         "Your input arrives as a message starting with DEEP_RESEARCH_TASK: followed by the approved plan. "
-        "The plan contains everything you need: category, location, output destination (Sheet ID / Doc ID), "
+        "The plan contains everything you need: category, location, output destination (Sheet URL / Doc URL), "
         "filters, preferences summary, and — if recurring — the recurrence rule and deduplication instructions. "
         "Parse it carefully before starting.\n\n"
 

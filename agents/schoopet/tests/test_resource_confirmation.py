@@ -36,6 +36,23 @@ async def test_resource_confirmation_approves_matching_resource_id(caplog):
 
 
 @pytest.mark.asyncio
+async def test_resource_confirmation_normalizes_url_resource_id(caplog):
+    caplog.set_level(logging.INFO)
+    check = make_resource_confirmation("document_id")
+    state = _State({f"{_RESOURCE_CONFIRMED_PREFIX}doc-456": True})
+    tool_context = SimpleNamespace(state=state, tool_confirmation=None)
+
+    requires_confirmation = await check(
+        tool_context=tool_context,
+        document_id="https://docs.google.com/document/d/doc-456/edit",
+    )
+
+    assert requires_confirmation is False
+    assert "decision=approved" in caplog.text
+    assert "actual_resource_id=doc-456" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_resource_confirmation_requires_confirmation_for_unapproved_resource(caplog):
     caplog.set_level(logging.INFO)
     check = make_resource_confirmation("document_id")

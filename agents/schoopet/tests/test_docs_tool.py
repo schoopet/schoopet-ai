@@ -50,7 +50,10 @@ def test_create_google_doc_with_content():
     docs_service = _make_docs_service()
     drive_service = _make_drive_service()
     tool._append_formatted_to_doc_with_token = MagicMock(
-        return_value={"document_id": "doc123", "appended_characters": 5}
+        return_value={
+            "document_url": "https://docs.google.com/document/d/doc123/edit",
+            "appended_characters": 5,
+        }
     )
 
     result = tool._create_google_doc_with_token(
@@ -72,7 +75,7 @@ def test_create_google_doc_with_content():
         "doc123",
         "Hello",
     )
-    assert result["document_id"] == "doc123"
+    assert result["document_url"] == "https://docs.google.com/document/d/doc123/edit"
 
 
 def test_read_google_doc_with_token():
@@ -82,7 +85,7 @@ def test_read_google_doc_with_token():
     result = tool._read_google_doc_with_token(docs_service, "doc123")
 
     assert result == {
-        "document_id": "doc123",
+        "document_url": "https://docs.google.com/document/d/doc123/edit",
         "title": "Project Plan",
         "text": "Hello world",
     }
@@ -113,7 +116,7 @@ async def test_public_read_google_doc_returns_json():
     tool._get_services = AsyncMock(return_value=(MagicMock(), MagicMock()))
     tool._read_google_doc_with_token = MagicMock(
         return_value={
-            "document_id": "doc123",
+            "document_url": "https://docs.google.com/document/d/doc123/edit",
             "title": "Project Plan",
             "text": "Hello world\n",
         }
@@ -124,7 +127,7 @@ async def test_public_read_google_doc_returns_json():
     result = await tool.read_google_doc("doc123", tool_context)
 
     parsed = json.loads(result)
-    assert parsed["document_id"] == "doc123"
+    assert parsed["document_url"] == "https://docs.google.com/document/d/doc123/edit"
     assert parsed["title"] == "Project Plan"
 
 
@@ -139,10 +142,8 @@ async def test_create_google_doc_preapproves_new_doc_for_offline_writes():
     tool._get_services = AsyncMock(return_value=(MagicMock(), MagicMock()))
     tool._create_google_doc_with_token = MagicMock(
         return_value={
-            "document_id": "newdoc999",
             "document_url": "https://docs.google.com/document/d/newdoc999/edit",
             "title": "Research Output",
-            "folder_id": "",
         }
     )
     state: dict = {}
