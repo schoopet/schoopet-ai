@@ -36,6 +36,10 @@ class TaskTimeoutError(Exception):
     """Raised when the agent times out; signals Cloud Tasks to retry."""
 
 
+class TaskTransientError(Exception):
+    """Raised on transient upstream errors (e.g. 429); signals Cloud Tasks to retry."""
+
+
 def build_allowed_resource_state(allowed_resource_ids: list[str]) -> dict[str, bool]:
     """Build ADK session state for resources approved at scheduling time."""
     return {
@@ -73,25 +77,33 @@ class GatewayTaskExecutor:
             result = await self._execute_task(task, prompt)
             await self._schedule_followup_if_requested(task, result)
             await self._update_task_result(task_id, result)
-        except TaskTimeoutError as exc:
+        except (TaskTimeoutError, TaskTransientError) as exc:
+            is_transient = isinstance(exc, TaskTransientError)
+            kind = "transient error" if is_transient else "timeout"
             attempts = int(task.get("attempts") or 1)
             if attempts >= ASYNC_TASK_MAX_ATTEMPTS:
-                error = f"timeout_exhausted after {attempts} attempts: {exc}"
-                logger.warning("Task %s exhausted retries after timeout", task_id)
+                error = f"{kind}_exhausted after {attempts} attempts: {exc}"
+                logger.warning(
+                    "Task %s exhausted retries after %s",
+                    task_id,
+                    kind,
+                )
                 await self._update_task_error(task_id, error)
                 try:
                     await self._send_completion(task, error=error)
                 except Exception:
                     logger.exception(
-                        "Failed to send task timeout exhaustion notification for %s",
+                        "Failed to send task %s exhaustion notification for %s",
+                        kind,
                         task_id,
                     )
                 return {"success": False, "error": error}
 
             logger.warning(
-                "Task %s timed out — resetting to pending for Cloud Tasks retry "
+                "Task %s hit %s — resetting to pending for Cloud Tasks retry "
                 "(attempt %d/%d)",
                 task_id,
+                kind,
                 attempts,
                 ASYNC_TASK_MAX_ATTEMPTS,
             )
@@ -223,10 +235,20 @@ class GatewayTaskExecutor:
             if not result:
                 error_summary = self._agent_client.last_stream_error_summary
                 if error_summary:
-                    raise RuntimeError(
+                    # Check if all stream errors were transient (retryable).
+                    stream_errors = self._agent_client.last_stream_errors
+                    from ..agent.client import _RETRYABLE_CODES
+
+                    all_transient = all(
+                        err.get("code") in _RETRYABLE_CODES for err in stream_errors
+                    )
+                    msg = (
                         f"Agent returned an empty response due to upstream error(s): "
                         f"{error_summary}"
                     )
+                    if all_transient:
+                        raise TaskTransientError(msg)
+                    raise RuntimeError(msg)
                 raise RuntimeError(
                     "Agent returned an empty response with no stream errors. "
                     "The model may have encountered an unrecoverable error "

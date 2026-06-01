@@ -1,4 +1,5 @@
 """Unit tests for gateway-owned async task execution."""
+
 from datetime import datetime, timedelta, timezone
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
@@ -56,7 +57,12 @@ def agent_client():
     client.delete_session = AsyncMock()
     client.extract_text = MagicMock(return_value="Task result")
     client.extract_confirmation_requests = MagicMock(return_value=[])
-    client.send_confirmation_responses_batch = AsyncMock(return_value=["follow-up-event"])
+    client.send_confirmation_responses_batch = AsyncMock(
+        return_value=["follow-up-event"]
+    )
+    # Default: no stream errors (so empty responses are treated as permanent failures)
+    client.last_stream_error_summary = ""
+    client.last_stream_errors = []
     return client
 
 
@@ -104,22 +110,24 @@ class TestGatewayTaskExecutor:
             "attempts": 1,
         }
         assert "option" in running_update.kwargs
-        doc_ref.update.assert_any_await({
-            "status": "completed",
-            "result": "Task result",
-            "completed_at": ANY,
-        })
-        doc_ref.update.assert_any_await({
-            "status": "notified",
-            "notified_at": ANY,
-        })
+        doc_ref.update.assert_any_await(
+            {
+                "status": "completed",
+                "result": "Task result",
+                "completed_at": ANY,
+            }
+        )
+        doc_ref.update.assert_any_await(
+            {
+                "status": "notified",
+                "notified_at": ANY,
+            }
+        )
         discord_sender.send_channel.assert_awaited_once_with("c1", "Task result")
         discord_sender.send.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_execute_task_creates_ephemeral_session(
-        self, executor, agent_client
-    ):
+    async def test_execute_task_creates_ephemeral_session(self, executor, agent_client):
         await executor.execute_task(TASK_ID)
 
         agent_client.create_session.assert_awaited_once_with(
@@ -139,7 +147,9 @@ class TestGatewayTaskExecutor:
         assert "Execute this research task:" in prompt
         assert "Instruction:\nResearch AI" in prompt
         assert "  topic: AI" in prompt
-        assert callable(agent_client.send_message_events.await_args.kwargs["on_tool_call"])
+        assert callable(
+            agent_client.send_message_events.await_args.kwargs["on_tool_call"]
+        )
         agent_client.delete_session.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -207,11 +217,13 @@ class TestGatewayTaskExecutor:
         assert result["success"] is False
         assert "timeout_exhausted" in result["error"]
         assert "retryable" not in result
-        doc_ref.update.assert_any_await({
-            "status": "failed",
-            "error": ANY,
-            "completed_at": ANY,
-        })
+        doc_ref.update.assert_any_await(
+            {
+                "status": "failed",
+                "error": ANY,
+                "completed_at": ANY,
+            }
+        )
         statuses = [c.args[0].get("status") for c in doc_ref.update.await_args_list]
         assert "pending" not in statuses
         discord_sender.send_channel.assert_awaited_once()
@@ -225,31 +237,39 @@ class TestGatewayTaskExecutor:
     ):
         await executor.execute_task(TASK_ID)
 
-        on_tool_call = agent_client.send_message_events.await_args.kwargs["on_tool_call"]
+        on_tool_call = agent_client.send_message_events.await_args.kwargs[
+            "on_tool_call"
+        ]
         await on_tool_call("read_sheet_records")
 
         doc_ref = firestore_client.collection.return_value.document.return_value
-        doc_ref.update.assert_any_await({
-            "last_event_at": ANY,
-            "last_tool_call": "read_sheet_records",
-        })
+        doc_ref.update.assert_any_await(
+            {
+                "last_event_at": ANY,
+                "last_tool_call": "read_sheet_records",
+            }
+        )
 
     @pytest.mark.asyncio
     async def test_failure_stores_error_and_posts_to_channel(
         self, executor, firestore_client, agent_client, discord_sender
     ):
-        agent_client.send_message_events = AsyncMock(side_effect=Exception("Agent crashed"))
+        agent_client.send_message_events = AsyncMock(
+            side_effect=Exception("Agent crashed")
+        )
 
         result = await executor.execute_task(TASK_ID)
 
         assert result["success"] is False
         assert "Agent crashed" in result["error"]
         doc_ref = firestore_client.collection.return_value.document.return_value
-        doc_ref.update.assert_any_await({
-            "status": "failed",
-            "error": "Agent crashed",
-            "completed_at": ANY,
-        })
+        doc_ref.update.assert_any_await(
+            {
+                "status": "failed",
+                "error": "Agent crashed",
+                "completed_at": ANY,
+            }
+        )
         discord_sender.send_channel.assert_awaited_once()
         channel_id, text = discord_sender.send_channel.await_args.args
         assert channel_id == "c1"
@@ -267,11 +287,13 @@ class TestGatewayTaskExecutor:
         assert result["success"] is False
         assert "empty response" in result["error"].lower()
         doc_ref = firestore_client.collection.return_value.document.return_value
-        doc_ref.update.assert_any_await({
-            "status": "failed",
-            "error": ANY,
-            "completed_at": ANY,
-        })
+        doc_ref.update.assert_any_await(
+            {
+                "status": "failed",
+                "error": ANY,
+                "completed_at": ANY,
+            }
+        )
         discord_sender.send_channel.assert_awaited_once()
         channel_id, text = discord_sender.send_channel.await_args.args
         assert channel_id == "c1"
@@ -279,20 +301,77 @@ class TestGatewayTaskExecutor:
         agent_client.delete_session.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_transient_stream_error_resets_to_pending_for_retry(
+        self, executor, firestore_client, agent_client, discord_sender
+    ):
+        """A 429 stream error should be treated as retryable, not permanent."""
+        agent_client.extract_text = MagicMock(return_value="")
+        agent_client.last_stream_error_summary = "code=429: Resource exhausted"
+        agent_client.last_stream_errors = [
+            {"code": 429, "message": "Resource exhausted"}
+        ]
+
+        result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is False
+        assert result.get("retryable") is True
+        assert "429" in result["error"]
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        doc_ref.update.assert_any_await(
+            {
+                "status": "pending",
+                "started_at": ANY,
+            }
+        )
+        discord_sender.send_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_transient_error_exhaustion_marks_failed_and_notifies(
+        self, executor, firestore_client, agent_client, discord_sender
+    ):
+        """After max attempts, transient errors should become permanent failures."""
+        agent_client.extract_text = MagicMock(return_value="")
+        agent_client.last_stream_error_summary = "code=429: Resource exhausted"
+        agent_client.last_stream_errors = [
+            {"code": 429, "message": "Resource exhausted"}
+        ]
+        # Simulate max attempts reached
+        doc = firestore_client.collection.return_value.document.return_value.get.return_value
+        doc.to_dict.return_value["attempts"] = 5
+
+        result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is False
+        assert "exhausted" in result["error"].lower()
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        doc_ref.update.assert_any_await(
+            {
+                "status": "failed",
+                "error": ANY,
+                "completed_at": ANY,
+            }
+        )
+        discord_sender.send_channel.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_discord_delivery_failure_preserves_completed_status(
         self, executor, firestore_client, agent_client, discord_sender
     ):
-        discord_sender.send_channel = AsyncMock(side_effect=Exception("Discord API error"))
+        discord_sender.send_channel = AsyncMock(
+            side_effect=Exception("Discord API error")
+        )
 
         result = await executor.execute_task(TASK_ID)
 
         assert result["success"] is True
         doc_ref = firestore_client.collection.return_value.document.return_value
-        doc_ref.update.assert_any_await({
-            "status": "completed",
-            "result": "Task result",
-            "completed_at": ANY,
-        })
+        doc_ref.update.assert_any_await(
+            {
+                "status": "completed",
+                "result": "Task result",
+                "completed_at": ANY,
+            }
+        )
         statuses_written = [
             call.args[0].get("status")
             for call in doc_ref.update.await_args_list
@@ -317,7 +396,9 @@ class TestGatewayTaskExecutor:
     async def test_suppress_response_skips_discord_delivery(
         self, executor, firestore_client, agent_client, discord_sender
     ):
-        agent_client.extract_text = MagicMock(return_value="<SUPPRESS RESPONSE>\nquiet.")
+        agent_client.extract_text = MagicMock(
+            return_value="<SUPPRESS RESPONSE>\nquiet."
+        )
 
         result = await executor.execute_task(TASK_ID)
 
@@ -375,14 +456,17 @@ class TestGatewayTaskExecutor:
                 f"SCHEDULE_NEXT: every week | {next_run.isoformat()}"
             )
         )
-        with patch.object(
-            executor,
-            "_compute_cloud_task_name",
-            return_value="projects/p/tasks/followup",
-        ), patch.object(
-            executor,
-            "_create_cloud_task",
-            return_value="projects/p/tasks/followup",
+        with (
+            patch.object(
+                executor,
+                "_compute_cloud_task_name",
+                return_value="projects/p/tasks/followup",
+            ),
+            patch.object(
+                executor,
+                "_create_cloud_task",
+                return_value="projects/p/tasks/followup",
+            ),
         ):
             result = await executor.execute_task(TASK_ID)
 
@@ -447,15 +531,19 @@ class TestComputeCloudTaskName:
 class TestCreateCloudTask:
     def _make_tasks_client(self):
         client = MagicMock()
-        client.queue_path.return_value = "projects/test-project/locations/us-central1/queues/async-agent-tasks"
+        client.queue_path.return_value = (
+            "projects/test-project/locations/us-central1/queues/async-agent-tasks"
+        )
         client.task_path.return_value = "projects/test-project/locations/us-central1/queues/async-agent-tasks/tasks/execute-task-123-initial"
         client.create_task.return_value.name = "projects/test-project/locations/us-central1/queues/async-agent-tasks/tasks/execute-task-123-initial"
         return client
 
     def test_creates_task_and_returns_name(self, executor):
         tasks_client = self._make_tasks_client()
-        with patch.dict("os.environ", ENV), \
-             patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client):
+        with (
+            patch.dict("os.environ", ENV),
+            patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client),
+        ):
             result = executor._create_cloud_task(
                 task_id="task-123",
                 user_id="user-1",
@@ -471,8 +559,10 @@ class TestCreateCloudTask:
 
         tasks_client = self._make_tasks_client()
         tasks_client.create_task.side_effect = AlreadyExists("duplicate")
-        with patch.dict("os.environ", ENV), \
-             patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client):
+        with (
+            patch.dict("os.environ", ENV),
+            patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client),
+        ):
             result = executor._create_cloud_task(
                 task_id="task-123",
                 user_id="user-1",
@@ -483,8 +573,10 @@ class TestCreateCloudTask:
     def test_unexpected_exception_returns_none(self, executor):
         tasks_client = self._make_tasks_client()
         tasks_client.create_task.side_effect = RuntimeError("transient error")
-        with patch.dict("os.environ", ENV), \
-             patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client):
+        with (
+            patch.dict("os.environ", ENV),
+            patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client),
+        ):
             result = executor._create_cloud_task(
                 task_id="task-123",
                 user_id="user-1",
@@ -503,8 +595,10 @@ class TestCreateCloudTask:
 
     def test_naive_schedule_time_gets_utc_timezone(self, executor):
         tasks_client = self._make_tasks_client()
-        with patch.dict("os.environ", ENV), \
-             patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client):
+        with (
+            patch.dict("os.environ", ENV),
+            patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client),
+        ):
             executor._create_cloud_task(
                 task_id="task-123",
                 user_id="user-1",
@@ -527,19 +621,29 @@ class TestCloudTasksPayload:
         )
 
         assert task["name"].endswith("/tasks/execute-task-123-initial")
-        assert task["http_request"]["url"] == "https://gateway.example.com/internal/tasks/execute"
+        assert (
+            task["http_request"]["url"]
+            == "https://gateway.example.com/internal/tasks/execute"
+        )
         assert task["http_request"]["headers"] == {"Content-Type": "application/json"}
-        assert task["http_request"]["body"] == b'{"task_id": "task-123", "user_id": "user-123"}'
+        assert (
+            task["http_request"]["body"]
+            == b'{"task_id": "task-123", "user_id": "user-123"}'
+        )
         assert task["http_request"]["oidc_token"] == {
             "service_account_email": "svc@test-project.iam.gserviceaccount.com",
             "audience": "https://gateway.example.com",
         }
         assert task["dispatch_deadline"].seconds == 900
-        assert task["schedule_time"].ToDatetime().replace(tzinfo=timezone.utc) == scheduled
+        assert (
+            task["schedule_time"].ToDatetime().replace(tzinfo=timezone.utc) == scheduled
+        )
 
 
 class TestRequeueScheduledTasks:
-    def _make_scheduled_doc(self, task_id: str = "task-sched-1", **overrides) -> MagicMock:
+    def _make_scheduled_doc(
+        self, task_id: str = "task-sched-1", **overrides
+    ) -> MagicMock:
         data = {
             "task_id": task_id,
             "user_id": USER_ID,
@@ -568,8 +672,12 @@ class TestRequeueScheduledTasks:
         doc_ref = firestore_client.collection.return_value.document.return_value
         expected_name = "projects/p/queues/q/tasks/execute-task-sched-1-initial"
 
-        with patch.object(executor, "_compute_cloud_task_name", return_value=expected_name), \
-             patch.object(executor, "_create_cloud_task", return_value=expected_name):
+        with (
+            patch.object(
+                executor, "_compute_cloud_task_name", return_value=expected_name
+            ),
+            patch.object(executor, "_create_cloud_task", return_value=expected_name),
+        ):
             result = await executor.requeue_scheduled_tasks()
 
         assert result == {"queued": 1, "errors": 0}
@@ -577,7 +685,9 @@ class TestRequeueScheduledTasks:
 
     @pytest.mark.asyncio
     async def test_requeue_skips_tasks_already_queued(self, executor, firestore_client):
-        doc = self._make_scheduled_doc(cloud_task_name="projects/p/queues/q/tasks/existing")
+        doc = self._make_scheduled_doc(
+            cloud_task_name="projects/p/queues/q/tasks/existing"
+        )
         self._set_query_stream(firestore_client, [doc])
 
         with patch.object(executor, "_create_cloud_task") as mock_create:
@@ -598,7 +708,9 @@ class TestRequeueScheduledTasks:
         mock_create.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_requeue_skips_task_with_no_scheduled_at(self, executor, firestore_client):
+    async def test_requeue_skips_task_with_no_scheduled_at(
+        self, executor, firestore_client
+    ):
         doc = self._make_scheduled_doc(scheduled_at=None)
         self._set_query_stream(firestore_client, [doc])
 
@@ -609,14 +721,20 @@ class TestRequeueScheduledTasks:
         mock_create.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_requeue_rolls_back_name_on_cloud_task_failure(self, executor, firestore_client):
+    async def test_requeue_rolls_back_name_on_cloud_task_failure(
+        self, executor, firestore_client
+    ):
         doc = self._make_scheduled_doc()
         self._set_query_stream(firestore_client, [doc])
         doc_ref = firestore_client.collection.return_value.document.return_value
         expected_name = "projects/p/queues/q/tasks/execute-task-sched-1-initial"
 
-        with patch.object(executor, "_compute_cloud_task_name", return_value=expected_name), \
-             patch.object(executor, "_create_cloud_task", return_value=None):
+        with (
+            patch.object(
+                executor, "_compute_cloud_task_name", return_value=expected_name
+            ),
+            patch.object(executor, "_create_cloud_task", return_value=None),
+        ):
             result = await executor.requeue_scheduled_tasks()
 
         assert result == {"queued": 0, "errors": 1}
@@ -624,22 +742,33 @@ class TestRequeueScheduledTasks:
         update_calls = [c.args[0] for c in doc_ref.update.await_args_list]
         assert {"cloud_task_name": expected_name} in update_calls
         from google.cloud import firestore as fs_module
-        rollback_call = [c for c in update_calls if "cloud_task_name" in c and c["cloud_task_name"] != expected_name]
+
+        rollback_call = [
+            c
+            for c in update_calls
+            if "cloud_task_name" in c and c["cloud_task_name"] != expected_name
+        ]
         assert len(rollback_call) == 1
         assert rollback_call[0]["cloud_task_name"] is fs_module.DELETE_FIELD
 
 
 class TestCreateEmailBatchTask:
     @pytest.mark.asyncio
-    async def test_creates_firestore_doc_and_cloud_task(self, executor, firestore_client):
+    async def test_creates_firestore_doc_and_cloud_task(
+        self, executor, firestore_client
+    ):
         tasks_client = MagicMock()
-        tasks_client.queue_path.return_value = "projects/test-project/locations/us-central1/queues/async-agent-tasks"
+        tasks_client.queue_path.return_value = (
+            "projects/test-project/locations/us-central1/queues/async-agent-tasks"
+        )
         tasks_client.task_path.return_value = "projects/test-project/locations/us-central1/queues/async-agent-tasks/tasks/execute-abc-initial"
         tasks_client.create_task.return_value.name = "projects/test-project/locations/us-central1/queues/async-agent-tasks/tasks/execute-abc-initial"
 
         scheduled = datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
-        with patch.dict("os.environ", ENV), \
-             patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client):
+        with (
+            patch.dict("os.environ", ENV),
+            patch("google.cloud.tasks_v2.CloudTasksClient", return_value=tasks_client),
+        ):
             task_id = await executor.create_email_batch_task(
                 gmail_address="mirko@example.com",
                 user_id="user-1",
@@ -662,9 +791,13 @@ class TestCreateEmailBatchTask:
         doc_ref.update.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_logs_warning_when_cloud_task_creation_fails(self, executor, firestore_client):
+    async def test_logs_warning_when_cloud_task_creation_fails(
+        self, executor, firestore_client
+    ):
         scheduled = datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
-        with patch.dict("os.environ", {}, clear=True):  # missing env → _create_cloud_task returns None
+        with patch.dict(
+            "os.environ", {}, clear=True
+        ):  # missing env → _create_cloud_task returns None
             task_id = await executor.create_email_batch_task(
                 gmail_address="mirko@example.com",
                 user_id="user-1",
@@ -687,8 +820,12 @@ class TestCreateEmailBatchTask:
         scheduled = datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
         expected_name = "projects/p/queues/q/tasks/execute-email-task-initial"
 
-        with patch.object(executor, "_compute_cloud_task_name", return_value=expected_name), \
-             patch.object(executor, "_create_cloud_task", return_value=None):
+        with (
+            patch.object(
+                executor, "_compute_cloud_task_name", return_value=expected_name
+            ),
+            patch.object(executor, "_create_cloud_task", return_value=None),
+        ):
             task_id = await executor.create_email_batch_task(
                 gmail_address="mirko@example.com",
                 user_id="user-1",
@@ -702,4 +839,7 @@ class TestCreateEmailBatchTask:
         set_doc = doc_ref.set.await_args.args[0]
         assert set_doc["cloud_task_name"] == expected_name
         from google.cloud import firestore as fs_module
-        doc_ref.update.assert_awaited_once_with({"cloud_task_name": fs_module.DELETE_FIELD})
+
+        doc_ref.update.assert_awaited_once_with(
+            {"cloud_task_name": fs_module.DELETE_FIELD}
+        )

@@ -17,6 +17,13 @@ logger = logging.getLogger(__name__)
 
 _RAW_RESPONSE_PREFIX = "Failed to parse response as JSON. Raw response: "
 
+# HTTP status codes that are worth retrying with backoff.
+_RETRYABLE_CODES = {429, 503, 500}
+# Maximum retries for transient stream errors (inside the client).
+_STREAM_MAX_RETRIES = 3
+# Base delay in seconds for exponential backoff between retries.
+_STREAM_RETRY_BASE_DELAY = 2.0
+
 
 def _split_json_objects(text: str) -> list[dict]:
     """Parse one or more concatenated JSON objects from text.
@@ -275,11 +282,51 @@ class AgentEngineClient:
         message: Union[str, types.Content],
         on_tool_call: Callable[[str], Awaitable[None]] | None = None,
     ) -> list[Event]:
-        """Send a message to the agent and return native ADK events."""
-        result = await self._stream_message(user_id, session_id, message, on_tool_call)
-        # Stash stream errors on the client so callers can inspect them
-        self._last_stream_errors = result.errors
-        return result.events
+        """Send a message to the agent and return native ADK events.
+
+        Retries up to _STREAM_MAX_RETRIES times with exponential backoff
+        when the stream completes with only retryable errors (e.g. 429)
+        and no text content.
+        """
+        last_result: StreamResult | None = None
+        for attempt in range(1 + _STREAM_MAX_RETRIES):
+            result = await self._stream_message(
+                user_id, session_id, message, on_tool_call
+            )
+            response_text = self.extract_text(result.events)
+
+            if response_text or not result.has_errors:
+                # Got a real response or a clean empty (no errors) — done.
+                self._last_stream_errors = result.errors
+                return result.events
+
+            # Check if all errors are retryable.
+            all_retryable = all(
+                err.get("code") in _RETRYABLE_CODES for err in result.errors
+            )
+            if not all_retryable:
+                # Non-retryable error — give up immediately.
+                break
+
+            last_result = result
+            if attempt < _STREAM_MAX_RETRIES:
+                delay = _STREAM_RETRY_BASE_DELAY * (2**attempt)
+                logger.warning(
+                    "Retryable stream error(s) for user=%s session=%s "
+                    "(attempt %d/%d): %s — retrying in %.1fs",
+                    user_id,
+                    session_id,
+                    attempt + 1,
+                    _STREAM_MAX_RETRIES + 1,
+                    result.error_summary,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+        # All retries exhausted or non-retryable error.
+        final = last_result or result
+        self._last_stream_errors = final.errors
+        return final.events
 
     @property
     def last_stream_errors(self) -> list[dict[str, Any]]:
