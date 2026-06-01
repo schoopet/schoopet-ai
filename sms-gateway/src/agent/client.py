@@ -1,4 +1,5 @@
 """Vertex AI Agent Engine client wrapper."""
+
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -47,6 +48,30 @@ def _split_json_objects(text: str) -> list[dict]:
 
 class _TokenExpiredError(Exception):
     """Internal signal that the Vertex AI access token expired mid-stream."""
+
+
+@dataclass
+class StreamResult:
+    """Result of streaming agent events, including any errors encountered."""
+
+    events: list = field(default_factory=list)
+    errors: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def has_errors(self) -> bool:
+        return bool(self.errors)
+
+    @property
+    def error_summary(self) -> str:
+        """Human-readable summary of errors encountered during streaming."""
+        if not self.errors:
+            return ""
+        parts = []
+        for err in self.errors:
+            code = err.get("code", "unknown")
+            message = err.get("message", "no details")
+            parts.append(f"code={code}: {message}")
+        return "; ".join(parts)
 
 
 @dataclass(frozen=True)
@@ -118,7 +143,9 @@ def _log_tool_activity(event: Event, user_id: str) -> None:
     for fc in event.get_function_calls() or []:
         args = fc.args or {}
         # Truncate large args (e.g. email bodies) to keep logs readable
-        summarized = {k: (str(v)[:120] if isinstance(v, str) else v) for k, v in args.items()}
+        summarized = {
+            k: (str(v)[:120] if isinstance(v, str) else v) for k, v in args.items()
+        }
         logger.info(f"Tool call [{uid}]: {fc.name}({summarized})")
 
     for fr in event.get_function_responses() or []:
@@ -206,7 +233,9 @@ class AgentEngineClient:
         block downstream session creation.
         """
         try:
-            await self._engine.async_delete_session(user_id=user_id, session_id=session_id)
+            await self._engine.async_delete_session(
+                user_id=user_id, session_id=session_id
+            )
             logger.info(f"Deleted session {session_id} for user {user_id}")
         except Exception as e:
             logger.warning(
@@ -247,20 +276,52 @@ class AgentEngineClient:
         on_tool_call: Callable[[str], Awaitable[None]] | None = None,
     ) -> list[Event]:
         """Send a message to the agent and return native ADK events."""
+        result = await self._stream_message(user_id, session_id, message, on_tool_call)
+        # Stash stream errors on the client so callers can inspect them
+        self._last_stream_errors = result.errors
+        return result.events
+
+    @property
+    def last_stream_errors(self) -> list[dict[str, Any]]:
+        """Errors encountered during the most recent send_message_events call."""
+        return getattr(self, "_last_stream_errors", [])
+
+    @property
+    def last_stream_error_summary(self) -> str:
+        """Human-readable summary of errors from the most recent stream."""
+        errors = self.last_stream_errors
+        if not errors:
+            return ""
+        parts = []
+        for err in errors:
+            code = err.get("code", "unknown")
+            message = err.get("message", "no details")
+            parts.append(f"code={code}: {message}")
+        return "; ".join(parts)
+
+    async def _stream_message(
+        self,
+        user_id: str,
+        session_id: str,
+        message: Union[str, types.Content],
+        on_tool_call: Callable[[str], Awaitable[None]] | None = None,
+    ) -> StreamResult:
+        """Stream agent events, tracking any errors encountered."""
         logger.info(f"Sending message to agent: user={user_id}, session={session_id}")
 
         msg_payload: Union[str, dict] = (
-            message if isinstance(message, str)
+            message
+            if isinstance(message, str)
             else message.model_dump(exclude_none=True, mode="json")
         )
 
-        events: list[Event] = []
+        result = StreamResult()
         t_start = time.monotonic()
         ttft_ms: float | None = None
 
         async def _emit(event: Event) -> None:
             nonlocal ttft_ms
-            events.append(event)
+            result.events.append(event)
             if ttft_ms is None and self.extract_text([event]):
                 ttft_ms = (time.monotonic() - t_start) * 1000
             _log_tool_activity(event, user_id)
@@ -268,6 +329,19 @@ class AgentEngineClient:
                 for fc in event.get_function_calls() or []:
                     if fc.name and not fc.name.startswith("adk_"):
                         await on_tool_call(fc.name)
+
+        def _record_stream_error(error_dict: dict) -> None:
+            """Log and record an Agent Engine error from the stream."""
+            code = error_dict.get("code", "unknown")
+            message = error_dict.get("message", "no details")
+            result.errors.append(error_dict)
+            logger.error(
+                "Agent Engine stream error: code=%s, message=%s (user=%s, session=%s)",
+                code,
+                message,
+                user_id,
+                session_id,
+            )
 
         async def stream_response():
             try:
@@ -278,22 +352,25 @@ class AgentEngineClient:
                 ):
                     # Reinitialize client on expired token and propagate so caller retries
                     if isinstance(event, dict) and event.get("code") == 401:
-                        logger.warning("Access token expired — reinitializing Vertex AI client")
+                        logger.warning(
+                            "Access token expired — reinitializing Vertex AI client"
+                        )
                         self._init_client()
                         raise _TokenExpiredError()
                     logger.debug(f"Event type: {type(event).__name__}, event: {event}")
 
                     if isinstance(event, dict):
                         if "code" in event and "message" in event:
-                            logger.error(
-                                f"Agent Engine error: code={event['code']}, "
-                                f"message={event['message']}"
-                            )
+                            _record_stream_error(event)
                             continue
                         await _emit(self._coerce_event(event))
                         continue
 
-                    parsed_event = event if isinstance(event, Event) else Event.model_validate(event)
+                    parsed_event = (
+                        event
+                        if isinstance(event, Event)
+                        else Event.model_validate(event)
+                    )
                     await _emit(parsed_event)
             except _TokenExpiredError:
                 raise
@@ -304,7 +381,9 @@ class AgentEngineClient:
                 exc_str = str(exc)
                 if _RAW_RESPONSE_PREFIX not in exc_str:
                     raise
-                raw = exc_str[exc_str.index(_RAW_RESPONSE_PREFIX) + len(_RAW_RESPONSE_PREFIX):]
+                raw = exc_str[
+                    exc_str.index(_RAW_RESPONSE_PREFIX) + len(_RAW_RESPONSE_PREFIX) :
+                ]
                 recovered = _split_json_objects(raw)
                 if not recovered:
                     raise
@@ -313,10 +392,7 @@ class AgentEngineClient:
                 )
                 for event_dict in recovered:
                     if "code" in event_dict and "message" in event_dict:
-                        logger.error(
-                            f"Agent Engine error: code={event_dict['code']}, "
-                            f"message={event_dict['message']}"
-                        )
+                        _record_stream_error(event_dict)
                         continue
                     await _emit(self._coerce_event(event_dict))
 
@@ -325,21 +401,24 @@ class AgentEngineClient:
             await asyncio.wait_for(stream_response(), timeout=self._timeout)
         except _TokenExpiredError:
             logger.info("Retrying stream after token refresh")
-            events.clear()
+            result.events.clear()
+            result.errors.clear()
             ttft_ms = None
             t_start = time.monotonic()
             await asyncio.wait_for(stream_response(), timeout=self._timeout)
 
         total_ms = (time.monotonic() - t_start) * 1000
-        response_text = self.extract_text(events)
+        response_text = self.extract_text(result.events)
+        error_suffix = f", stream_errors={len(result.errors)}" if result.errors else ""
         logger.info(
             f"Agent response: {len(response_text)} chars "
-            f"[ttft={ttft_ms:.0f}ms, total={total_ms:.0f}ms]"
+            f"[ttft={ttft_ms:.0f}ms, total={total_ms:.0f}ms{error_suffix}]"
             if ttft_ms is not None
-            else f"Agent response: {len(response_text)} chars [no text received, total={total_ms:.0f}ms]"
+            else f"Agent response: {len(response_text)} chars "
+            f"[no text received, total={total_ms:.0f}ms{error_suffix}]"
         )
 
-        return events
+        return result
 
     async def send_confirmation_response(
         self,
@@ -392,7 +471,9 @@ class AgentEngineClient:
         return "".join(chunks)
 
     @staticmethod
-    def extract_confirmation_requests(events: list[Event]) -> list[AdkConfirmationRequest]:
+    def extract_confirmation_requests(
+        events: list[Event],
+    ) -> list[AdkConfirmationRequest]:
         """Extract native ADK confirmation function calls from events."""
         confirmations: list[AdkConfirmationRequest] = []
         for event in events:
@@ -400,21 +481,33 @@ class AgentEngineClient:
                 if function_call.name != "adk_request_confirmation":
                     continue
                 args = function_call.args or {}
-                original = args.get("originalFunctionCall") or args.get("original_function_call") or {}
-                tool_confirmation = args.get("toolConfirmation") or args.get("tool_confirmation") or {}
+                original = (
+                    args.get("originalFunctionCall")
+                    or args.get("original_function_call")
+                    or {}
+                )
+                tool_confirmation = (
+                    args.get("toolConfirmation") or args.get("tool_confirmation") or {}
+                )
                 confirmations.append(
                     AdkConfirmationRequest(
                         function_call_id=str(function_call.id or ""),
-                        original_function_call=original if isinstance(original, dict) else {},
+                        original_function_call=original
+                        if isinstance(original, dict)
+                        else {},
                         tool_confirmation=(
-                            tool_confirmation if isinstance(tool_confirmation, dict) else {}
+                            tool_confirmation
+                            if isinstance(tool_confirmation, dict)
+                            else {}
                         ),
                     )
                 )
         return confirmations
 
     @staticmethod
-    def extract_gcp_auto_credential_requests(events: list[Event]) -> list[tuple[str, dict]]:
+    def extract_gcp_auto_credential_requests(
+        events: list[Event],
+    ) -> list[tuple[str, dict]]:
         """Find gcpAuthProviderScheme adk_request_credential calls without an auth URI.
 
         These occur when the IAM connector credential is already stored in the backend
@@ -447,7 +540,9 @@ class AgentEngineClient:
                 )
                 results.append((str(fc.id or ""), auth_config))
         if results:
-            logger.info(f"[auto-cred] {len(results)} auto-resolvable credential request(s) found")
+            logger.info(
+                f"[auto-cred] {len(results)} auto-resolvable credential request(s) found"
+            )
         return results
 
     @staticmethod
@@ -460,7 +555,9 @@ class AgentEngineClient:
                     continue
                 args = function_call.args or {}
                 fc_id = str(function_call.id or "")
-                original_fc_id = str(args.get("functionCallId") or args.get("function_call_id") or "")
+                original_fc_id = str(
+                    args.get("functionCallId") or args.get("function_call_id") or ""
+                )
                 auth_config = args.get("authConfig") or args.get("auth_config") or {}
                 if isinstance(auth_config, dict):
                     auth_config_dict = auth_config
@@ -471,8 +568,11 @@ class AgentEngineClient:
                         auth_config_dict = {}
                 scheme_type = (auth_config_dict.get("authScheme") or {}).get("type", "")
                 credential_key = auth_config_dict.get("credentialKey", "unknown")
-                exchanged = (auth_config_dict.get("exchangedAuthCredential")
-                             or auth_config_dict.get("exchanged_auth_credential") or {})
+                exchanged = (
+                    auth_config_dict.get("exchangedAuthCredential")
+                    or auth_config_dict.get("exchanged_auth_credential")
+                    or {}
+                )
                 oauth2 = exchanged.get("oauth2") or {}
                 auth_uri = str(oauth2.get("auth_uri") or oauth2.get("authUri") or "")
                 nonce = str(oauth2.get("nonce") or "")
@@ -542,7 +642,9 @@ class AgentEngineClient:
                     auth_config_dict=auth_config,
                 )
             except asyncio.TimeoutError:
-                logger.error(f"{ctx}Timeout during IAM credential auto-resolve for {uid}")
+                logger.error(
+                    f"{ctx}Timeout during IAM credential auto-resolve for {uid}"
+                )
                 break
         else:
             remaining = self.extract_gcp_auto_credential_requests(events)
@@ -577,7 +679,12 @@ class AgentEngineClient:
         credential_key = auth_config_dict.get("credentialKey", "unknown")
         exchanged = auth_config_dict.get("exchangedAuthCredential") or {}
         oauth2 = exchanged.get("oauth2") or {}
-        token_val = oauth2.get("accessToken") or oauth2.get("access_token") or oauth2.get("token") or ""
+        token_val = (
+            oauth2.get("accessToken")
+            or oauth2.get("access_token")
+            or oauth2.get("token")
+            or ""
+        )
         logger.info(
             f"Sending credential response: user={uid} "
             f"fc_id={credential_function_call_id!r} credentialKey={credential_key!r} "

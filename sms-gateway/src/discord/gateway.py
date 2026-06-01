@@ -11,6 +11,7 @@ under Bot → Privileged Gateway Intents):
 The non-privileged DIRECT_MESSAGES and GUILD_MESSAGES intents are requested
 in code and do not need manual enabling.
 """
+
 import asyncio
 import logging
 import random
@@ -115,7 +116,6 @@ _CAT_STARTERS = ["> mrrp...", "> *purring*...", "> prrr...", "> mew..."]
 _CAT_SUFFIXES = [" mrrp", " prrr", " *purrs*", " nyaa~", " mew"]
 
 
-
 async def _build_discord_message_content(
     text: str,
     attachments,
@@ -152,9 +152,7 @@ async def _build_discord_message_content(
             prefix = "The user sent attachment(s) with no accompanying text."
         parts.insert(
             0,
-            types.Part(
-                text=f"{prefix}\n\nAttachments: {', '.join(attachment_names)}"
-            ),
+            types.Part(text=f"{prefix}\n\nAttachments: {', '.join(attachment_names)}"),
         )
     elif normalized_text:
         parts.append(types.Part(text=normalized_text))
@@ -226,11 +224,15 @@ class SchoopetGateway(discord.Client):
     # Fix 3: bounded set of recently processed message IDs to drop Discord duplicates
     _SEEN_IDS_MAX = 500
 
-    def __init__(self, session_manager, agent_client, rate_limiter=None, discord_sender=None):
+    def __init__(
+        self, session_manager, agent_client, rate_limiter=None, discord_sender=None
+    ):
         intents = discord.Intents.none()
-        intents.dm_messages = True       # receive DMs (not privileged)
-        intents.guild_messages = True    # receive server messages (not privileged)
-        intents.message_content = True   # read message text (privileged — must be enabled in portal)
+        intents.dm_messages = True  # receive DMs (not privileged)
+        intents.guild_messages = True  # receive server messages (not privileged)
+        intents.message_content = (
+            True  # read message text (privileged — must be enabled in portal)
+        )
         super().__init__(intents=intents)
         self._session_manager = session_manager
         self._agent_client = agent_client
@@ -260,8 +262,7 @@ class SchoopetGateway(discord.Client):
         text = message.content
         if is_mention:
             text = (
-                text
-                .replace(f"<@{self.user.id}>", "")
+                text.replace(f"<@{self.user.id}>", "")
                 .replace(f"<@!{self.user.id}>", "")
                 .strip()
             )
@@ -292,7 +293,9 @@ class SchoopetGateway(discord.Client):
         async def _keep_typing():
             try:
                 async with message.channel.typing():
-                    await asyncio.sleep(300)  # context manager keeps refreshing; cancelled when done
+                    await asyncio.sleep(
+                        300
+                    )  # context manager keeps refreshing; cancelled when done
             except Exception:
                 pass
 
@@ -305,7 +308,9 @@ class SchoopetGateway(discord.Client):
             return
         except Exception as e:
             typing_task.cancel()
-            logger.exception(f"Failed to read Discord attachments for user {user_id}: {e}")
+            logger.exception(
+                f"Failed to read Discord attachments for user {user_id}: {e}"
+            )
             await message.channel.send(
                 "I couldn't read one of your attachments. Please try again."
             )
@@ -325,21 +330,28 @@ class SchoopetGateway(discord.Client):
         for chunk in _split_message(response_text):
             await channel.send(chunk)
 
-    async def _send_auth_link(self, channel, auth_uri: str, nonce: str, user_id: str) -> None:
+    async def _send_auth_link(
+        self, channel, auth_uri: str, nonce: str, user_id: str
+    ) -> None:
         from urllib.parse import urlparse, quote
         from ..config import get_settings
+
         settings = get_settings()
         continue_uri = settings.IAM_CONNECTOR_CONTINUE_URI
         parsed = urlparse(continue_uri)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
-        short_url = f"{base_url}/oauth/authorize?nonce={nonce}&uid={quote(user_id, safe='')}"
+        short_url = (
+            f"{base_url}/oauth/authorize?nonce={nonce}&uid={quote(user_id, safe='')}"
+        )
         view = discord.ui.View()
-        view.add_item(discord.ui.Button(
-            label="Authorize Google Account",
-            style=discord.ButtonStyle.link,
-            url=short_url,
-            emoji="🔗",
-        ))
+        view.add_item(
+            discord.ui.Button(
+                label="Authorize Google Account",
+                style=discord.ButtonStyle.link,
+                url=short_url,
+                emoji="🔗",
+            )
+        )
         await channel.send(
             "I need access to your Google account to use this feature. "
             "Click the button below to authorize:",
@@ -376,8 +388,12 @@ class SchoopetGateway(discord.Client):
             )
             if not pending_group:
                 continue
-            notification_id = self._session_manager.pending_approval_notification_id(pending_group)
-            message = self._session_manager.format_pending_approval_notification(pending_group)
+            notification_id = self._session_manager.pending_approval_notification_id(
+                pending_group
+            )
+            message = self._session_manager.format_pending_approval_notification(
+                pending_group
+            )
             view = _ConfirmationView(
                 self,
                 user_id,
@@ -409,7 +425,11 @@ class SchoopetGateway(discord.Client):
         followup=None,
     ) -> None:
         existing_message_id = next(
-            (pending.get("approval_message_id") for pending in pending_group if pending.get("approval_message_id")),
+            (
+                pending.get("approval_message_id")
+                for pending in pending_group
+                if pending.get("approval_message_id")
+            ),
             "",
         )
         if existing_message_id and hasattr(channel, "fetch_message"):
@@ -456,7 +476,9 @@ class SchoopetGateway(discord.Client):
 
         try:
             if self._rate_limiter:
-                is_allowed, count = await self._rate_limiter.check_and_increment(user_id)
+                is_allowed, count = await self._rate_limiter.check_and_increment(
+                    user_id
+                )
                 if not is_allowed:
                     logger.warning(
                         f"Rate limit exceeded for Discord user {user_id}: {count} messages today"
@@ -485,7 +507,11 @@ class SchoopetGateway(discord.Client):
                 async def _update_status(tool_name: str) -> None:
                     try:
                         label = _format_tool_name(tool_name)
-                        suffix = random.choice(_CAT_SUFFIXES) if random.random() < 2 / 3 else ""
+                        suffix = (
+                            random.choice(_CAT_SUFFIXES)
+                            if random.random() < 2 / 3
+                            else ""
+                        )
                         await status_msg.edit(content=f"> {label}{suffix}...")
                     except Exception:
                         pass
@@ -494,18 +520,26 @@ class SchoopetGateway(discord.Client):
                     events = await self._agent_client.send_message_events(
                         user_id=user_id,
                         session_id=session_info.agent_session_id,
-                        message=wrap_message_with_discord_context(message, discord_context),
+                        message=wrap_message_with_discord_context(
+                            message, discord_context
+                        ),
                         on_tool_call=_update_status,
                     )
                 except asyncio.TimeoutError:
-                    logger.error(f"Agent timeout for Discord gateway user {user_id}", exc_info=True)
+                    logger.error(
+                        f"Agent timeout for Discord gateway user {user_id}",
+                        exc_info=True,
+                    )
                     await self._send_channel_text(
                         channel,
                         "I'm taking longer than usual to respond. Please try again in a moment.",
                     )
                     return
 
-                events, credential_req = await self._agent_client.resolve_iam_credential_events(
+                (
+                    events,
+                    credential_req,
+                ) = await self._agent_client.resolve_iam_credential_events(
                     user_id=user_id,
                     session_id=session_info.agent_session_id,
                     events=events,
@@ -520,7 +554,9 @@ class SchoopetGateway(discord.Client):
                         auth_config_dict=credential_req.auth_config_dict,
                         auth_uri=credential_req.auth_uri,
                     )
-                    await self._send_auth_link(channel, credential_req.auth_uri, credential_req.nonce, user_id)
+                    await self._send_auth_link(
+                        channel, credential_req.auth_uri, credential_req.nonce, user_id
+                    )
                     await self._session_manager.update_last_activity(
                         user_id,
                         channel="discord",
@@ -553,7 +589,20 @@ class SchoopetGateway(discord.Client):
 
                 response = self._agent_client.extract_text(events)
                 if not response:
-                    logger.warning(f"Empty response from agent for Discord gateway user {user_id}")
+                    error_summary = self._agent_client.last_stream_error_summary
+                    if error_summary:
+                        logger.error(
+                            "Empty response from agent for Discord gateway user %s "
+                            "due to upstream error(s): %s",
+                            user_id,
+                            error_summary,
+                        )
+                    else:
+                        logger.warning(
+                            "Empty response from agent for Discord gateway user %s "
+                            "(no stream errors recorded)",
+                            user_id,
+                        )
                     await self._send_channel_text(
                         channel, "I couldn't generate a response. Please try again."
                     )
@@ -583,8 +632,15 @@ class SchoopetGateway(discord.Client):
                     except Exception:
                         pass
         except Exception as e:
-            logger.exception(f"Error processing Discord gateway message for {user_id}: {e}")
-            await self._send_channel_text(channel, "Something went wrong. Please try again.")
+            logger.exception(
+                "Error processing Discord gateway message for %s: [%s] %s",
+                user_id,
+                type(e).__name__,
+                e,
+            )
+            await self._send_channel_text(
+                channel, "Something went wrong. Please try again."
+            )
 
     async def _resolve_confirmation_button(
         self,
@@ -680,7 +736,9 @@ class SchoopetGateway(discord.Client):
             if not buttons_disabled:
                 await interaction.edit_original_response(view=view)
 
-            new_confirmations = self._agent_client.extract_confirmation_requests(all_events)
+            new_confirmations = self._agent_client.extract_confirmation_requests(
+                all_events
+            )
             response = self._agent_client.extract_text(all_events)
             logger.info(
                 f"[confirm] Agent resumed (online): user={uid} pending_id={pending_id} "
@@ -711,14 +769,18 @@ class SchoopetGateway(discord.Client):
                 session_scope=session_scope,
             )
         except Exception as e:
-            logger.exception(f"Failed to resolve Discord confirmation for {user_id}: {e}")
+            logger.exception(
+                f"Failed to resolve Discord confirmation for {user_id}: {e}"
+            )
             await interaction.followup.send(
                 "I couldn't resolve that approval. Please try again.",
                 ephemeral=True,
             )
 
 
-async def _run_gateway_with_retry(session_manager, agent_client, rate_limiter, bot_token: str, discord_sender=None) -> None:
+async def _run_gateway_with_retry(
+    session_manager, agent_client, rate_limiter, bot_token: str, discord_sender=None
+) -> None:
     """Run the gateway, retrying with backoff if the connection fails."""
     delay = 30
     while True:
@@ -731,13 +793,26 @@ async def _run_gateway_with_retry(session_manager, agent_client, rate_limiter, b
         try:
             await client.start(bot_token)
         except Exception as e:
-            logger.warning(f"Discord gateway disconnected ({e}), retrying in {delay}s", exc_info=True)
+            logger.warning(
+                f"Discord gateway disconnected ({e}), retrying in {delay}s",
+                exc_info=True,
+            )
             await client.close()
             await asyncio.sleep(delay)
             delay = min(delay * 2, 300)  # cap at 5 minutes
 
 
-async def start_gateway(bot_token: str, session_manager, agent_client, rate_limiter=None, discord_sender=None) -> None:
+async def start_gateway(
+    bot_token: str,
+    session_manager,
+    agent_client,
+    rate_limiter=None,
+    discord_sender=None,
+) -> None:
     """Create and start the gateway client as a background asyncio task."""
-    asyncio.create_task(_run_gateway_with_retry(session_manager, agent_client, rate_limiter, bot_token, discord_sender))
+    asyncio.create_task(
+        _run_gateway_with_retry(
+            session_manager, agent_client, rate_limiter, bot_token, discord_sender
+        )
+    )
     logger.info("Discord gateway task started")

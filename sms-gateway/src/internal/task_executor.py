@@ -4,6 +4,7 @@ Cloud Tasks calls the gateway directly. The gateway loads the task, claims it,
 runs it in an isolated Agent Engine session, records the result, and posts the
 completion to the originating Discord channel.
 """
+
 import logging
 import os
 import re
@@ -60,7 +61,10 @@ class GatewayTaskExecutor:
         prior_status = claim["prior_status"]
         if not claim["claimed"]:
             logger.info("Task %s already processed: %s", task_id, prior_status)
-            return {"success": True, "message": f"Task already in status: {prior_status}"}
+            return {
+                "success": True,
+                "message": f"Task already in status: {prior_status}",
+            }
 
         # Phase 1: validate, execute, and persist result.
         try:
@@ -78,7 +82,10 @@ class GatewayTaskExecutor:
                 try:
                     await self._send_completion(task, error=error)
                 except Exception:
-                    logger.exception("Failed to send task timeout exhaustion notification for %s", task_id)
+                    logger.exception(
+                        "Failed to send task timeout exhaustion notification for %s",
+                        task_id,
+                    )
                 return {"success": False, "error": error}
 
             logger.warning(
@@ -91,22 +98,39 @@ class GatewayTaskExecutor:
             await self._reset_task_to_pending(task_id)
             return {"success": False, "retryable": True, "error": str(exc)}
         except Exception as exc:
-            logger.exception("Task %s failed during execution: %s", task_id, exc)
+            logger.exception(
+                "Task %s failed during execution: [%s] %s",
+                task_id,
+                type(exc).__name__,
+                exc,
+            )
             error = str(exc)
             await self._update_task_error(task_id, error)
             if gmail_address := task.get("gmail_address"):
                 doc_id = gmail_address.lower().replace("@", "_at_").replace(".", "_")
                 try:
-                    await self._db.collection("email_state").document(doc_id).update(
-                        {"pending_task_id": firestore.DELETE_FIELD}
+                    await (
+                        self._db.collection("email_state")
+                        .document(doc_id)
+                        .update({"pending_task_id": firestore.DELETE_FIELD})
                     )
-                    logger.info("Task %s failed: cleared pending_task_id for %s", task_id, gmail_address)
+                    logger.info(
+                        "Task %s failed: cleared pending_task_id for %s",
+                        task_id,
+                        gmail_address,
+                    )
                 except Exception:
-                    logger.exception("Task %s: failed to clear pending_task_id for %s", task_id, gmail_address)
+                    logger.exception(
+                        "Task %s: failed to clear pending_task_id for %s",
+                        task_id,
+                        gmail_address,
+                    )
             try:
                 await self._send_completion(task, error=error)
             except Exception:
-                logger.exception("Failed to send task failure notification for %s", task_id)
+                logger.exception(
+                    "Failed to send task failure notification for %s", task_id
+                )
             return {"success": False, "error": error}
 
         # Phase 2: deliver completion notification. Execution already succeeded, so a
@@ -135,7 +159,10 @@ class GatewayTaskExecutor:
         attempts = int(task.get("attempts") or 0) + 1
         logger.info(
             "[firestore] update %s/%s: status=running (was %s) attempts=%d",
-            ASYNC_TASKS_COLLECTION, task_id, status, attempts,
+            ASYNC_TASKS_COLLECTION,
+            task_id,
+            status,
+            attempts,
         )
         try:
             await doc_ref.update(
@@ -165,7 +192,9 @@ class GatewayTaskExecutor:
     async def _execute_task(self, task: dict[str, Any], prompt: str) -> str:
         user_id = task["user_id"]
         state = self._build_initial_state(task)
-        session_id = await self._agent_client.create_session(user_id=user_id, state=state)
+        session_id = await self._agent_client.create_session(
+            user_id=user_id, state=state
+        )
         logger.info(
             "Created background task session %s for task_id=%s user=%s",
             session_id,
@@ -192,9 +221,16 @@ class GatewayTaskExecutor:
             )
             result = self._agent_client.extract_text(events)
             if not result:
+                error_summary = self._agent_client.last_stream_error_summary
+                if error_summary:
+                    raise RuntimeError(
+                        f"Agent returned an empty response due to upstream error(s): "
+                        f"{error_summary}"
+                    )
                 raise RuntimeError(
-                    "Agent returned an empty response. The model may have encountered "
-                    "an unrecoverable error (e.g. an unknown tool name). Check Agent Engine logs."
+                    "Agent returned an empty response with no stream errors. "
+                    "The model may have encountered an unrecoverable error "
+                    "(e.g. an unknown tool name). Check Agent Engine logs."
                 )
             logger.info("Task execution complete: %s chars", len(result))
             return result
@@ -217,30 +253,48 @@ class GatewayTaskExecutor:
         ):
             value = task.get(key)
             if value:
-                state["session_scope" if key == "notification_session_scope" else key] = value
+                state[
+                    "session_scope" if key == "notification_session_scope" else key
+                ] = value
         return state
 
     async def _update_task_result(self, task_id: str, result: str) -> None:
         logger.info(
             "[firestore] update %s/%s: status=completed result_chars=%d",
-            ASYNC_TASKS_COLLECTION, task_id, len(result),
+            ASYNC_TASKS_COLLECTION,
+            task_id,
+            len(result),
         )
-        await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update({
-            "status": "completed",
-            "result": result,
-            "completed_at": datetime.now(timezone.utc),
-        })
+        await (
+            self._db.collection(ASYNC_TASKS_COLLECTION)
+            .document(task_id)
+            .update(
+                {
+                    "status": "completed",
+                    "result": result,
+                    "completed_at": datetime.now(timezone.utc),
+                }
+            )
+        )
 
     async def _record_task_tool_call(self, task_id: str, tool_name: str) -> None:
         try:
             logger.info(
                 "[firestore] update %s/%s: last_tool_call=%s",
-                ASYNC_TASKS_COLLECTION, task_id, tool_name,
+                ASYNC_TASKS_COLLECTION,
+                task_id,
+                tool_name,
             )
-            await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update({
-                "last_event_at": datetime.now(timezone.utc),
-                "last_tool_call": tool_name,
-            })
+            await (
+                self._db.collection(ASYNC_TASKS_COLLECTION)
+                .document(task_id)
+                .update(
+                    {
+                        "last_event_at": datetime.now(timezone.utc),
+                        "last_tool_call": tool_name,
+                    }
+                )
+            )
         except Exception:
             logger.warning(
                 "Task %s: failed to record progress for tool call %s",
@@ -252,33 +306,55 @@ class GatewayTaskExecutor:
     async def _mark_task_notified(self, task_id: str) -> None:
         logger.info(
             "[firestore] update %s/%s: status=notified",
-            ASYNC_TASKS_COLLECTION, task_id,
+            ASYNC_TASKS_COLLECTION,
+            task_id,
         )
-        await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update({
-            "status": "notified",
-            "notified_at": datetime.now(timezone.utc),
-        })
+        await (
+            self._db.collection(ASYNC_TASKS_COLLECTION)
+            .document(task_id)
+            .update(
+                {
+                    "status": "notified",
+                    "notified_at": datetime.now(timezone.utc),
+                }
+            )
+        )
 
     async def _update_task_error(self, task_id: str, error: str) -> None:
         logger.warning(
             "[firestore] update %s/%s: status=failed error=%r",
-            ASYNC_TASKS_COLLECTION, task_id, error[:200],
+            ASYNC_TASKS_COLLECTION,
+            task_id,
+            error[:200],
         )
-        await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update({
-            "status": "failed",
-            "error": error,
-            "completed_at": datetime.now(timezone.utc),
-        })
+        await (
+            self._db.collection(ASYNC_TASKS_COLLECTION)
+            .document(task_id)
+            .update(
+                {
+                    "status": "failed",
+                    "error": error,
+                    "completed_at": datetime.now(timezone.utc),
+                }
+            )
+        )
 
     async def _reset_task_to_pending(self, task_id: str) -> None:
         logger.info(
             "[firestore] update %s/%s: status=pending (timeout reset for retry)",
-            ASYNC_TASKS_COLLECTION, task_id,
+            ASYNC_TASKS_COLLECTION,
+            task_id,
         )
-        await self._db.collection(ASYNC_TASKS_COLLECTION).document(task_id).update({
-            "status": "pending",
-            "started_at": firestore.DELETE_FIELD,
-        })
+        await (
+            self._db.collection(ASYNC_TASKS_COLLECTION)
+            .document(task_id)
+            .update(
+                {
+                    "status": "pending",
+                    "started_at": firestore.DELETE_FIELD,
+                }
+            )
+        )
 
     async def _send_completion(
         self,
@@ -526,11 +602,14 @@ class GatewayTaskExecutor:
                 # future requeue attempt can retry this task.
                 if expected_name:
                     try:
-                        await doc_ref.update({"cloud_task_name": firestore.DELETE_FIELD})
+                        await doc_ref.update(
+                            {"cloud_task_name": firestore.DELETE_FIELD}
+                        )
                     except Exception as cleanup_exc:
                         logger.warning(
                             "Task %s: Cloud Task creation failed and cleanup failed: %s",
-                            task_id, cleanup_exc,
+                            task_id,
+                            cleanup_exc,
                             exc_info=True,
                         )
                 errors += 1
