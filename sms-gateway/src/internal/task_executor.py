@@ -231,6 +231,28 @@ class GatewayTaskExecutor:
                     tool_name,
                 ),
             )
+            # Offline mode: the agent has no user to approve confirmation requests.
+            # Auto-reject any pending confirmations so the model gets a follow-up
+            # turn and can produce a "needs your approval" message instead of
+            # silently returning empty text.
+            confirmation_requests = self._agent_client.extract_confirmation_requests(events)
+            if confirmation_requests:
+                rejections = [
+                    (req.function_call_id, False)
+                    for req in confirmation_requests
+                    if req.function_call_id
+                ]
+                if rejections:
+                    logger.info(
+                        "Task %s: auto-rejecting %d confirmation request(s) in offline mode",
+                        task.get("task_id"),
+                        len(rejections),
+                    )
+                    events = await self._agent_client.send_confirmation_responses_batch(
+                        user_id=user_id,
+                        session_id=session_id,
+                        confirmations=rejections,
+                    )
             result = self._agent_client.extract_text(events)
             if not result:
                 error_summary = self._agent_client.last_stream_error_summary
