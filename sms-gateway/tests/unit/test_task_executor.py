@@ -355,14 +355,40 @@ class TestGatewayTaskExecutor:
         discord_sender.send_channel.assert_any_await("c1", "Fallback text.")
 
     @pytest.mark.asyncio
-    async def test_offline_task_does_not_auto_decline_confirmation_requests(
-        self, executor, firestore_client, agent_client, discord_sender
+    async def test_offline_task_with_no_confirmation_requests_skips_rejection(
+        self, executor, agent_client
     ):
+        # extract_confirmation_requests returns [] by default in the fixture
         result = await executor.execute_task(TASK_ID)
 
         assert result["success"] is True
-        agent_client.extract_confirmation_requests.assert_not_called()
+        agent_client.extract_confirmation_requests.assert_called_once()
         agent_client.send_confirmation_responses_batch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_offline_task_auto_rejects_confirmation_requests(
+        self, executor, agent_client, discord_sender
+    ):
+        from src.agent.client import AdkConfirmationRequest
+
+        pending_confirmation = AdkConfirmationRequest(
+            function_call_id="fc-1",
+            original_function_call={"name": "create_calendar_event", "args": {}, "id": "fc-1"},
+            tool_confirmation={},
+        )
+        agent_client.extract_confirmation_requests = MagicMock(return_value=[pending_confirmation])
+        agent_client.send_confirmation_responses_batch = AsyncMock(return_value=["follow-up-event"])
+        agent_client.extract_text = MagicMock(return_value="Needs your approval.")
+
+        result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is True
+        agent_client.send_confirmation_responses_batch.assert_awaited_once_with(
+            user_id=USER_ID,
+            session_id="task-session-1",
+            confirmations=[("fc-1", False)],
+        )
+        discord_sender.send_channel.assert_awaited_once_with("c1", "Needs your approval.")
 
     @pytest.mark.asyncio
     async def test_schedule_next_creates_recurring_followup_task(
