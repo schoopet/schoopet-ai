@@ -22,6 +22,8 @@ locals {
     "roles/pubsub.admin",                      # pubsub topic IAM
     "roles/run.admin",                         # Cloud Run service IAM
     "roles/secretmanager.admin",               # Secret Manager secrets management
+    # Logging sink management — roles/editor does not grant logging.sinks.create
+    "roles/logging.configWriter",
     # Build / deploy extras
     "roles/cloudbuild.builds.editor",          # submit Cloud Build jobs
     "roles/serviceusage.serviceUsageConsumer", # required for gcloud builds submit
