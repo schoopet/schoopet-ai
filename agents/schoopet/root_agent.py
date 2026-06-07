@@ -3,6 +3,7 @@ import os
 from vertexai.agent_engines.templates.adk import AdkApp
 from . import gcp_auth as _gcp_auth  # noqa: F401 — registers GcpAuthProvider
 from .admin_plugin import AdminCommandPlugin
+from .token_usage_plugin import TokenUsagePlugin
 from .memory_tool import save_memory, save_multiple_memories, save_session_to_memory
 from .calendar_tool import CalendarTool
 from .preferences_tool import PreferencesTool
@@ -11,7 +12,7 @@ from .task_debug_tool import TaskDebugTool
 from .iam_connector_tool import check_connector_credential
 from .email_tool import EmailTool
 from .drive_sheets_tool import DocsTool, DriveTool, SheetsTool
-from .model_callbacks import after_model_token_counter, before_model_modifier, on_tool_error
+from .model_callbacks import before_model_modifier, on_tool_error
 from .tools.async_task_tool import AsyncTaskTool
 from .structured_notes_agent import create_structured_notes_agent
 from .search_agent import create_search_agent
@@ -503,7 +504,6 @@ def create_agent(
         sub_agents=[structured_notes_agent, deep_research_agent],
         instruction=_personal_prompt(),
         before_model_callback=before_model_modifier,
-        after_model_callback=after_model_token_counter,
         on_tool_error_callback=on_tool_error,
         after_agent_callback=save_session_to_memory,
     )
@@ -524,7 +524,7 @@ def create_adk_agent() -> AdkApp:
         agent=create_agent(),
         app_name="schoopet",
         artifact_service_builder=_artifact_service,
-        plugins=[AdminCommandPlugin()],
+        plugins=[AdminCommandPlugin(), TokenUsagePlugin()],
     )
 
 
