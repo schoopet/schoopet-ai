@@ -25,7 +25,7 @@ from google.adk.tools.load_memory_tool import LoadMemoryTool
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.url_context_tool import url_context
-from .resource_confirmation import doc_confirmation, sheet_confirmation, drive_folder_confirmation, drive_file_confirmation
+from .resource_confirmation import doc_confirmation, drive_file_confirmation, drive_folder_confirmation, offline_aware_confirmation, sheet_confirmation
 
 
 def _personal_prompt() -> str:
@@ -358,7 +358,7 @@ def create_agent(
     calendar_status_tool = FunctionTool(func=calendar_tool.get_calendar_status)
 
     # Drive tools
-    save_to_drive_tool = FunctionTool(func=drive_tool.save_file_to_drive, require_confirmation=True)
+    save_to_drive_tool = FunctionTool(func=drive_tool.save_file_to_drive, require_confirmation=offline_aware_confirmation)
     save_attachment_to_drive_tool = FunctionTool(func=drive_tool.save_attachment_to_drive, require_confirmation=drive_folder_confirmation)
     rename_drive_file_tool = FunctionTool(func=drive_tool.rename_drive_file, require_confirmation=drive_file_confirmation)
     list_drive_files_tool = FunctionTool(func=drive_tool.list_drive_files)

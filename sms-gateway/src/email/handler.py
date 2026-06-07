@@ -66,7 +66,7 @@ Untagged content (or content not inside a CHANNEL block) is sent to the user's
 default Discord DM. Rules without a channel directive use that default path.
 
 If a rule matches, follow its instructions exactly. If no rule matches, use smart defaults:
-- Calendar invites / flight or hotel confirmations / appointments → create_calendar_event + notify
+- Calendar invites / flight or hotel confirmations / appointments → summarise the email and ask the user if they want an event created; do NOT call create_calendar_event
 - Invoices / deadlines / deliveries / action required → create_async_task + notify
 - Newsletters / promotions / automated digests → respond with <SUPPRESS RESPONSE>"""
 

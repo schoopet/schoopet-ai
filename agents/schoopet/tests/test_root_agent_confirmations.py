@@ -9,15 +9,16 @@ REQUIRE_CONFIRMATION_BOOL = {
     "create_calendar_event",
     "update_calendar_event",
     "delete_calendar_event",
-    "save_file_to_drive",
     "set_timezone",
     "add_email_rule",
     "update_email_rule",
     "remove_email_rule",
 }
 
-# Tools that use make_resource_confirmation(...) for per-resource bulk approval
+# Tools that use a callable confirmation (make_resource_confirmation or offline_aware_confirmation)
 REQUIRE_CONFIRMATION_CALLABLE = {
+    # Drive upload — skip confirmation in offline/async tasks
+    "save_file_to_drive",
     # Sheet tools — approve once per sheet_id
     "add_sheet_tab",
     "ensure_sheet_headers",

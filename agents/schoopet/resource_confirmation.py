@@ -136,3 +136,15 @@ sheet_confirmation = make_resource_confirmation("sheet_id")
 doc_confirmation = make_resource_confirmation("document_id")
 drive_folder_confirmation = make_resource_confirmation("folder_id")
 drive_file_confirmation = make_resource_confirmation("file_id")
+
+
+async def offline_aware_confirmation(tool_context: ToolContext = None, **kwargs: Any) -> bool:
+    """Require confirmation in interactive sessions; skip it in offline/async tasks.
+
+    Use this for tools that have no resource ID to pre-authorize (e.g. calendar
+    events, file uploads) where offline tasks should proceed without blocking.
+    """
+    if tool_context is not None and tool_context.state.get(_OFFLINE_MODE_KEY):
+        logger.info("offline_aware_confirmation: skipping confirmation in offline mode")
+        return False
+    return True
