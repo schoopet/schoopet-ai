@@ -16,6 +16,7 @@ opentelemetry-instrumentation-google-genai>=0.4b0
 opentelemetry-instrumentation-grpc
 opentelemetry-instrumentation-httpx
 opentelemetry-instrumentation-sqlite3
+google-cloud-monitoring>=2.30.0
 opentelemetry-exporter-gcp-logging
 opentelemetry-exporter-gcp-monitoring
 opentelemetry-exporter-otlp-proto-grpc
