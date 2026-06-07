@@ -188,6 +188,7 @@ def _personal_prompt() -> str:
         "## Google Sheets\n"
         "- create_spreadsheet(title, sheet_tab, headers)\n"
         "- add_sheet_tab(sheet_id, sheet_tab, headers)\n"
+        "- list_sheet_tabs(sheet_id) — list all tab names; call first when tab name is unknown\n"
         "- get_sheet_schema(sheet_id, sheet_tab) — headers + row counts, no data\n"
         "- read_sheet_records(sheet_id, sheet_tab, max_rows) — JSON records keyed by header (canonical read)\n"
         "- ensure_sheet_headers(sheet_id, headers, sheet_tab) — add any missing headers; also bolds and freezes row 1\n"
@@ -196,7 +197,7 @@ def _personal_prompt() -> str:
         "- batch_update_sheet_rows(sheet_id, rows, sheet_tab) — list of {row: int, updates: {header: value}}; use for any row update (one row or many)\n"
         "- update_sheet_cell(sheet_id, row, column, value, sheet_tab) — low-level positional cell write; use only when you can't address the target by header\n"
         "- get_sheets_status()\n\n"
-        "Preferred workflow: create_spreadsheet (or add_sheet_tab) → read_sheet_records to inspect → "
+        "Preferred workflow: list_sheet_tabs (if tab name unknown) → get_sheet_schema → read_sheet_records to inspect → "
         "append_record_to_sheet for new rows → batch_update_sheet_rows for edits.\n\n"
 
         "## Async Tasks\n"
@@ -374,6 +375,7 @@ def create_agent(
     # Sheets tools
     create_spreadsheet_tool = FunctionTool(func=sheets_tool.create_spreadsheet)
     add_sheet_tab_tool = FunctionTool(func=sheets_tool.add_sheet_tab, require_confirmation=sheet_confirmation)
+    list_sheet_tabs_tool = FunctionTool(func=sheets_tool.list_sheet_tabs)
     sheet_schema_tool = FunctionTool(func=sheets_tool.get_sheet_schema)
     read_sheet_records_tool = FunctionTool(func=sheets_tool.read_sheet_records)
     ensure_sheet_headers_tool = FunctionTool(func=sheets_tool.ensure_sheet_headers, require_confirmation=sheet_confirmation)
@@ -444,6 +446,7 @@ def create_agent(
         # Sheets tools
         create_spreadsheet_tool,
         add_sheet_tab_tool,
+        list_sheet_tabs_tool,
         sheet_schema_tool,
         read_sheet_records_tool,
         ensure_sheet_headers_tool,
