@@ -6,9 +6,9 @@ loads the corresponding artifact from the session registry and appends it as an
 inline_data Part directly after the tool's FunctionResponse Part.
 Gemini then sees the artifact bytes natively in its context.
 
-after_model_token_counter — records token usage per Gemini call as a custom
-Cloud Monitoring metric (custom.googleapis.com/agent/token_count), broken down
-by source label ("email" vs "conversation") derived from session state.
+after_model_token_counter — writes a structured log entry per Gemini call to
+the agent_token_usage log, exported to BigQuery via a log sink. Includes
+user_id, source (email/async_task/conversation), model_version, and token counts.
 
 on_tool_error — returns a graceful error dict instead of raising when ADK
 cannot find a tool the model called (hallucinated tool names, namespace
@@ -16,10 +16,8 @@ prefixes, etc.). The model receives the error as a function response and can
 recover by calling the correct tool.
 """
 import asyncio
-import json
 import logging
 import os
-import time
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest, LlmResponse
@@ -28,19 +26,8 @@ from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-_METRIC_TYPE = "custom.googleapis.com/agent/token_count"
-
-_monitoring_client = None
 _gcp_log_client = None
 _TOKEN_USAGE_LOG = "agent_token_usage"
-
-
-def _get_monitoring_client():
-    global _monitoring_client
-    if _monitoring_client is None:
-        from google.cloud import monitoring_v3
-        _monitoring_client = monitoring_v3.MetricServiceClient()
-    return _monitoring_client
 
 
 def _get_gcp_logger(project_id: str):
@@ -51,7 +38,7 @@ def _get_gcp_logger(project_id: str):
     return _gcp_log_client.logger(_TOKEN_USAGE_LOG)
 
 
-def _write_token_metrics(
+def _write_token_log(
     project_id: str,
     user_id: str,
     source: str,
@@ -59,40 +46,6 @@ def _write_token_metrics(
     output_tokens: int,
     model_version: str,
 ) -> None:
-    try:
-        from google.cloud import monitoring_v3
-        client = _get_monitoring_client()
-        now = time.time()
-        seconds = int(now)
-        nanos = int((now - seconds) * 10**9)
-
-        series_list = []
-        for token_type, count in (("input", input_tokens), ("output", output_tokens)):
-            if count <= 0:
-                continue
-            s = monitoring_v3.TimeSeries()
-            s.metric.type = _METRIC_TYPE
-            s.metric.labels["source"] = source
-            s.metric.labels["token_type"] = token_type
-            s.resource.type = "global"
-            s.resource.labels["project_id"] = project_id
-            point = monitoring_v3.Point(
-                interval=monitoring_v3.TimeInterval(
-                    end_time={"seconds": seconds, "nanos": nanos}
-                ),
-                value=monitoring_v3.TypedValue(int64_value=count),
-            )
-            s.points = [point]
-            series_list.append(s)
-
-        if series_list:
-            client.create_time_series(
-                name=f"projects/{project_id}",
-                time_series=series_list,
-            )
-    except Exception:
-        logger.warning("Failed to write token metrics", exc_info=True)
-
     try:
         gcp_logger = _get_gcp_logger(project_id)
         gcp_logger.log_struct({
@@ -107,7 +60,7 @@ def _write_token_metrics(
         logger.warning("Failed to write token usage log entry", exc_info=True)
 
 
-async def _emit_token_metrics(
+async def _emit_token_log(
     project_id: str,
     user_id: str,
     source: str,
@@ -117,7 +70,7 @@ async def _emit_token_metrics(
 ) -> None:
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(
-        None, _write_token_metrics,
+        None, _write_token_log,
         project_id, user_id, source, input_tokens, output_tokens, model_version,
     )
 
@@ -152,7 +105,7 @@ async def after_model_token_counter(
     user_id = callback_context._invocation_context.user_id or "unknown"
     model_version = llm_response.model_version or "unknown"
 
-    asyncio.create_task(_emit_token_metrics(
+    asyncio.create_task(_emit_token_log(
         project_id, user_id, source, input_tokens, output_tokens, model_version,
     ))
     return None
