@@ -232,6 +232,7 @@ class GatewayTaskExecutor:
         )
         state[OFFLINE_MODE_KEY] = True
         state["channel"] = "discord"
+        state["task_type"] = "async_task"
         for key in (
             "notification_session_scope",
             "discord_channel_id",

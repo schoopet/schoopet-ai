@@ -129,6 +129,7 @@ class TestGatewayTaskExecutor:
                 "_resource_confirmed_doc-1": True,
                 "_offline_mode": True,
                 "channel": "discord",
+                "task_type": "async_task",
                 "session_scope": "discord:guild:g1:channel:c1",
                 "discord_channel_id": "c1",
                 "discord_channel_name": "project-alpha",

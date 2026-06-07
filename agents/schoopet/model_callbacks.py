@@ -16,6 +16,7 @@ prefixes, etc.). The model receives the error as a function response and can
 recover by calling the correct tool.
 """
 import asyncio
+import json
 import logging
 import os
 import time
@@ -30,6 +31,8 @@ logger = logging.getLogger(__name__)
 _METRIC_TYPE = "custom.googleapis.com/agent/token_count"
 
 _monitoring_client = None
+_gcp_log_client = None
+_TOKEN_USAGE_LOG = "agent_token_usage"
 
 
 def _get_monitoring_client():
@@ -40,7 +43,22 @@ def _get_monitoring_client():
     return _monitoring_client
 
 
-def _write_token_metrics(project_id: str, source: str, input_tokens: int, output_tokens: int) -> None:
+def _get_gcp_logger(project_id: str):
+    global _gcp_log_client
+    if _gcp_log_client is None:
+        from google.cloud import logging as gcloud_logging
+        _gcp_log_client = gcloud_logging.Client(project=project_id)
+    return _gcp_log_client.logger(_TOKEN_USAGE_LOG)
+
+
+def _write_token_metrics(
+    project_id: str,
+    user_id: str,
+    source: str,
+    input_tokens: int,
+    output_tokens: int,
+    model_version: str,
+) -> None:
     try:
         from google.cloud import monitoring_v3
         client = _get_monitoring_client()
@@ -75,17 +93,40 @@ def _write_token_metrics(project_id: str, source: str, input_tokens: int, output
     except Exception:
         logger.warning("Failed to write token metrics", exc_info=True)
 
+    try:
+        gcp_logger = _get_gcp_logger(project_id)
+        gcp_logger.log_struct({
+            "user_id": user_id,
+            "source": source,
+            "model_version": model_version,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        })
+    except Exception:
+        logger.warning("Failed to write token usage log entry", exc_info=True)
 
-async def _emit_token_metrics(project_id: str, source: str, input_tokens: int, output_tokens: int) -> None:
+
+async def _emit_token_metrics(
+    project_id: str,
+    user_id: str,
+    source: str,
+    input_tokens: int,
+    output_tokens: int,
+    model_version: str,
+) -> None:
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _write_token_metrics, project_id, source, input_tokens, output_tokens)
+    await loop.run_in_executor(
+        None, _write_token_metrics,
+        project_id, user_id, source, input_tokens, output_tokens, model_version,
+    )
 
 
 async def after_model_token_counter(
     callback_context: CallbackContext,
     llm_response: LlmResponse,
 ) -> LlmResponse | None:
-    """Emit token usage metrics to Cloud Monitoring, tagged by source."""
+    """Emit token usage metrics to Cloud Monitoring and Cloud Logging, tagged by source and user."""
     usage = llm_response.usage_metadata
     if not usage:
         return None
@@ -100,9 +141,20 @@ async def after_model_token_counter(
         return None
 
     channel = callback_context.state.get("channel", "unknown")
-    source = "email" if channel == "email" else "conversation"
+    task_type = callback_context.state.get("task_type", "")
+    if channel == "email":
+        source = "email"
+    elif task_type == "async_task":
+        source = "async_task"
+    else:
+        source = "conversation"
 
-    asyncio.create_task(_emit_token_metrics(project_id, source, input_tokens, output_tokens))
+    user_id = callback_context._invocation_context.user_id or "unknown"
+    model_version = llm_response.model_version or "unknown"
+
+    asyncio.create_task(_emit_token_metrics(
+        project_id, user_id, source, input_tokens, output_tokens, model_version,
+    ))
     return None
 
 
