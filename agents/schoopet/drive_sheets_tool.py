@@ -866,6 +866,31 @@ class SheetsTool:
         except HttpError as e:
             return f"Error adding sheet tab: {e}"
 
+    async def list_sheet_tabs(
+        self,
+        sheet_id: str,
+        tool_context: ToolContext = None,
+    ) -> str:
+        """Return the names of all tabs in a spreadsheet as JSON."""
+        _, err = require_user_id(tool_context, "sheets")
+        if err:
+            return err
+        sheet_id = normalize_drive_id(sheet_id)
+
+        service = await self._get_service(tool_context)
+        if service is None:
+            return ""
+
+        try:
+            meta = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+            tabs = [s["properties"]["title"] for s in meta.get("sheets", [])]
+            return _json_dumps({
+                "spreadsheet_url": sheet_url(sheet_id),
+                "tabs": tabs,
+            })
+        except HttpError as e:
+            return f"Error listing sheet tabs: {e}"
+
     async def get_sheet_schema(
         self,
         sheet_id: str,
