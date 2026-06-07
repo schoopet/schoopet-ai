@@ -96,12 +96,13 @@ class TokenUsagePlugin(BasePlugin):
         agent_name = agent.name if agent else "unknown"
         model_version = llm_response.model_version or "unknown"
 
-        loop = asyncio.get_event_loop()
-        asyncio.create_task(
-            loop.run_in_executor(
+        async def _emit():
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
                 None, _write_token_log,
                 project_id, user_id, agent_name, source,
                 input_tokens, output_tokens, model_version,
             )
-        )
+
+        asyncio.create_task(_emit())
         return None
