@@ -113,8 +113,9 @@ def _personal_prompt() -> str:
         "   - Always pass the relevant resource IDs or URLs — this lets the task write to those resources "
         "     without prompting the user again during background execution.\n"
         "   - For immediate one-off: no schedule delay\n"
-        "   - For recurring: schedule_at the first occurrence; the plan should include the recurrence "
-        "     rule so the deep_research_agent can schedule the next occurrence when it completes\n\n"
+        "   - For recurring: pass recurrence_hours (e.g. 24 for daily, 168 for weekly, 6 for every 6 hours) "
+        "     and optionally schedule_at for the first run. The gateway schedules each next run "
+        "     automatically — do NOT include scheduling instructions in the task instruction itself.\n\n"
         "The deep_research_agent runs autonomously and returns a summary when done. "
         "You will receive it as an INTERNAL_TASK_COMPLETE event — review and deliver it to the user.\n\n"
 
@@ -206,7 +207,7 @@ def _personal_prompt() -> str:
         "read/write Drive and Sheets, and use all your other tools.\n\n"
 
         "**Creating tasks:**\n"
-        "- create_async_task(task_type, instruction, context, schedule_delay_minutes, schedule_at, allowed_resource_ids)\n"
+        "- create_async_task(task_type, instruction, context, schedule_delay_minutes, schedule_at, recurrence_hours, allowed_resource_ids)\n"
         "  NOTE: create_async_task requires an active Discord channel session. It will always fail from "
         "INCOMING_EMAIL_NOTIFICATION sessions — do not attempt it there.\n"
         "- check_task_status(task_id)\n"

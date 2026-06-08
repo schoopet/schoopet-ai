@@ -133,6 +133,7 @@ class AsyncTaskTool:
         context: Optional[Dict[str, Any]] = None,
         schedule_delay_minutes: int = 0,
         schedule_at: Optional[str] = None,
+        recurrence_hours: Optional[float] = None,
         allowed_resource_ids: Optional[List[str]] = None,
         target_channel_id: Optional[str] = None,
         tool_context: Optional[ToolContext] = None,
@@ -163,6 +164,11 @@ class AsyncTaskTool:
             schedule_at: Specific datetime to execute (ISO 8601 format).
                 Use for "remind me tomorrow at 9am" type requests.
                 Format: "2025-01-12T09:00:00" or "2025-01-12T09:00:00-08:00"
+            recurrence_hours: If set, the task repeats every N hours automatically.
+                The next run is scheduled by the gateway when this task starts executing,
+                so the chain continues even if the agent fails.
+                Examples: 6 (every 6 hours), 24 (daily), 168 (weekly).
+                Use schedule_at to set the first run time; subsequent runs fire at now + interval.
             allowed_resource_ids: Flat list of resource IDs or URLs (Sheet IDs, Doc IDs,
                 Drive folder IDs) pre-authorized for offline access. Use when the task needs to read/write
                 known resources without interrupting the user for confirmation.
@@ -246,6 +252,7 @@ class AsyncTaskTool:
             context=context or {},
             allowed_resource_ids=normalized_allowed_resource_ids,
             scheduled_at=scheduled_at_dt,
+            recurrence_hours=recurrence_hours,
             cloud_task_name=cloud_task_name,
             notification_session_scope=notification_context.get("notification_session_scope", ""),
             notification_target_type=notification_context.get("notification_target_type", ""),
