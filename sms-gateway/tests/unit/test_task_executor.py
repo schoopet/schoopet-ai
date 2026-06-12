@@ -473,15 +473,12 @@ class TestGatewayTaskExecutor:
         discord_sender.send_channel.assert_awaited_once_with("c1", "Needs your approval.")
 
     @pytest.mark.asyncio
-    async def test_schedule_next_creates_recurring_followup_task(
+    async def test_recurrence_rule_schedules_followup_before_execution(
         self, executor, firestore_client, agent_client, discord_sender
     ):
-        next_run = datetime.now(timezone.utc) + timedelta(days=7)
-        agent_client.extract_text = MagicMock(
-            return_value=(
-                "Added 3 restaurants.\n"
-                f"SCHEDULE_NEXT: every week | {next_run.isoformat()}"
-            )
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        doc_ref.get = AsyncMock(
+            return_value=_task_doc(recurrence_hours=24)
         )
         with (
             patch.object(
@@ -498,33 +495,52 @@ class TestGatewayTaskExecutor:
             result = await executor.execute_task(TASK_ID)
 
         assert result["success"] is True
-        doc_ref = firestore_client.collection.return_value.document.return_value
+        # Followup doc written before agent result is known
         doc_ref.set.assert_awaited_once()
         followup_doc = doc_ref.set.await_args.args[0]
         assert followup_doc["status"] == "scheduled"
-        assert followup_doc["task_type"] == "research"
-        assert followup_doc["instruction"] == "Research AI"
-        assert followup_doc["context"] == {"topic": "AI"}
-        assert followup_doc["allowed_resource_ids"] == ["sheet-1", "doc-1"]
-        assert followup_doc["recurrence_rule"] == "every week"
+        assert followup_doc["recurrence_hours"] == 24
         assert followup_doc["parent_task_id"] == TASK_ID
         assert followup_doc["discord_channel_id"] == "c1"
-        assert followup_doc["scheduled_at"].isoformat() == next_run.isoformat()
-        assert followup_doc["cloud_task_name"] == "projects/p/tasks/followup"
+        assert followup_doc["instruction"] == "Research AI"
+        # scheduled_at is approximately now + 24 hours
+        expected_min = datetime.now(timezone.utc) + timedelta(hours=23)
+        expected_max = datetime.now(timezone.utc) + timedelta(hours=25)
+        assert expected_min < followup_doc["scheduled_at"] < expected_max
 
     @pytest.mark.asyncio
-    async def test_invalid_schedule_next_is_ignored(
+    async def test_recurrence_rule_schedules_followup_even_on_failure(
+        self, executor, firestore_client, agent_client, discord_sender
+    ):
+        doc_ref = firestore_client.collection.return_value.document.return_value
+        doc_ref.get = AsyncMock(
+            return_value=_task_doc(recurrence_hours=24)
+        )
+        agent_client.send_message_events = AsyncMock(
+            side_effect=Exception("Agent crashed")
+        )
+        with (
+            patch.object(executor, "_compute_cloud_task_name", return_value="projects/p/tasks/followup"),
+            patch.object(executor, "_create_cloud_task", return_value="projects/p/tasks/followup"),
+        ):
+            result = await executor.execute_task(TASK_ID)
+
+        assert result["success"] is False
+        doc_ref.set.assert_awaited_once()
+        followup_doc = doc_ref.set.await_args.args[0]
+        assert followup_doc["recurrence_hours"] == 24
+
+    @pytest.mark.asyncio
+    async def test_no_recurrence_rule_does_not_create_followup(
         self, executor, firestore_client, agent_client
     ):
-        agent_client.extract_text = MagicMock(
-            return_value="Done.\nSCHEDULE_NEXT: every week | not-a-date"
-        )
-
+        # Default _task_doc has no recurrence_rule
         result = await executor.execute_task(TASK_ID)
 
         assert result["success"] is True
         doc_ref = firestore_client.collection.return_value.document.return_value
         doc_ref.set.assert_not_awaited()
+
 
 
 ENV = {

@@ -7,7 +7,6 @@ completion to the originating Discord channel.
 
 import logging
 import os
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -23,9 +22,6 @@ ASYNC_TASKS_COLLECTION = "async_tasks"
 ASYNC_TASK_MAX_ATTEMPTS = 5
 RESOURCE_CONFIRMED_PREFIX = "_resource_confirmed_"
 OFFLINE_MODE_KEY = "_offline_mode"
-SCHEDULE_NEXT_RE = re.compile(
-    r"(?im)^\s*SCHEDULE_NEXT:\s*(?P<rule>[^|\n]+?)\s*\|\s*(?P<when>\S+)\s*$"
-)
 
 
 def _should_suppress(message: str) -> bool:
@@ -70,12 +66,18 @@ class GatewayTaskExecutor:
                 "message": f"Task already in status: {prior_status}",
             }
 
+        # Schedule next recurrence before executing — guarantees the chain continues
+        # even if the agent fails or the process crashes mid-execution.
+        try:
+            await self._schedule_next_recurrence(task)
+        except Exception:
+            logger.exception("Task %s: failed to schedule next recurrence", task_id)
+
         # Phase 1: validate, execute, and persist result.
         try:
             self._validate_delivery_target(task)
             prompt = self._build_task_prompt(task)
             result = await self._execute_task(task, prompt)
-            await self._schedule_followup_if_requested(task, result)
             await self._update_task_result(task_id, result)
         except (TaskTimeoutError, TaskTransientError) as exc:
             is_transient = isinstance(exc, TaskTransientError)
@@ -468,16 +470,19 @@ class GatewayTaskExecutor:
 
         return "\n".join(parts)
 
-    async def _schedule_followup_if_requested(
-        self,
-        task: dict[str, Any],
-        result: str,
-    ) -> None:
-        parsed = self._parse_schedule_next(result)
-        if not parsed:
+    async def _schedule_next_recurrence(self, task: dict[str, Any]) -> None:
+        """Schedule the next recurrence of a recurring task.
+
+        Called before executing the agent so the chain survives even if the
+        agent fails or the process crashes mid-execution.
+        """
+        hours = task.get("recurrence_hours")
+        if not hours:
             return
 
-        recurrence_rule, scheduled_at = parsed
+        period = timedelta(hours=float(hours))
+
+        next_at = datetime.now(timezone.utc) + period
         followup_id = str(uuid.uuid4())
         doc = {
             "task_id": followup_id,
@@ -487,9 +492,9 @@ class GatewayTaskExecutor:
             "context": task.get("context", {}),
             "allowed_resource_ids": task.get("allowed_resource_ids", []),
             "status": "scheduled",
-            "scheduled_at": scheduled_at,
+            "scheduled_at": next_at,
             "created_at": datetime.now(timezone.utc),
-            "recurrence_rule": recurrence_rule,
+            "recurrence_hours": hours,
             "parent_task_id": task.get("task_id"),
             "notification_session_scope": task.get("notification_session_scope", ""),
             "notification_target_type": task.get("notification_target_type", ""),
@@ -498,12 +503,9 @@ class GatewayTaskExecutor:
             "target_channel_id": task.get("target_channel_id", ""),
         }
 
-        now = datetime.now(timezone.utc)
-        schedule_utc = scheduled_at.astimezone(timezone.utc)
-        if schedule_utc <= now + timedelta(days=30):
-            cloud_task_name = self._compute_cloud_task_name(followup_id)
-            if cloud_task_name:
-                doc["cloud_task_name"] = cloud_task_name
+        cloud_task_name = self._compute_cloud_task_name(followup_id)
+        if cloud_task_name:
+            doc["cloud_task_name"] = cloud_task_name
 
         doc_ref = self._db.collection(ASYNC_TASKS_COLLECTION).document(followup_id)
         await doc_ref.set(doc)
@@ -513,7 +515,7 @@ class GatewayTaskExecutor:
             created_name = self._create_cloud_task(
                 task_id=followup_id,
                 user_id=task["user_id"],
-                schedule_time=scheduled_at,
+                schedule_time=next_at,
             )
             if not created_name:
                 try:
@@ -526,29 +528,13 @@ class GatewayTaskExecutor:
                     )
 
         logger.info(
-            "Task %s scheduled recurring follow-up task %s for %s rule=%r queued=%s",
+            "Task %s scheduled recurring follow-up task %s for %s recurrence_hours=%s queued=%s",
             task.get("task_id"),
             followup_id,
-            scheduled_at.isoformat(),
-            recurrence_rule,
+            next_at.isoformat(),
+            hours,
             bool(created_name),
         )
-
-    def _parse_schedule_next(self, result: str) -> Optional[tuple[str, datetime]]:
-        match = SCHEDULE_NEXT_RE.search(result or "")
-        if not match:
-            return None
-
-        recurrence_rule = match.group("rule").strip()
-        raw_when = match.group("when").strip()
-        try:
-            scheduled_at = datetime.fromisoformat(raw_when.replace("Z", "+00:00"))
-        except ValueError:
-            logger.warning("Ignoring invalid SCHEDULE_NEXT datetime: %r", raw_when)
-            return None
-        if scheduled_at.tzinfo is None:
-            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
-        return recurrence_rule, scheduled_at
 
     async def create_email_batch_task(
         self,

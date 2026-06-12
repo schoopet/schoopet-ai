@@ -53,10 +53,9 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         url_context,
         # Code execution — for reliable dedup, date math, and ranking
         code_executor_tool,
-        # Time + timezone — required for date-anchored searches and SCHEDULE_NEXT
+        # Time + timezone — required for date-anchored searches
         FunctionTool(func=time_tool.get_current_time),
         FunctionTool(func=time_tool.parse_natural_datetime),
-        FunctionTool(func=time_tool.next_occurrence),
         FunctionTool(func=preferences_tool.get_timezone),
         # Calendar — useful for events research (check what's already on the calendar)
         FunctionTool(func=calendar_tool.list_calendar_events),
@@ -202,15 +201,7 @@ def create_deep_research_agent(model_name: str = _PRO_MODEL) -> LlmAgent:
         "- General: name, category, description, source_url, notes, status, date_added\n\n"
         "Status values: 'New — Pending Review', 'Approved', 'Rejected', 'Visited', 'Done'\n\n"
 
-        "### 7. Schedule Next Occurrence (Recurring Only)\n"
-        "If the plan includes a recurrence rule (e.g. 'every week', 'monthly on Mondays'):\n"
-        "- Do NOT use async task tools directly — you don't have them\n"
-        "- Compute the next firing with `next_occurrence(rule, user_timezone)`\n"
-        "- Include the next scheduled run prominently in your summary so the main agent "
-        "  can schedule it when it processes your result\n"
-        "- Format: SCHEDULE_NEXT: <recurrence rule> | <next ISO datetime>\n\n"
-
-        "### 8. Return Summary\n"
+        "### 7. Return Summary\n"
         "Return a concise result for the main agent to deliver to the user:\n"
         "- How many new items were found and added\n"
         "- Top 3-5 candidates with 1-line descriptions\n"

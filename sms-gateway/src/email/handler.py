@@ -311,7 +311,8 @@ async def process_email_notification(gmail_address: str, history_id: str) -> Non
         gmail_address=gmail_address,
         rules=_format_rules_for_prompt(rules),
     )
-    scheduled_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    debounce_minutes = int(os.getenv("EMAIL_DEBOUNCE_MINUTES", "15"))
+    scheduled_at = datetime.now(timezone.utc) + timedelta(minutes=debounce_minutes)
     discord_channel_id = watch_state.get("discord_channel_id", "")
 
     doc_id = normalize_gmail_address(gmail_address)

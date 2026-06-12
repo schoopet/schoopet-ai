@@ -46,6 +46,9 @@ class AsyncTaskDocument(BaseModel):
     scheduled_at: Optional[datetime] = Field(
         default=None, description="When to execute (None = immediate)"
     )
+    recurrence_hours: Optional[float] = Field(
+        default=None, description="Repeat interval in hours (e.g. 24 for daily, 6 for every 6 hours)"
+    )
     cloud_task_name: Optional[str] = Field(
         default=None, description="Cloud Tasks task name for tracking/cancellation"
     )
@@ -123,6 +126,8 @@ class AsyncTaskDocument(BaseModel):
         # Add optional fields if set
         if self.scheduled_at:
             data["scheduled_at"] = self.scheduled_at
+        if self.recurrence_hours is not None:
+            data["recurrence_hours"] = self.recurrence_hours
         if self.cloud_task_name:
             data["cloud_task_name"] = self.cloud_task_name
         if self.result:
@@ -159,6 +164,7 @@ class AsyncTaskDocument(BaseModel):
             context=data.get("context", {}),
             allowed_resource_ids=data.get("allowed_resource_ids", []),
             scheduled_at=data.get("scheduled_at"),
+            recurrence_hours=data.get("recurrence_hours"),
             cloud_task_name=data.get("cloud_task_name"),
             notification_session_scope=data.get("notification_session_scope", ""),
             notification_target_type=data.get("notification_target_type", ""),
