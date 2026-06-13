@@ -60,6 +60,11 @@ def agent_client():
     client.send_confirmation_responses_batch = AsyncMock(
         return_value=["follow-up-event"]
     )
+
+    async def _resolve_passthrough(user_id, session_id, events, context=""):
+        return (events, None)
+
+    client.resolve_iam_credential_events = _resolve_passthrough
     # Default: no stream errors (so empty responses are treated as permanent failures)
     client.last_stream_error_summary = ""
     client.last_stream_errors = []

@@ -233,6 +233,24 @@ class GatewayTaskExecutor:
                     tool_name,
                 ),
             )
+            events, credential_req = await self._agent_client.resolve_iam_credential_events(
+                user_id=user_id,
+                session_id=session_id,
+                events=events,
+                context="async_task",
+            )
+            if credential_req:
+                if self._discord_sender:
+                    await self._discord_sender.send(
+                        user_id,
+                        "A background task couldn't complete because I need access to your "
+                        "Google account. Send me a message and I'll send you an authorization link.",
+                    )
+                raise RuntimeError(
+                    f"Task {task.get('task_id')} requires Google OAuth for user={user_id} "
+                    "but cannot prompt in async context. User notified via Discord."
+                )
+
             # Offline mode: the agent has no user to approve confirmation requests.
             # Auto-reject any pending confirmations so the model gets a follow-up
             # turn and can produce a "needs your approval" message instead of

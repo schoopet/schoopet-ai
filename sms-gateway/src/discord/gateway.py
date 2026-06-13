@@ -475,6 +475,18 @@ class SchoopetGateway(discord.Client):
         discord_context = discord_context or context_from_discord_channel(channel)
 
         try:
+            pending = await self._session_manager.get_pending_credential(user_id)
+            if pending:
+                auth_uri = pending.get("auth_uri", "")
+                nonce = pending.get("nonce", "")
+                if auth_uri and nonce:
+                    logger.info(
+                        "Discord user %s has a pending credential — resending existing auth link",
+                        user_id,
+                    )
+                    await self._send_auth_link(channel, auth_uri, nonce, user_id)
+                    return
+
             if self._rate_limiter:
                 is_allowed, count = await self._rate_limiter.check_and_increment(
                     user_id

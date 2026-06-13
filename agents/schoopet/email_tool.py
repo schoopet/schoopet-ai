@@ -674,7 +674,7 @@ class EmailTool:
         user_id = tool_context.user_id
         service = await self._get_gmail_service(tool_context)
         if not service:
-            return ""
+            return "Gmail credentials unavailable — OAuth consent required."
 
         topic = os.getenv("EMAIL_PUBSUB_TOPIC", "")
         if not topic:

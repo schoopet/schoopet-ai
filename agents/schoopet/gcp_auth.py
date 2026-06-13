@@ -237,12 +237,18 @@ async def get_workspace_service(api_name: str, version: str, tool_name: str, too
         # the auth_uri in exchanged_auth_credential and returns None to tell us to call
         # request_credential.  This is distinct from an exception (transport error) which
         # we catch above and do NOT consent-prompt for.
-        logger.info(
-            f"[iam-flow:{tool_name}] get_auth_credential returned None "
-            f"— IAM connector returned uri_consent_required for user={user_id}; "
-            f"requesting interactive credential"
-        )
-        await cred_mgr.request_credential(tool_context)
+        if hasattr(tool_context, "request_credential"):
+            logger.info(
+                f"[iam-flow:{tool_name}] get_auth_credential returned None "
+                f"— IAM connector returned uri_consent_required for user={user_id}; "
+                f"requesting interactive credential"
+            )
+            await cred_mgr.request_credential(tool_context)
+        else:
+            logger.warning(
+                f"[iam-flow:{tool_name}] uri_consent_required for user={user_id} "
+                f"but context has no request_credential (callback context — cannot prompt)"
+            )
         return None
 
     # Defensive check: auth_type==OAUTH2 cannot occur here for CustomAuthScheme
@@ -256,11 +262,17 @@ async def get_workspace_service(api_name: str, version: str, tool_name: str, too
                 f"for user={user_id} — NOT triggering consent (malformed connector response)"
             )
             return None
-        logger.info(
-            f"[iam-flow:{tool_name}] credential.auth_type=OAUTH2 with auth_uri "
-            f"for user={user_id} — requesting interactive credential"
-        )
-        await cred_mgr.request_credential(tool_context)
+        if hasattr(tool_context, "request_credential"):
+            logger.info(
+                f"[iam-flow:{tool_name}] credential.auth_type=OAUTH2 with auth_uri "
+                f"for user={user_id} — requesting interactive credential"
+            )
+            await cred_mgr.request_credential(tool_context)
+        else:
+            logger.warning(
+                f"[iam-flow:{tool_name}] credential.auth_type=OAUTH2 with auth_uri for user={user_id} "
+                f"but context has no request_credential (callback context — cannot prompt)"
+            )
         return None
 
     token = extract_and_validate_token(credential, tool_name)

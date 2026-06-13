@@ -123,6 +123,7 @@ def gateway_services():
         )
     )
     session_manager.update_last_activity = AsyncMock()
+    session_manager.get_pending_credential = AsyncMock(return_value=None)
     session_manager.get_pending_approval = AsyncMock()
     session_manager.get_pending_approval_group = AsyncMock()
     session_manager.clear_pending_approval_group = AsyncMock()
