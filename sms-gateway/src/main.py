@@ -1,4 +1,4 @@
-"""FastAPI application for Schoopet SMS Gateway."""
+"""FastAPI application for Schoopet SMS Gateway."""  # noqa: N999
 import logging
 from contextlib import asynccontextmanager
 
