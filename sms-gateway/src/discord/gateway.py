@@ -35,6 +35,16 @@ logger = logging.getLogger(__name__)
 MAX_INLINE_ATTACHMENT_BYTES = 10 * 1024 * 1024
 FALLBACK_MIME_TYPE = "application/octet-stream"
 
+# Gemini rejects non-supported mime types with 400 INVALID_ARGUMENT (e.g. DOCX).
+_GEMINI_SUPPORTED_MIME_TYPES: frozenset[str] = frozenset({
+    "application/pdf",
+    "image/jpeg", "image/png", "image/gif", "image/webp", "image/tiff",
+    "audio/wav", "audio/mp3", "audio/mpeg", "audio/aiff",
+    "audio/aac", "audio/ogg", "audio/flac",
+    "video/mp4", "video/mpeg", "video/mov", "video/avi",
+    "video/x-flv", "video/mpg", "video/webm", "video/wmv", "video/3gpp",
+})
+
 _TOOL_LABELS: dict[str, str] = {
     # Memory
     "load_memory": "Checking memory",
@@ -125,8 +135,16 @@ async def _build_discord_message_content(
     parts: list[types.Part] = []
     attachment_names: list[str] = []
 
+    unsupported_attachments: list[str] = []
+
     for attachment in attachments:
         filename = attachment.filename or "attachment"
+        mime_type = attachment.content_type or FALLBACK_MIME_TYPE
+
+        if mime_type not in _GEMINI_SUPPORTED_MIME_TYPES:
+            unsupported_attachments.append(filename)
+            continue
+
         attachment_names.append(filename)
 
         if attachment.size > MAX_INLINE_ATTACHMENT_BYTES:
@@ -139,21 +157,24 @@ async def _build_discord_message_content(
         parts.append(
             types.Part(
                 inline_data=types.Blob(
-                    mime_type=attachment.content_type or FALLBACK_MIME_TYPE,
+                    mime_type=mime_type,
                     data=data,
                 )
             )
         )
 
+    extra_notes: list[str] = []
     if attachment_names:
-        if normalized_text:
-            prefix = normalized_text
-        else:
-            prefix = "The user sent attachment(s) with no accompanying text."
-        parts.insert(
-            0,
-            types.Part(text=f"{prefix}\n\nAttachments: {', '.join(attachment_names)}"),
+        extra_notes.append(f"Attachments: {', '.join(attachment_names)}")
+    if unsupported_attachments:
+        extra_notes.append(
+            f"Note: the following attachment(s) could not be read because their "
+            f"file type is not supported: {', '.join(unsupported_attachments)}"
         )
+
+    if extra_notes or attachment_names:
+        prefix = normalized_text if normalized_text else "The user sent attachment(s) with no accompanying text."
+        parts.insert(0, types.Part(text=f"{prefix}\n\n" + "\n".join(extra_notes)))
     elif normalized_text:
         parts.append(types.Part(text=normalized_text))
 

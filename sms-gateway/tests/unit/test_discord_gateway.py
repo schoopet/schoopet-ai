@@ -189,7 +189,7 @@ async def test_build_content_attachment_only():
 
 
 @pytest.mark.asyncio
-async def test_build_content_uses_fallback_mime_type():
+async def test_build_content_skips_unsupported_mime_type():
     attachment = _FakeAttachment(
         filename="blob.bin",
         content_type=None,
@@ -198,7 +198,10 @@ async def test_build_content_uses_fallback_mime_type():
 
     content = await _build_discord_message_content("binary", [attachment])
 
-    assert content.parts[1].inline_data.mime_type == FALLBACK_MIME_TYPE
+    # Unsupported mime types are skipped; only the text part is present with a note.
+    assert len(content.parts) == 1
+    assert "blob.bin" in content.parts[0].text
+    assert "not supported" in content.parts[0].text
 
 
 @pytest.mark.asyncio
