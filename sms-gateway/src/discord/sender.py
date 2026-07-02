@@ -1,4 +1,5 @@
 """Discord message sending via REST API."""
+import asyncio
 import logging
 from typing import List
 
@@ -33,6 +34,23 @@ class DiscordSender:
             headers={"Authorization": f"Bot {bot_token}"},
         )
 
+    async def _post_with_retry(self, url: str, payload: dict, label: str) -> httpx.Response:
+        """POST with automatic retry on 429 rate-limit responses (up to 3 attempts)."""
+        for attempt in range(3):
+            response = await self._client.post(url, json=payload)
+            if response.status_code != 429:
+                return response
+            try:
+                retry_after = float(response.json().get("retry_after", 1.0))
+            except Exception:
+                retry_after = float(response.headers.get("Retry-After", 1.0))
+            logger.warning(
+                f"Discord rate-limited on {label} (attempt {attempt + 1}/3), "
+                f"retrying after {retry_after}s"
+            )
+            await asyncio.sleep(retry_after)
+        return response
+
     async def send_followup(self, interaction_token: str, text: str) -> None:
         """Send one or more follow-up messages for an interaction token."""
         if not text:
@@ -43,7 +61,9 @@ class DiscordSender:
         )
         chunks = _split_message(text)
         for i, chunk in enumerate(chunks, start=1):
-            response = await self._client.post(followup_url, json={"content": chunk})
+            response = await self._post_with_retry(
+                followup_url, {"content": chunk}, f"followup {i}/{len(chunks)}"
+            )
             response.raise_for_status()
             logger.info(f"Sent Discord interaction followup message {i}/{len(chunks)}")
 
@@ -76,9 +96,10 @@ class DiscordSender:
 
         chunks = _split_message(text)
         for i, chunk in enumerate(chunks, start=1):
-            response = await self._client.post(
+            response = await self._post_with_retry(
                 f"{DISCORD_API_BASE}/channels/{channel_id}/messages",
-                json={"content": chunk},
+                {"content": chunk},
+                f"DM user {discord_user_id} part {i}/{len(chunks)}",
             )
             if response.status_code >= 400:
                 logger.error(
@@ -98,9 +119,10 @@ class DiscordSender:
 
         chunks = _split_message(text)
         for i, chunk in enumerate(chunks, start=1):
-            response = await self._client.post(
+            response = await self._post_with_retry(
                 f"{DISCORD_API_BASE}/channels/{channel_id}/messages",
-                json={"content": chunk},
+                {"content": chunk},
+                f"channel {channel_id} part {i}/{len(chunks)}",
             )
             if response.status_code >= 400:
                 logger.error(
